@@ -13,7 +13,11 @@ zju-connect
 → recovery after process restart
 ```
 
-The Android project baseline is now in place: Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`, and a debug APK that has been built, installed, and launched on a physical device. The Go binding, VPN data plane, authentication, and session recovery remain future work and must not be described as implemented.
+The Android baseline and a deliberately minimal Go binding are now in place:
+Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`,
+a pinned gomobile AAR, and a debug APK that has been built, installed, and
+launched on a physical device. The VPN data plane, authentication, and session
+recovery remain future work and must not be described as implemented.
 
 ## Scope
 
@@ -68,7 +72,11 @@ Every transition should have a defined success, cancellation, timeout, and failu
 
 The gomobile surface should expose simple types, `String`, `ByteArray`, and callback interfaces. Complex control-plane objects should use versioned JSON at the boundary; packet data must continue to use file descriptors rather than JSON serialization.
 
-The minimum interface is expected to cover:
+Phase 2 implements only a smoke-test and discovery boundary: `GetBuildInfo`,
+`EmitBuildInfo`, and credential-free `FetchAuthInfo`. Its exact contract and
+security limits are authoritative in [gomobile-bridge.md](gomobile-bridge.md).
+
+The later connection-control interface is expected to cover:
 
 ```text
 start(configJson, listener)
@@ -81,7 +89,9 @@ importSession(snapshotJson)
 
 Expected structured events include `stateChanged`, `passwordRequired`, `smsRequired`, `captchaRequired`, `sessionUpdated`, `log`, and `fatalError`. Captcha image bytes and interaction metadata must not be passed through shared files or ad-hoc temporary files. Sensitive values must be redacted before log events leave the Go side.
 
-The exact API is still a design target. Before implementation, inspect the upstream `zju-connect` API and determine which Android-specific interfaces can be kept small and potentially contributed upstream.
+The Phase 3+ API is still a design target. Before implementing it, inspect the
+upstream `zju-connect` API and determine which Android-specific interfaces can
+be kept small and potentially contributed upstream.
 
 ## Session snapshot and security
 
@@ -103,7 +113,8 @@ This design is not yet implemented. Its validation must cover Wi-Fi and mobile n
 
 ## Reproducibility and upstream integration
 
-When gomobile integration begins:
+The current gomobile integration follows these requirements; future changes must
+continue to follow them:
 
 - Pin the upstream `zju-connect` commit.
 - Pin Go, `golang.org/x/mobile`, NDK, Android SDK, and related build tools.
@@ -123,8 +134,8 @@ When gomobile integration begins:
 
 - The pinned source, toolchain lockfile, bootstrap command, and minimal bridge
   are defined in [gomobile-bridge.md](gomobile-bridge.md).
-- Kotlin calls a minimal Go API and receives a versioned JSON callback once the
-  generated AAR is present.
+- Kotlin calls a minimal Go API and receives a versioned JSON callback through
+  the generated AAR.
 - The pinned toolchain has built the AAR and debug APK, and the debug APK has
   been installed on the physical-device target. Future changes must repeat the
   documented build and device checks.

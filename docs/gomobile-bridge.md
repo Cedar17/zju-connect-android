@@ -31,6 +31,7 @@ must already have SDK Platform 36.1 and Build Tools 36.0.0 installed.
 ~~~powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-gomobile-toolchain.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-gomobile-aar.ps1
+.\.gomobile-toolchain\go\bin\go.exe -C .\go\bridge test ./...
 cmd.exe /c "gradlew.bat :app:assembleDebug --no-daemon --console=plain"
 ~~~
 
@@ -47,6 +48,9 @@ go.sum are tidy without modifying them, then downloads and verifies their
 pinned modules. Gradle's verifyGoCoreAar task fails early with the required
 command when the AAR has not been built. It does not download a toolchain as
 a side effect of a normal Android build.
+
+The Gradle unit-test task currently has no Kotlin/Java test sources and may
+finish with `NO-SOURCE`; it does not replace the Go bridge tests above.
 
 ## Kotlin–Go contract
 
