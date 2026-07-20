@@ -10,3 +10,7 @@ build/
 captures/
 .externalNativeBuild/
 .cxx/
+/app/libs/*.aar
+/app/libs/*-sources.jar
+/app/libs/*.build-info.json
+/.gomobile-toolchain/

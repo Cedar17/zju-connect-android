@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "go": {
+    "version": "1.25.6",
+    "archiveUrl": "https://go.dev/dl/go1.25.6.windows-amd64.zip",
+    "sha256": "19b4733b727ba5c611b5656187f3ac367d278d64c3d4199a845e39c0fdac5335"
+  },
+  "gomobile": {
+    "module": "golang.org/x/mobile/cmd/gomobile",
+    "version": "v0.0.0-20260602190626-68735029466e",
+    "commit": "68735029466e0b69a0c5b27f4811255254750ac3"
+  },
+  "zjuConnect": {
+    "module": "github.com/mythologyli/zju-connect",
+    "version": "v1.2.2-0.20260717055316-7776cdcfa33e",
+    "commit": "7776cdcfa33e3df56ba8da438c17b2274e316128",
+    "repository": "https://github.com/Mythologyli/zju-connect",
+    "license": "AGPL-3.0-only"
+  },
+  "android": {
+    "compileSdk": 36,
+    "compileSdkMinor": 1,
+    "buildTools": "36.0.0",
+    "ndkVersion": "29.0.14206865",
+    "ndkArchiveUrl": "https://dl.google.com/android/repository/android-ndk-r29-windows.zip",
+    "ndkSha1": "ab3bb30fbb9e6903666d60c55d11e78b04e07472",
+    "androidApi": 29,
+    "abis": ["arm64", "amd64"]
+  }
+}
