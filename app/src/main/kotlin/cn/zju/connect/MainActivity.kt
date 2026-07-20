@@ -13,6 +13,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -28,6 +33,22 @@ class MainActivity : ComponentActivity() {
 }
 @Composable
 private fun ZjuConnectApp() {
+    val goCoreBridge = remember { GoCoreBridge() }
+    var bridgeStatus by remember {
+        mutableStateOf(
+            GoBridgeEvent(
+                type = "initializing",
+                upstreamCommit = "unknown",
+                message = "Calling Go bridge",
+            ),
+        )
+    }
+
+    LaunchedEffect(goCoreBridge) {
+        bridgeStatus = goCoreBridge.readBuildInfo()
+        goCoreBridge.emitBuildInfo { event -> bridgeStatus = event }
+    }
+
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             Scaffold { contentPadding ->
@@ -44,7 +65,7 @@ private fun ZjuConnectApp() {
                         style = MaterialTheme.typography.headlineMedium,
                     )
                     Text(
-                        text = "Empty app is running",
+                        text = bridgeStatus.displayText,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }

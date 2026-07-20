@@ -119,11 +119,15 @@ When gomobile integration begins:
 - Debug APK is generated and launched on a physical device.
 - Windows/PowerShell and Git Bash wrapper usage is documented.
 
-### Phase 2 — Go binding: next
+### Phase 2 — Go binding: complete
 
-- Pin the upstream source and toolchain.
-- Build a reproducible minimal AAR.
-- Call a minimal Go API from Kotlin and receive structured callbacks.
+- The pinned source, toolchain lockfile, bootstrap command, and minimal bridge
+  are defined in [gomobile-bridge.md](gomobile-bridge.md).
+- Kotlin calls a minimal Go API and receives a versioned JSON callback once the
+  generated AAR is present.
+- The pinned toolchain has built the AAR and debug APK, and the debug APK has
+  been installed on the physical-device target. Future changes must repeat the
+  documented build and device checks.
 
 ### Phase 3 — TUN data plane
 

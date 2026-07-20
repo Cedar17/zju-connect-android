@@ -10,6 +10,7 @@ android {
     compileSdk = 36
     compileSdkMinor = 1
     compileSdkExtension = 20
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "cn.zju.connect"
@@ -48,5 +49,24 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation(files("libs/zju-connect-core.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+val goCoreAar = layout.projectDirectory.file("libs/zju-connect-core.aar")
+
+tasks.register("verifyGoCoreAar") {
+    group = "verification"
+    description = "Checks that the reproducibly built Go core AAR is available."
+    inputs.file(goCoreAar)
+    doLast {
+        check(goCoreAar.asFile.isFile) {
+            "Missing ${goCoreAar.asFile}. Run scripts\\bootstrap-gomobile-toolchain.ps1 " +
+                "then scripts\\build-gomobile-aar.ps1 before building Android."
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn("verifyGoCoreAar")
 }
