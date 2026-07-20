@@ -63,7 +63,12 @@ An open-source Android client for ZJU aTrust remote access, powered by zju-conne
 
 项目目前处于技术验证与早期开发阶段，尚不适合日常使用。
 
-当前首要任务是验证以下完整链路：
+已完成 Android 基线和最小 Go binding：固定版本的工具链可生成本地
+gomobile AAR，Kotlin 已调用 Go 并收到结构化回调；调试 APK 已在实体设备上
+构建、安装和启动。固定版本、构建命令和边界见
+[gomobile bridge 文档](docs/gomobile-bridge.md)。
+
+下一优先级是验证以下完整链路中尚未实现的部分：
 
 ```text
 zju-connect
@@ -73,6 +78,9 @@ zju-connect
 → 加密 Session Snapshot
 → 进程重启后免密码恢复连接
 ```
+
+当前不包含认证交互、Android TUN、`VpnService.protect`、会话持久化或连接 UI；
+这些能力仍须按架构文档的后续阶段实现和验证。
 
 ## 免责声明
 
