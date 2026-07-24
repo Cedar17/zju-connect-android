@@ -142,10 +142,22 @@ continue to follow them:
 
 ### Phase 3 — TUN data plane
 
-- Request VPN permission and create the TUN.
-- Pass the TUN descriptor to Go.
-- Protect the underlying VPN socket.
-- Verify disconnect and abnormal-exit cleanup.
+The repository now contains an experimental Issue #6 validation path. It is not
+an aTrust connection implementation:
+
+- A debug-only VpnService requests permission and creates a blocking TUN.
+- The current app is the only allowed application, with a test route and MTU 1400.
+- Go receives ownership of the detached TUN descriptor.
+- Go creates a local fake UDP transport and asks Android to protect its socket
+  before connecting.
+- A fixed marker UDP packet is sent through the TUN and reflected back through
+  Go, allowing the Android UI to show packet and byte counters.
+- Start is single-session, stop is idempotent, and service revoke/destroy paths
+  close the Go data plane.
+
+The experimental path still requires a person to approve the system VPN dialog
+on the first run. It deliberately does not authenticate to aTrust, parse real
+resources, or provide production connection UI.
 
 ### Phase 4 — Authentication control plane
 
