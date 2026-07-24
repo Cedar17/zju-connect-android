@@ -45,6 +45,28 @@ class GoCoreBridge {
         Core.stopTestDataPlane()
     }
 
+    fun prepareRealVpn(): GoVpnPrepared = parseVpnPrepared(Core.prepareRealVpn())
+
+    fun startRealVpn(
+        tunFd: Long,
+        socketProtector: SocketProtector,
+        onEvent: (GoVpnEvent) -> Unit,
+    ) {
+        Core.startRealVpn(
+            tunFd,
+            socketProtector,
+            object : BridgeListener {
+                override fun onEvent(eventJson: String) {
+                    onEvent(parseVpnEvent(eventJson))
+                }
+            },
+        )
+    }
+
+    fun stopRealVpn() {
+        Core.stopRealVpn()
+    }
+
     fun startAuthentication(onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
@@ -112,6 +134,39 @@ class GoCoreBridge {
         )
     }
 
+    private fun parseVpnPrepared(eventJson: String): GoVpnPrepared = runCatching {
+        val event = JSONObject(eventJson)
+        GoVpnPrepared(
+            state = event.optString("state", "unknown"),
+            code = event.optString("code", ""),
+            message = event.optString("message", "Real VPN response received"),
+            address = event.optString("address", ""),
+            mtu = event.optInt("mtu", 1400),
+            routes = event.optJSONArray("routes").toVpnRoutes(),
+        )
+    }.getOrElse {
+        GoVpnPrepared(
+            state = "error",
+            code = "invalidEvent",
+            message = "Go bridge returned an invalid real VPN configuration",
+        )
+    }
+
+    private fun parseVpnEvent(eventJson: String): GoVpnEvent = runCatching {
+        val event = JSONObject(eventJson)
+        GoVpnEvent(
+            state = event.optString("state", "unknown"),
+            code = event.optString("code", ""),
+            message = event.optString("message", "Real VPN event received"),
+        )
+    }.getOrElse {
+        GoVpnEvent(
+            state = "error",
+            code = "invalidEvent",
+            message = "Go bridge returned an invalid real VPN event",
+        )
+    }
+
     private fun parseAuthEvent(eventJson: String): GoAuthEvent = runCatching {
         val event = JSONObject(eventJson)
         GoAuthEvent(
@@ -159,6 +214,20 @@ class GoCoreBridge {
             }
         }
 
+    private fun JSONArray?.toVpnRoutes(): List<GoVpnRoute> =
+        buildList {
+            this@toVpnRoutes?.let { routes ->
+                for (index in 0 until routes.length()) {
+                    val route = routes.optJSONObject(index) ?: continue
+                    val address = route.optString("address").trim()
+                    val prefixLength = route.optInt("prefixLength", -1)
+                    if (address.isNotBlank() && prefixLength in 0..32) {
+                        add(GoVpnRoute(address, prefixLength))
+                    }
+                }
+            }
+        }
+
     private companion object {
         const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
         const val ZJU_ATRUST_PORT = 443
@@ -182,6 +251,26 @@ data class GoTestVpnEvent(
     val packetsToTun: Long = 0,
     val bytesFromTun: Long = 0,
     val bytesToTun: Long = 0,
+)
+
+data class GoVpnRoute(
+    val address: String,
+    val prefixLength: Int,
+)
+
+data class GoVpnPrepared(
+    val state: String,
+    val code: String,
+    val message: String,
+    val address: String = "",
+    val mtu: Int = 1400,
+    val routes: List<GoVpnRoute> = emptyList(),
+)
+
+data class GoVpnEvent(
+    val state: String,
+    val code: String,
+    val message: String,
 )
 
 data class GoAuthMethod(

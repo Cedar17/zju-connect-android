@@ -17,8 +17,10 @@ The Android baseline and a deliberately minimal Go binding are now in place:
 Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`,
 a pinned gomobile AAR, and a debug APK that has been built, installed, and
 launched on a physical device. The experimental TUN data plane and the aTrust
-authentication control plane are implemented separately; formal tunnel
-connection and session recovery remain future work.
+authentication control plane are implemented separately on `master`. The Issue
+#11 development branch adds the real aTrust client setup, resource routes,
+Android VPN service, and deterministic shutdown; long-lived session recovery
+remains future work.
 
 ## Scope
 
@@ -34,7 +36,7 @@ Compose UI
 ConnectionViewModel / StateFlow
     ↓
 VpnRepository
-    ├── VpnServiceController
+    ├── VpnServiceController / RealVpnService
     ├── SecureSessionStore
     ├── SettingsStore
     └── GoCoreBridge
@@ -95,9 +97,11 @@ CAPTCHA image bytes pass only through `GetPendingCaptchaImage`, not callback
 JSON, shared files, or temporary files. Callback events contain no passwords,
 cookies, SID, device identifiers, sign keys, CAPTCHA bytes, or raw responses.
 
-Attaching a production TUN, stopping a production connection, and exporting or
-importing a session remain future work. Any such extension must keep the
-Android-specific surface small and be assessed for potential upstreaming.
+The real VPN bridge adds `PrepareRealVpn`, `StartRealVpn`, and `StopRealVpn`.
+Preparation consumes the authenticated result already held in Go memory and
+returns only the assigned IPv4 address plus IPv4 resource prefixes. Android
+creates the TUN from those routes, then attaches it with a `SocketProtector` so
+future aTrust underlay sockets are protected from the VPN interface.
 
 ## Session snapshot and security
 
@@ -115,7 +119,10 @@ Required security properties:
 
 Once Android creates a TUN, the Go core's control/data connection to the VPN service must not be routed back through that TUN. The Android boundary must therefore allow the underlying socket to be passed through `VpnService.protect(fd)` before it connects, or create and protect the socket before handing it to Go.
 
-This design is not yet implemented. Its validation must cover Wi-Fi and mobile networks, network switching, failed connection cleanup, and release of the TUN file descriptor, sockets, goroutines, and foreground service.
+The current Issue #11 implementation installs this boundary after Android
+establishes the TUN. Its validation must cover Wi-Fi and mobile networks,
+network switching, failed connection cleanup, and release of the TUN file
+descriptor, sockets, goroutines, and foreground service.
 
 ## Reproducibility and upstream integration
 
@@ -177,7 +184,20 @@ resources, or provide production connection UI.
   retains the successful result only in Go process memory for the future tunnel
   phase.
 
-### Phase 5 — Session recovery
+### Phase 5 — Real VPN minimum loop
+
+- Reuse the in-memory authentication result without repeating password login.
+- Prepare the aTrust client and expose only the assigned address and resource routes.
+- Establish Android `VpnService`, protect the real underlay sockets, and attach the TUN.
+- Stop and revoke the service without leaving TUN descriptors, sockets, or L3 readers.
+- Drop split-tunnel packets outside the aTrust resource set instead of stopping
+  the whole VPN; report TUN/L3 failures with stable UI error codes.
+- Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data.
+
+This phase intentionally does not add session persistence, automatic reconnect, or
+complex network switching.
+
+### Phase 6 — Session recovery
 
 - Export a minimal session snapshot after successful authentication.
 - Encrypt it with Keystore-backed storage.

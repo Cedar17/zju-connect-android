@@ -69,16 +69,21 @@ An open-source Android client for ZJU aTrust remote access, powered by zju-conne
 不使用命令行、临时文件或浏览器回调。固定版本、构建命令和边界见
 [gomobile bridge 文档](docs/gomobile-bridge.md)。
 
-下一优先级是验证以下完整链路中尚未实现的部分：
+当前 `dev/issue-11-real-atrust-vpn` 分支正在推进以下真实闭环：
 
 ```text
 zju-connect
 → gomobile AAR
 → Android VpnService / TUN
 → aTrust 登录
-→ 加密 Session Snapshot
-→ 进程重启后免密码恢复连接
+→ 认证结果复用
+→ 校内资源路由
+→ 正常断开与资源回收
 ```
+
+本阶段暂不实现长期会话恢复、复杂网络切换和正式 UI 打磨。K40 仅用于
+验证认证、隧道生命周期和异常回收；校外访问验收必须使用蜂窝网络下的
+一加 Ace 3V。
 
 当前已加入仅用于 Issue #6 验证的实验性 Android TUN、`VpnService.protect`
 和 Go 合成数据面路径。该路径需要用户手动授权系统 VPN，使用固定 marker 和

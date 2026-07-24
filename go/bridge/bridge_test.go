@@ -80,3 +80,20 @@ func TestAuthenticationFailureIsRedacted(t *testing.T) {
 		t.Fatalf("authentication event leaked a secret: %s", encoded)
 	}
 }
+
+func TestRealVpnErrorIsRedactedAndVersioned(t *testing.T) {
+	encoded := realVpnError("vpnSetupFailed", "Unable to prepare the authenticated aTrust VPN")
+
+	var event realVpnPreparedEvent
+	if err := json.Unmarshal([]byte(encoded), &event); err != nil {
+		t.Fatalf("realVpnError returned invalid JSON: %v", err)
+	}
+	if event.SchemaVersion != schemaVersion || event.Type != "error" || event.State != "error" {
+		t.Fatalf("unexpected real VPN error event: %#v", event)
+	}
+	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("real VPN error contained forbidden field %q: %s", forbidden, encoded)
+		}
+	}
+}

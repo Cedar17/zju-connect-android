@@ -86,12 +86,23 @@ structured events; `StartAuthentication`, `SubmitAuthentication`,
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
 responses into callback JSON.
 
-Authentication success leaves its client/resource result in Go memory only for
-the next tunnel phase. Cancelling returns without waiting for an in-flight
-request: it cancels the request context, closes that session's active HTTP
-connections, and clears its sensitive state before any stale event can reach
-the UI. No aTrust TUN, session persistence, QR/CAS/OAuth login, or production
-connection lifecycle is implemented by this bridge.
+Authentication success leaves its client/resource result in Go memory for the
+real VPN phase. The bridge exposes `PrepareRealVpn()`, which prepares an
+`atrust.Client` and returns a versioned event containing only the assigned IPv4
+address and IPv4 resource prefixes. `StartRealVpn(tunFD, protector, listener)`
+attaches the Android TUN and installs the `VpnService.protect()` boundary for
+future underlay connections. `StopRealVpn()` is idempotent and closes the
+client, TUN, underlay sockets, and L3 readers. Cancelling returns without
+waiting for an in-flight request: it cancels the request context, closes that
+session's active HTTP connections, and clears its sensitive state before any
+stale event can reach the UI. Session persistence, QR/CAS/OAuth login, and
+complex reconnect behavior remain out of scope for this phase.
+
+The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
+aTrust resource set are dropped as split-tunnel traffic instead of terminating
+the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
+codes, and cleanup preserves the original failure instead of replacing it with
+an uninformative `stopped` state.
 
 ## Issue #6 experimental data-plane boundary
 
