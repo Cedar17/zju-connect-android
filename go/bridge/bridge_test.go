@@ -2,6 +2,8 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +53,30 @@ func TestFetchAuthInfoRejectsInvalidRequestWithoutNetworking(t *testing.T) {
 
 	if result.Type != "error" || result.Code != "invalidRequest" {
 		t.Errorf("invalid request result = %#v, want invalidRequest error", result)
+	}
+}
+
+func TestStartAuthenticationValidatesEndpointWithoutNetworking(t *testing.T) {
+	defer CancelAuthentication()
+
+	result := StartAuthentication(`{"server":"example.com","port":443}`, &recordingListener{})
+	var response authInfoResponse
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatalf("StartAuthentication returned invalid JSON: %v", err)
+	}
+	if response.Code != "invalidRequest" {
+		t.Errorf("code = %q, want invalidRequest", response.Code)
+	}
+}
+
+func TestAuthenticationFailureIsRedacted(t *testing.T) {
+	secret := "session-cookie-and-password"
+	event := authenticationFailure(fmt.Errorf("x509: certificate rejected: %s", secret))
+	encoded := marshal(event)
+	if event.Code != "certificateRejected" {
+		t.Errorf("code = %q, want certificateRejected", event.Code)
+	}
+	if strings.Contains(encoded, secret) {
+		t.Fatalf("authentication event leaked a secret: %s", encoded)
 	}
 }

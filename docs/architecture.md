@@ -16,8 +16,9 @@ zju-connect
 The Android baseline and a deliberately minimal Go binding are now in place:
 Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`,
 a pinned gomobile AAR, and a debug APK that has been built, installed, and
-launched on a physical device. The VPN data plane, authentication, and session
-recovery remain future work and must not be described as implemented.
+launched on a physical device. The experimental TUN data plane and the aTrust
+authentication control plane are implemented separately; formal tunnel
+connection and session recovery remain future work.
 
 ## Scope
 
@@ -72,26 +73,31 @@ Every transition should have a defined success, cancellation, timeout, and failu
 
 The gomobile surface should expose simple types, `String`, `ByteArray`, and callback interfaces. Complex control-plane objects should use versioned JSON at the boundary; packet data must continue to use file descriptors rather than JSON serialization.
 
-Phase 2 implements only a smoke-test and discovery boundary: `GetBuildInfo`,
-`EmitBuildInfo`, and credential-free `FetchAuthInfo`. Its exact contract and
-security limits are authoritative in [gomobile-bridge.md](gomobile-bridge.md).
+The control-plane bridge now implements `GetBuildInfo`, `EmitBuildInfo`,
+credential-free `FetchAuthInfo`, and a single in-memory aTrust authentication
+flow. Its exact contract and security limits are authoritative in
+[gomobile-bridge.md](gomobile-bridge.md).
 
-The later connection-control interface is expected to cover:
+The implemented authentication interface is:
 
 ```text
-start(configJson, listener)
-submitAuth(responseJson)
-attachTun(fd)
-stop()
-exportSession()
-importSession(snapshotJson)
+StartAuthentication(requestJson, listener)
+SubmitAuthentication(actionJson)
+GetPendingCaptchaImage()
+CancelAuthentication()
+ClearAuthenticatedResult()
 ```
 
-Expected structured events include `stateChanged`, `passwordRequired`, `smsRequired`, `captchaRequired`, `sessionUpdated`, `log`, and `fatalError`. Captcha image bytes and interaction metadata must not be passed through shared files or ad-hoc temporary files. Sensitive values must be redacted before log events leave the Go side.
+The versioned events are `authenticationStarted`, `authMethodsReady`,
+`credentialsRequired`, `phoneRequired`, `smsRequired`, `captchaRequired`,
+`authenticated`, `cancelled`, `retryStarted`, and safe-code `error` events.
+CAPTCHA image bytes pass only through `GetPendingCaptchaImage`, not callback
+JSON, shared files, or temporary files. Callback events contain no passwords,
+cookies, SID, device identifiers, sign keys, CAPTCHA bytes, or raw responses.
 
-The Phase 3+ API is still a design target. Before implementing it, inspect the
-upstream `zju-connect` API and determine which Android-specific interfaces can
-be kept small and potentially contributed upstream.
+Attaching a production TUN, stopping a production connection, and exporting or
+importing a session remain future work. Any such extension must keep the
+Android-specific surface small and be assessed for potential upstreaming.
 
 ## Session snapshot and security
 
@@ -159,11 +165,17 @@ The experimental path still requires a person to approve the system VPN dialog
 on the first run. It deliberately does not authenticate to aTrust, parse real
 resources, or provide production connection UI.
 
-### Phase 4 — Authentication control plane
+### Phase 4 — Authentication control plane: implemented
 
-- Support password, SMS, and graphical captcha flows through structured events.
-- Do not parse CLI stdout or exchange credentials through temporary files.
-- Map failures to stable structured error types.
+- The Android fork exposes a single in-memory aTrust flow for server-advertised
+  password login, server-triggered SMS, and graphical CAPTCHA steps.
+- Kotlin receives versioned structured events and CAPTCHA bytes through the
+  gomobile boundary; it never parses CLI output or exchanges secrets through
+  temporary files.
+- Authentication enforces normal TLS certificate and hostname validation,
+  supports cancellation/retry, maps UI-visible failures to stable codes, and
+  retains the successful result only in Go process memory for the future tunnel
+  phase.
 
 ### Phase 5 — Session recovery
 

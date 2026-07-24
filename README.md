@@ -63,9 +63,10 @@ An open-source Android client for ZJU aTrust remote access, powered by zju-conne
 
 项目目前处于技术验证与早期开发阶段，尚不适合日常使用。
 
-已完成 Android 基线和最小 Go binding：固定版本的工具链可生成本地
-gomobile AAR，Kotlin 已调用 Go 并收到结构化回调；调试 APK 已在实体设备上
-构建、安装和启动。固定版本、构建命令和边界见
+已完成 Android 基线、最小 Go binding 和真实 aTrust 认证控制面：固定版本的
+工具链可生成本地 gomobile AAR；Kotlin 通过结构化状态与内存中的验证码字节
+驱动账号密码、服务端短信和图形验证码。认证流启用正常 TLS 证书与主机名校验，
+不使用命令行、临时文件或浏览器回调。固定版本、构建命令和边界见
 [gomobile bridge 文档](docs/gomobile-bridge.md)。
 
 下一优先级是验证以下完整链路中尚未实现的部分：
