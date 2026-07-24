@@ -79,8 +79,10 @@ zju-connect
 → 进程重启后免密码恢复连接
 ```
 
-当前不包含认证交互、Android TUN、`VpnService.protect`、会话持久化或连接 UI；
-这些能力仍须按架构文档的后续阶段实现和验证。
+当前已加入仅用于 Issue #6 验证的实验性 Android TUN、`VpnService.protect`
+和 Go 合成数据面路径。该路径需要用户手动授权系统 VPN，使用固定 marker 和
+本地 fake transport，不接入真实 aTrust、认证、会话持久化或正式连接 UI。
+这些生产能力仍须按架构文档的后续阶段实现和验证。
 
 ## 免责声明
 

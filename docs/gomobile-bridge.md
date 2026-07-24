@@ -88,8 +88,26 @@ Android-facing façade for:
 - creating or protecting every underlying socket with VpnService.protect(fd)
   before it connects.
 
-No authentication, TUN, socket protection, session persistence, or connection
-UI is implemented by this bridge.
+No real authentication, aTrust TUN, session persistence, or production
+connection UI is implemented by this bridge.
+
+## Issue #6 experimental data-plane boundary
+
+The bridge additionally exposes a credential-free validation surface:
+
+- SocketProtector.Protect(socketFD) is implemented by Android VpnService.
+- StartTestDataPlane(tunFD, protector, listener) takes ownership of the
+  detached TUN descriptor on the Go side.
+- StopTestDataPlane() is idempotent and closes the TUN and fake transport.
+- Event payloads use type = testVpnState and report state, stable error code,
+  packet counts, and byte counts.
+- The Go side opens a local UDP echo transport, calls Protect through
+  net.Dialer.Control before connecting, and reflects only the fixed
+  zju-connect-tun-test-v1 IPv4/UDP marker.
+
+This is an integration probe for Android TUN, gomobile callbacks, descriptor
+ownership, socket protection, and cleanup. It must not be mistaken for the
+future aTrust client API or a proof of real school-network access.
 
 ## Licensing
 
