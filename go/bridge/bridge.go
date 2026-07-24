@@ -8,15 +8,21 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 
 	"github.com/mythologyli/zju-connect/client/atrust"
+	"github.com/mythologyli/zju-connect/client/atrust/auth"
 )
 
 const (
-	schemaVersion  = 1
-	upstreamCommit = "7776cdcfa33e3df56ba8da438c17b2274e316128"
-	upstreamModule = "github.com/mythologyli/zju-connect"
+	schemaVersion       = 1
+	upstreamCommit      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
+	forkCommit          = "6124bcf19ec671433537b76cc8fad8a16f8c4582"
+	upstreamModule      = "github.com/mythologyli/zju-connect"
+	zjuAtrustServer     = "vpn.zju.edu.cn"
+	zjuAtrustServerPort = 443
 )
 
 // BridgeListener is implemented by Kotlin. Event payloads use versioned JSON
@@ -45,6 +51,46 @@ type authInfoResponse struct {
 	Message       string `json:"message"`
 	AuthMethods   any    `json:"authMethods,omitempty"`
 }
+
+type authenticationStartRequest struct {
+	Server string `json:"server"`
+	Port   int    `json:"port"`
+}
+
+type authenticationSubmission struct {
+	Action      string `json:"action"`
+	AuthType    string `json:"authType,omitempty"`
+	LoginDomain string `json:"loginDomain,omitempty"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty"`
+	Phone       string `json:"phone,omitempty"`
+	SMSCode     string `json:"smsCode,omitempty"`
+	Captcha     string `json:"captcha,omitempty"`
+}
+
+type authenticationEvent struct {
+	SchemaVersion int             `json:"schemaVersion"`
+	Type          string          `json:"type"`
+	State         string          `json:"state"`
+	Code          string          `json:"code,omitempty"`
+	Message       string          `json:"message"`
+	AuthMethods   []auth.AuthInfo `json:"authMethods,omitempty"`
+	PhoneNumbers  []string        `json:"phoneNumbers,omitempty"`
+	CaptchaWidth  int             `json:"captchaWidth,omitempty"`
+	CaptchaHeight int             `json:"captchaHeight,omitempty"`
+	Username      string          `json:"username,omitempty"`
+}
+
+type authenticationSession struct {
+	mu       sync.Mutex
+	flow     *auth.InteractiveFlow
+	listener BridgeListener
+	server   string
+	port     int
+	busy     bool
+}
+
+var currentAuthentication authenticationSession
 
 // GetBuildInfo returns a deterministic structured result. It is the smoke-test
 // API: calling it proves that Kotlin entered Go code linked with the pinned
@@ -91,6 +137,278 @@ func FetchAuthInfo(requestJSON string) string {
 		Message:       "Authentication methods retrieved",
 		AuthMethods:   methods,
 	})
+}
+
+// StartAuthentication begins a single in-memory aTrust authentication session.
+// The target is deliberately restricted to ZJU's production aTrust endpoint so
+// credentials cannot be redirected to an arbitrary host by the UI layer.
+func StartAuthentication(requestJSON string, listener BridgeListener) string {
+	var request authenticationStartRequest
+	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
+		return authError("invalidRequest", "Authentication request is not valid JSON")
+	}
+	if request.Server != zjuAtrustServer || request.Port != zjuAtrustServerPort {
+		return authError("invalidRequest", "Authentication is only available for the ZJU aTrust service")
+	}
+	if listener == nil {
+		return authError("invalidRequest", "Authentication listener is required")
+	}
+
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.flow != nil {
+		currentAuthentication.mu.Unlock()
+		return authError("alreadyRunning", "An authentication session is already active")
+	}
+	flow, err := newAuthenticationFlow(request.Server, request.Port)
+	if err != nil {
+		currentAuthentication.mu.Unlock()
+		return authError("initializationFailed", "Unable to initialize authentication")
+	}
+	currentAuthentication.flow = flow
+	currentAuthentication.listener = listener
+	currentAuthentication.server = request.Server
+	currentAuthentication.port = request.Port
+	currentAuthentication.busy = true
+	currentAuthentication.mu.Unlock()
+
+	go runAuthenticationOperation(flow, listener, func() (auth.InteractivePrompt, error) {
+		return flow.Begin()
+	})
+	return marshal(authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "authenticationStarted",
+		State:         "fetchingAuthMethods",
+		Message:       "Fetching available authentication methods",
+	})
+}
+
+// SubmitAuthentication advances the current session. Values supplied in this
+// JSON are used in-memory only and are never included in a callback event.
+func SubmitAuthentication(responseJSON string) string {
+	var response authenticationSubmission
+	if err := json.Unmarshal([]byte(responseJSON), &response); err != nil {
+		return authError("invalidRequest", "Authentication response is not valid JSON")
+	}
+	if response.Action == "retry" {
+		return retryAuthentication()
+	}
+
+	flow, listener, ok := acquireAuthenticationOperation()
+	if !ok {
+		return authError("invalidState", "Authentication is not ready for another response")
+	}
+	var operation func() (auth.InteractivePrompt, error)
+	switch response.Action {
+	case "selectMethod":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SelectMethod(response.AuthType, response.LoginDomain)
+		}
+	case "submitCredentials":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SubmitCredentials(response.Username, response.Password)
+		}
+	case "submitPhone":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SubmitPhone(response.Phone)
+		}
+	case "submitSmsCode":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SubmitSMSCode(response.SMSCode)
+		}
+	case "submitCaptcha":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SubmitCaptcha(response.Captcha)
+		}
+	default:
+		releaseAuthenticationOperation(flow)
+		return authError("invalidRequest", "Unknown authentication response")
+	}
+
+	go runAuthenticationOperation(flow, listener, operation)
+	return marshal(authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "responseAccepted",
+		State:         "authenticating",
+		Message:       "Authentication response accepted",
+	})
+}
+
+// GetPendingCaptchaImage returns a copy of the current image bytes only while
+// the flow is awaiting a captcha response. It never writes a file.
+func GetPendingCaptchaImage() []byte {
+	currentAuthentication.mu.Lock()
+	flow := currentAuthentication.flow
+	currentAuthentication.mu.Unlock()
+	if flow == nil {
+		return nil
+	}
+	image, err := flow.PendingCaptchaImage()
+	if err != nil {
+		return nil
+	}
+	return image
+}
+
+// CancelAuthentication clears passwords, verification input, captcha bytes,
+// and the in-memory authentication result. Repeating it is harmless.
+func CancelAuthentication() {
+	currentAuthentication.mu.Lock()
+	flow := currentAuthentication.flow
+	listener := currentAuthentication.listener
+	currentAuthentication.flow = nil
+	currentAuthentication.listener = nil
+	currentAuthentication.busy = false
+	currentAuthentication.mu.Unlock()
+	if flow != nil {
+		flow.Cancel()
+	}
+	if listener != nil {
+		emitAuthenticationEvent(listener, authenticationEvent{
+			SchemaVersion: schemaVersion,
+			Type:          "cancelled",
+			State:         "cancelled",
+			Code:          "cancelled",
+			Message:       "Authentication cancelled",
+		})
+	}
+}
+
+// ClearAuthenticatedResult discards the in-memory success result while
+// leaving an otherwise completed session observable to the UI.
+func ClearAuthenticatedResult() {
+	currentAuthentication.mu.Lock()
+	flow := currentAuthentication.flow
+	currentAuthentication.mu.Unlock()
+	if flow != nil {
+		flow.ClearResult()
+	}
+}
+
+func newAuthenticationFlow(server string, port int) (*auth.InteractiveFlow, error) {
+	return auth.NewInteractiveFlow(net.JoinHostPort(server, fmt.Sprint(port)))
+}
+
+func acquireAuthenticationOperation() (*auth.InteractiveFlow, BridgeListener, bool) {
+	currentAuthentication.mu.Lock()
+	defer currentAuthentication.mu.Unlock()
+	if currentAuthentication.flow == nil || currentAuthentication.listener == nil || currentAuthentication.busy {
+		return nil, nil, false
+	}
+	currentAuthentication.busy = true
+	return currentAuthentication.flow, currentAuthentication.listener, true
+}
+
+func releaseAuthenticationOperation(flow *auth.InteractiveFlow) {
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.flow == flow {
+		currentAuthentication.busy = false
+	}
+	currentAuthentication.mu.Unlock()
+}
+
+func isCurrentAuthenticationFlow(flow *auth.InteractiveFlow, listener BridgeListener) bool {
+	currentAuthentication.mu.Lock()
+	defer currentAuthentication.mu.Unlock()
+	return currentAuthentication.flow == flow && currentAuthentication.listener == listener
+}
+
+func runAuthenticationOperation(
+	flow *auth.InteractiveFlow,
+	listener BridgeListener,
+	operation func() (auth.InteractivePrompt, error),
+) {
+	prompt, err := operation()
+	releaseAuthenticationOperation(flow)
+	if !isCurrentAuthenticationFlow(flow, listener) {
+		return
+	}
+	if err != nil {
+		emitAuthenticationEvent(listener, authenticationFailure(err))
+		return
+	}
+	event := authenticationEvent{
+		SchemaVersion: schemaVersion,
+		State:         prompt.State,
+		Message:       prompt.Message,
+		AuthMethods:   prompt.AuthMethods,
+		PhoneNumbers:  prompt.PhoneNumbers,
+		CaptchaWidth:  prompt.CaptchaWidth,
+		CaptchaHeight: prompt.CaptchaHeight,
+	}
+	switch prompt.State {
+	case "awaitingMethod":
+		event.Type = "authMethodsReady"
+	case "awaitingCredentials":
+		event.Type = "credentialsRequired"
+	case "awaitingPhone":
+		event.Type = "phoneRequired"
+	case "awaitingSms":
+		event.Type = "smsRequired"
+	case "awaitingCaptcha":
+		event.Type = "captchaRequired"
+	case "authenticated":
+		event.Type = "authenticated"
+		if result, ok := flow.Result(); ok {
+			event.Username = result.Username
+		}
+	default:
+		event.Type = "stateChanged"
+	}
+	emitAuthenticationEvent(listener, event)
+}
+
+func retryAuthentication() string {
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.busy || currentAuthentication.listener == nil {
+		currentAuthentication.mu.Unlock()
+		return authError("invalidState", "Authentication is not ready to retry")
+	}
+	oldFlow := currentAuthentication.flow
+	flow, err := newAuthenticationFlow(currentAuthentication.server, currentAuthentication.port)
+	if err != nil {
+		currentAuthentication.mu.Unlock()
+		return authError("initializationFailed", "Unable to restart authentication")
+	}
+	listener := currentAuthentication.listener
+	currentAuthentication.flow = flow
+	currentAuthentication.busy = true
+	currentAuthentication.mu.Unlock()
+	if oldFlow != nil {
+		oldFlow.Cancel()
+	}
+	go runAuthenticationOperation(flow, listener, func() (auth.InteractivePrompt, error) {
+		return flow.Begin()
+	})
+	return marshal(authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "retryStarted",
+		State:         "fetchingAuthMethods",
+		Message:       "Retrying authentication",
+	})
+}
+
+func authenticationFailure(err error) authenticationEvent {
+	code := "authenticationFailed"
+	if strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "tls:") {
+		code = "certificateRejected"
+	} else if strings.Contains(err.Error(), "unsupported") {
+		code = "unsupportedAuthMethod"
+	} else if strings.Contains(err.Error(), "expected") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "advertised") {
+		code = "invalidInput"
+	}
+	return authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "error",
+		State:         "error",
+		Code:          code,
+		Message:       "Authentication could not be completed",
+	}
+}
+
+func emitAuthenticationEvent(listener BridgeListener, event authenticationEvent) {
+	if listener != nil {
+		listener.OnEvent(marshal(event))
+	}
 }
 
 func authError(code, message string) string {

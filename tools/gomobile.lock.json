@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "go": {
     "version": "1.25.6",
     "archiveUrl": "https://go.dev/dl/go1.25.6.windows-amd64.zip",
@@ -12,9 +12,14 @@
   },
   "zjuConnect": {
     "module": "github.com/mythologyli/zju-connect",
-    "version": "v1.2.2-0.20260717055316-7776cdcfa33e",
-    "commit": "7776cdcfa33e3df56ba8da438c17b2274e316128",
-    "repository": "https://github.com/Mythologyli/zju-connect",
+    "upstreamVersion": "v1.2.2-0.20260717055316-7776cdcfa33e",
+    "upstreamCommit": "7776cdcfa33e3df56ba8da438c17b2274e316128",
+    "upstreamRepository": "https://github.com/Mythologyli/zju-connect",
+    "forkModule": "github.com/Cedar17/zju-connect",
+    "forkVersion": "v0.0.0-20260724083905-6124bcf19ec6",
+    "forkCommit": "6124bcf19ec671433537b76cc8fad8a16f8c4582",
+    "forkBranch": "android/auth-control",
+    "forkRepository": "https://github.com/Cedar17/zju-connect",
     "license": "AGPL-3.0-only"
   },
   "android": {

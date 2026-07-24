@@ -10,8 +10,8 @@ The authoritative machine-readable record is
 
 | Input | Pinned value |
 | --- | --- |
-| zju-connect | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Go module | **v1.2.2-0.20260717055316-7776cdcfa33e** |
+| zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
+| Android authentication fork | **Cedar17/zju-connect** `android/auth-control` at **6124bcf19ec671433537b76cc8fad8a16f8c4582** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -49,13 +49,13 @@ pinned modules. Gradle's verifyGoCoreAar task fails early with the required
 command when the AAR has not been built. It does not download a toolchain as
 a side effect of a normal Android build.
 
-The Gradle unit-test task currently has no Kotlin/Java test sources and may
-finish with `NO-SOURCE`; it does not replace the Go bridge tests above.
+The Gradle unit-test task covers the Kotlin CAPTCHA coordinate mapper. It does
+not replace the Go bridge and fork state-machine tests above.
 
 ## Kotlin–Go contract
 
-The Go package is [go/bridge](../go/bridge). It exposes only gomobile-safe
-strings and one callback interface:
+The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
+`ByteArray`, and one callback interface:
 
 - GetBuildInfo() String returns a deterministic versioned JSON event.
 - EmitBuildInfo(BridgeListener) delivers that event through onEvent(String).
@@ -66,30 +66,29 @@ strings and one callback interface:
 [GoCoreBridge.kt](../app/src/main/kotlin/cn/zju/connect/GoCoreBridge.kt) owns
 the generated Java API. The startup screen calls both build-info methods and
 shows the returned upstream commit, which makes the binding and reverse
-callback observable without a network connection.
+callback observable without a network connection. The authentication UI uses
+the same wrapper for the single active authentication flow.
 
 All event payloads contain schemaVersion and type. Future callback events must
 preserve this versioned JSON boundary and must not contain passwords, cookies,
 SIDs, device IDs, sign keys, CAPTCHA bytes, or raw authentication responses.
 
-## Upstream gaps before the next phase
+## Interactive authentication control plane
 
-The pinned upstream's mobile/mobile_android.go exposes EasyConnect Login,
-Logout, and StartStack; it is not an aTrust bridge. Its aTrust path instead
-exposes atrust.GetAuthInfoList and a synchronous atrust.Client.Setup that takes
-credentials and files as inputs. The next phase needs a reviewed
-Android-facing façade for:
+The original upstream's mobile/mobile_android.go exposes EasyConnect Login,
+Logout, and StartStack; it is not an aTrust bridge. The maintained Android fork
+adds a small in-memory aTrust state machine that preserves certificate and host
+validation and replaces its synchronous CLI interactions. The Android façade
+provides password, server-triggered SMS, and CAPTCHA state transitions as
+structured events; `StartAuthentication`, `SubmitAuthentication`,
+`GetPendingCaptchaImage`, `CancelAuthentication`, and
+`ClearAuthenticatedResult`; and a single active flow that never puts
+credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
+responses into callback JSON.
 
-- password, SMS, OAuth/CAS, and CAPTCHA state transitions as structured events;
-- in-memory CAPTCHA bytes rather than GraphCodeFile;
-- an explicit, encrypted session snapshot rather than external client/resource
-  files and raw aTrust identifiers;
-- passing an Android TUN descriptor with defined ownership and close behavior;
-- creating or protecting every underlying socket with VpnService.protect(fd)
-  before it connects.
-
-No real authentication, aTrust TUN, session persistence, or production
-connection UI is implemented by this bridge.
+Authentication success leaves its client/resource result in Go memory only for
+the next tunnel phase. No aTrust TUN, session persistence, QR/CAS/OAuth login,
+or production connection lifecycle is implemented by this bridge.
 
 ## Issue #6 experimental data-plane boundary
 
