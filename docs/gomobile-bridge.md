@@ -11,7 +11,7 @@ The authoritative machine-readable record is
 | Input | Pinned value |
 | --- | --- |
 | zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Android authentication fork | **Cedar17/zju-connect** `android/auth-control` at **6124bcf19ec671433537b76cc8fad8a16f8c4582** |
+| Android authentication fork | **Cedar17/zju-connect** `android/auth-control` at **7c49d88fae5d7a203198b278cb2ed5a1c7c3b39c** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -87,8 +87,11 @@ credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
 responses into callback JSON.
 
 Authentication success leaves its client/resource result in Go memory only for
-the next tunnel phase. No aTrust TUN, session persistence, QR/CAS/OAuth login,
-or production connection lifecycle is implemented by this bridge.
+the next tunnel phase. Cancelling returns without waiting for an in-flight
+request: it cancels the request context, closes that session's active HTTP
+connections, and clears its sensitive state before any stale event can reach
+the UI. No aTrust TUN, session persistence, QR/CAS/OAuth login, or production
+connection lifecycle is implemented by this bridge.
 
 ## Issue #6 experimental data-plane boundary
 

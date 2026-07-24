@@ -4,7 +4,7 @@ go 1.25.6
 
 require github.com/mythologyli/zju-connect v1.2.2-0.20260717055316-7776cdcfa33e
 
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v0.0.0-20260724083905-6124bcf19ec6
+replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v0.0.0-20260724095215-7c49d88fae5d
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
