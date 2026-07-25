@@ -7,15 +7,21 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import cn.zju.connect.gocore.core.SocketProtector
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 private const val REAL_VPN_CHANNEL = "zju_connect_real_vpn"
 private const val REAL_VPN_NOTIFICATION_ID = 1002
+private const val REAL_VPN_LOG_TAG = "ZjuConnectRealVpn"
+private const val TUN_ESTABLISH_TIMEOUT_SECONDS = 20L
 
 /** Owns the production Android TUN and the authenticated zju-connect client. */
 class RealVpnService : VpnService() {
@@ -25,29 +31,39 @@ class RealVpnService : VpnService() {
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val cleanupExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val watchdogExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private val goCoreBridge = GoCoreBridge()
     private val stateLock = Any()
-
-    @Volatile
-    private var sessionStarted = false
-
-    @Volatile
-    private var stopRequested = false
-
-    /** Keep the first data-plane failure visible after the cleanup callback. */
-    private var terminalFailure: Pair<String, String>? = null
+    private val lifecycle = RealVpnLifecycle()
 
     private val socketProtector = object : SocketProtector {
         override fun protect(socketFd: Long): Boolean = this@RealVpnService.protect(socketFd.toInt())
     }
 
     private val goListener: (GoVpnEvent) -> Unit = { event ->
-        RealVpnStateStore.update(event)
+        Log.i(
+            REAL_VPN_LOG_TAG,
+            "bridge state=${event.state} code=${event.code.ifBlank { "none" }} " +
+                "stage=${event.stage.ifBlank { "none" }} cause=${event.cause.ifBlank { "none" }}",
+        )
         if (event.state == "error") {
-            synchronized(stateLock) {
-                terminalFailure = event.code.ifBlank { "vpnDataPlaneFailed" } to event.message
+            val failure = synchronized(stateLock) {
+                lifecycle.recordFailure(event.code, event.message)
             }
-            requestStop()
+            if (failure != null) {
+                publishFailure("goCallback", failure)
+                requestStop()
+            } else {
+                Log.i(REAL_VPN_LOG_TAG, "ignored bridge error after user stop")
+            }
+        } else {
+            val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
+            if (acceptsProgress) {
+                RealVpnStateStore.update(event)
+            } else {
+                Log.i(REAL_VPN_LOG_TAG, "ignored bridge progress after terminal transition")
+            }
         }
     }
 
@@ -59,53 +75,57 @@ class RealVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> requestStart()
-            ACTION_STOP -> requestStop()
+            ACTION_STOP -> requestStop(userInitiated = true)
         }
         return START_NOT_STICKY
     }
 
     override fun onRevoke() {
+        val failure = synchronized(stateLock) { lifecycle.recordRevocation() }
+        failure?.let { publishFailure("onRevoke", it) }
         requestStop()
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        val destroyedUnexpectedly = synchronized(stateLock) {
-            sessionStarted && !stopRequested
-        }
-        if (destroyedUnexpectedly) {
-            synchronized(stateLock) {
-                terminalFailure = "serviceDestroyed" to
-                    "Android destroyed the VPN service before it completed"
-            }
+        val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
+        if (failure != null) {
+            publishFailure("onDestroy", failure)
         }
         stopInternal()
         executor.shutdownNow()
+        cleanupExecutor.shutdownNow()
+        watchdogExecutor.shutdownNow()
         super.onDestroy()
     }
 
     private fun requestStart() {
-        executor.execute { startInternal() }
+        if (!executor.isShutdown) {
+            executor.execute { startInternal() }
+        }
     }
 
-    private fun requestStop() {
+    private fun requestStop(userInitiated: Boolean = false) {
         synchronized(stateLock) {
-            stopRequested = true
+            if (userInitiated) {
+                lifecycle.requestUserStop()
+            }
         }
-        executor.execute { stopInternal() }
+        if (!cleanupExecutor.isShutdown) {
+            cleanupExecutor.execute { stopInternal() }
+        } else {
+            stopInternal()
+        }
     }
 
     private fun startInternal() {
-        synchronized(stateLock) {
-            if (sessionStarted) {
-                return
-            }
-            stopRequested = false
-            terminalFailure = null
-            sessionStarted = true
+        val started = synchronized(stateLock) { lifecycle.beginSession() }
+        if (!started) {
+            Log.i(REAL_VPN_LOG_TAG, "ignored duplicate start request")
+            return
         }
 
-        RealVpnStateStore.setStatus("preparing", "Preparing the authenticated aTrust VPN")
+        setStatus("preparing", "Preparing the authenticated aTrust VPN")
         var detachedTunFd: Int? = null
         try {
             // Android requires a foreground service to publish its notification
@@ -114,8 +134,29 @@ class RealVpnService : VpnService() {
             // kill the service before the TUN is established.
             startForegroundCompat()
             val config = goCoreBridge.prepareRealVpn()
-            if (config.state == "error" || config.address.isBlank() || config.routes.isEmpty()) {
-                error(config.message.ifBlank { "The aTrust VPN configuration is unavailable" })
+            Log.i(
+                REAL_VPN_LOG_TAG,
+                "prepared state=${config.state} code=${config.code.ifBlank { "none" }} " +
+                    "stage=${config.stage.ifBlank { "none" }} cause=${config.cause.ifBlank { "none" }} " +
+                    "routes=${config.routes.size} mtu=${config.mtu}",
+            )
+            if (config.state == "error") {
+                throw RealVpnStartFailure(
+                    code = config.code.ifBlank { "vpnSetupFailed" },
+                    stage = config.stage.ifBlank { "prepare" },
+                    message = config.message.ifBlank { "The aTrust VPN configuration is unavailable" },
+                )
+            }
+            if (config.address.isBlank() || config.routes.isEmpty()) {
+                throw RealVpnStartFailure(
+                    code = "vpnConfigurationUnavailable",
+                    stage = "prepare.configuration",
+                    message = "The aTrust VPN configuration is incomplete",
+                )
+            }
+            if (!acceptsStartProgress()) {
+                goCoreBridge.stopRealVpn()
+                return
             }
 
             val builder = Builder()
@@ -128,62 +169,119 @@ class RealVpnService : VpnService() {
                 builder.addRoute(route.address, route.prefixLength)
             }
 
-            val tun = builder.establish()
-                ?: error("Android refused to establish the VPN interface")
+            setStatus("attaching", "Establishing the Android VPN interface")
+            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
+            val watchdog = scheduleTunEstablishWatchdog()
+            val tun = try {
+                builder.establish()
+                    ?: throw RealVpnStartFailure(
+                        code = "tunEstablishFailed",
+                        stage = "tun.establish",
+                        message = "Android refused to establish the VPN interface",
+                    )
+            } finally {
+                watchdog.cancel(false)
+            }
+            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.complete")
+            if (!acceptsStartProgress()) {
+                Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.aborted")
+                tun.close()
+                return
+            }
             val tunFd = tun.detachFd()
+            Log.i(REAL_VPN_LOG_TAG, "phase=tun.detach.complete")
             detachedTunFd = tunFd
             tun.close()
 
-            RealVpnStateStore.setStatus("attaching", "Attaching the Android VPN interface")
+            if (!acceptsStartProgress()) {
+                closeDetachedTunFd(detachedTunFd)
+                detachedTunFd = null
+                return
+            }
+            Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.begin")
             goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener)
+            Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.complete")
             detachedTunFd = null
         } catch (error: Throwable) {
-            detachedTunFd?.let { fd ->
-                runCatching { android.os.ParcelFileDescriptor.adoptFd(fd).close() }
+            closeDetachedTunFd(detachedTunFd)
+            detachedTunFd = null
+            val failure = when (error) {
+                is RealVpnStartFailure -> RealVpnFailure(error.code, error.message ?: "Unable to start the real aTrust VPN")
+                else -> RealVpnFailure(
+                    code = "vpnStartFailed",
+                    message = error.message ?: "Unable to start the real aTrust VPN",
+                )
             }
-            goCoreBridge.stopRealVpn()
-            RealVpnStateStore.setError(
-                code = "vpnStartFailed",
-                message = error.message ?: "Unable to start the real aTrust VPN",
-            )
-            synchronized(stateLock) {
-                terminalFailure = null
-                sessionStarted = false
+            val retainedFailure = synchronized(stateLock) {
+                lifecycle.recordFailure(failure.code, failure.message)
             }
-            stopForegroundCompat()
-            stopSelf()
+            if (retainedFailure != null) {
+                publishFailure("startInternal", retainedFailure)
+            } else {
+                Log.i(REAL_VPN_LOG_TAG, "ignored startup failure after user stop")
+            }
+            stopInternal()
         }
     }
 
-    private fun stopInternal() {
-        val shouldStop = synchronized(stateLock) {
-            if (!sessionStarted) {
-                false
-            } else {
-                sessionStarted = false
-                true
-            }
-        }
-        val failureBeforeCleanup = synchronized(stateLock) { terminalFailure }
+    private fun scheduleTunEstablishWatchdog(): ScheduledFuture<*> =
+        watchdogExecutor.schedule(
+            {
+                val failure = synchronized(stateLock) {
+                    lifecycle.recordFailure(
+                        code = "tunEstablishTimeout",
+                        message = "Android VPN interface setup timed out",
+                    )
+                }
+                if (failure != null) {
+                    publishFailure("tunEstablishWatchdog", failure)
+                    requestStop()
+                }
+            },
+            TUN_ESTABLISH_TIMEOUT_SECONDS,
+            TimeUnit.SECONDS,
+        )
 
-        if (shouldStop) {
-            RealVpnStateStore.setStatus("stopping", "Stopping the real aTrust VPN")
+    private fun stopInternal() {
+        val shouldStop = synchronized(stateLock) { lifecycle.beginCleanup() }
+        val outcomeBeforeCleanup = synchronized(stateLock) { lifecycle.terminalOutcome() }
+
+        if (shouldStop && outcomeBeforeCleanup == null) {
+            setStatus("stopping", "Stopping the real aTrust VPN")
         }
         goCoreBridge.stopRealVpn()
         stopForegroundCompat()
-        val failure = synchronized(stateLock) {
-            terminalFailure ?: failureBeforeCleanup
-        }
-        synchronized(stateLock) {
-            terminalFailure = null
-        }
-        if (failure != null) {
-            RealVpnStateStore.setError(failure.first, failure.second)
-        } else if (!shouldStop) {
-            RealVpnStateStore.setStatus("stopped", "Real aTrust VPN is stopped")
+        when (val outcome = synchronized(stateLock) { lifecycle.terminalOutcome() }) {
+            is RealVpnTerminalOutcome.Error -> publishFailure("stopInternal", outcome.failure)
+            RealVpnTerminalOutcome.Stopped -> setStatus("stopped", "Real aTrust VPN is stopped")
+            null -> Unit
         }
         stopSelf()
     }
+
+    private fun acceptsStartProgress(): Boolean = synchronized(stateLock) { lifecycle.acceptsProgress() }
+
+    private fun closeDetachedTunFd(fd: Int?) {
+        fd?.let { descriptor ->
+            runCatching { android.os.ParcelFileDescriptor.adoptFd(descriptor).close() }
+        }
+    }
+
+    private fun setStatus(state: String, message: String) {
+        Log.i(REAL_VPN_LOG_TAG, "service state=$state")
+        RealVpnStateStore.setStatus(state, message)
+    }
+
+    private fun publishFailure(origin: String, failure: RealVpnFailure) {
+        Log.e(REAL_VPN_LOG_TAG, "terminal failure origin=$origin code=${failure.code}")
+        RealVpnStateStore.setError(failure.code, failure.message)
+    }
+
+    private class RealVpnStartFailure(
+        val code: String,
+        val stage: String,
+        message: String,
+    ) : IllegalStateException(message)
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,8 @@ type realVpnPreparedEvent struct {
 	Type          string         `json:"type"`
 	State         string         `json:"state"`
 	Code          string         `json:"code,omitempty"`
+	Stage         string         `json:"stage,omitempty"`
+	Cause         string         `json:"cause,omitempty"`
 	Message       string         `json:"message"`
 	Address       string         `json:"address,omitempty"`
 	MTU           int            `json:"mtu,omitempty"`
@@ -67,7 +70,7 @@ func PrepareRealVpn() string {
 	realVpnState.Lock()
 	if realVpnState.active != nil {
 		realVpnState.Unlock()
-		return realVpnError("alreadyRunning", "A real VPN session is already active")
+		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN session is already active")
 	}
 	if realVpnState.prepared != nil {
 		prepared := realVpnState.prepared
@@ -86,15 +89,16 @@ func PrepareRealVpn() string {
 
 	result, err := currentInteractiveResult()
 	if err != nil {
-		return realVpnError("notAuthenticated", "Complete aTrust authentication before connecting")
+		return realVpnErrorAt("notAuthenticated", "prepare.authentication", "Complete aTrust authentication before connecting")
 	}
 
 	var clientAuthData auth.ClientAuthData
 	if err := json.Unmarshal(result.AuthData, &clientAuthData); err != nil || clientAuthData.DeviceID == "" {
-		return realVpnError("invalidAuthResult", "The in-memory authentication result is incomplete")
+		return realVpnErrorAt("invalidAuthResult", "prepare.authentication", "The in-memory authentication result is incomplete")
 	}
 
 	vpnClient := atrust.NewClient(result.Username, result.SID, clientAuthData.DeviceID, "")
+	vpnClient.SetNodeTLSConfig(zjuAtrustNodeTLSConfig())
 	if _, err := vpnClient.Setup(
 		zjuAtrustServer,
 		zjuAtrustServerPort,
@@ -103,21 +107,27 @@ func PrepareRealVpn() string {
 		result.ResourceData,
 		0,
 		"",
-		true,
+		false,
 	); err != nil {
 		vpnClient.Close()
-		return realVpnError("vpnSetupFailed", "Unable to prepare the authenticated aTrust VPN")
+		cause := classifyRealVpnSetupError(err)
+		return realVpnErrorWithCause(
+			"vpnSetupFailed",
+			"prepare.setup",
+			cause,
+			"Unable to prepare the authenticated aTrust VPN",
+		)
 	}
 
 	address, err := vpnClient.IP()
 	if err != nil || address == nil || address.To4() == nil {
 		vpnClient.Close()
-		return realVpnError("vpnAddressUnavailable", "The aTrust server did not provide a VPN address")
+		return realVpnErrorAt("vpnAddressUnavailable", "prepare.address", "The aTrust server did not provide a VPN address")
 	}
 	ipSet, err := vpnClient.IPSet()
 	if err != nil || ipSet == nil {
 		vpnClient.Close()
-		return realVpnError("vpnRoutesUnavailable", "The aTrust server did not provide VPN routes")
+		return realVpnErrorAt("vpnRoutesUnavailable", "prepare.routes", "The aTrust server did not provide VPN routes")
 	}
 
 	routes := make([]realVpnRoute, 0)
@@ -132,7 +142,7 @@ func PrepareRealVpn() string {
 	}
 	if len(routes) == 0 {
 		vpnClient.Close()
-		return realVpnError("vpnRoutesUnavailable", "The aTrust server returned no IPv4 VPN routes")
+		return realVpnErrorAt("vpnRoutesUnavailable", "prepare.routes", "The aTrust server returned no IPv4 VPN routes")
 	}
 
 	prepared := &preparedRealVpn{
@@ -144,7 +154,7 @@ func PrepareRealVpn() string {
 	if realVpnState.active != nil || realVpnState.prepared != nil {
 		realVpnState.Unlock()
 		vpnClient.Close()
-		return realVpnError("alreadyRunning", "A real VPN session is already active")
+		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN session is already active")
 	}
 	realVpnState.prepared = prepared
 	realVpnState.Unlock()
@@ -164,11 +174,11 @@ func PrepareRealVpn() string {
 // The caller transfers ownership of tunFD to this bridge until StopRealVpn.
 func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener) {
 	if tunFD < 0 {
-		emitRealVpnState(listener, "error", "invalidTunFd", "The VPN file descriptor is invalid", nil)
+		emitRealVpnState(listener, "error", "invalidTunFd", "attach.tun", "The VPN file descriptor is invalid", nil)
 		return
 	}
 	if protector == nil {
-		emitRealVpnState(listener, "error", "missingSocketProtector", "Android socket protection is required", nil)
+		emitRealVpnState(listener, "error", "missingSocketProtector", "attach.protection", "Android socket protection is required", nil)
 		return
 	}
 
@@ -176,12 +186,12 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 	prepared := realVpnState.prepared
 	if prepared == nil {
 		realVpnState.Unlock()
-		emitRealVpnState(listener, "error", "notPrepared", "Prepare the real VPN before attaching its TUN", nil)
+		emitRealVpnState(listener, "error", "notPrepared", "attach.preparation", "Prepare the real VPN before attaching its TUN", nil)
 		return
 	}
 	if realVpnState.active != nil {
 		realVpnState.Unlock()
-		emitRealVpnState(listener, "error", "alreadyRunning", "A real VPN session is already active", nil)
+		emitRealVpnState(listener, "error", "alreadyRunning", "attach.lifecycle", "A real VPN session is already active", nil)
 		return
 	}
 	realVpnState.prepared = nil
@@ -191,7 +201,7 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 	tunFile := os.NewFile(uintptr(tunFD), "zju-connect-real-tun")
 	if tunFile == nil {
 		prepared.client.Close()
-		emitRealVpnState(listener, "error", "tunInitializationFailed", "Unable to open the Android VPN interface", nil)
+		emitRealVpnState(listener, "error", "tunInitializationFailed", "attach.tun", "Unable to open the Android VPN interface", nil)
 		return
 	}
 	session := &realVpnSession{
@@ -206,13 +216,13 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 		realVpnState.Unlock()
 		prepared.client.Close()
 		closeTunFile(tunFile)
-		emitRealVpnState(listener, "error", "alreadyRunning", "A real VPN session is already active", nil)
+		emitRealVpnState(listener, "error", "alreadyRunning", "attach.lifecycle", "A real VPN session is already active", nil)
 		return
 	}
 	realVpnState.active = session
 	realVpnState.Unlock()
 
-	emitRealVpnState(listener, "starting", "", "Starting the real aTrust VPN data plane", session)
+	emitRealVpnState(listener, "starting", "", "dataplane.start", "Starting the real aTrust VPN data plane", session)
 	go session.run()
 }
 
@@ -234,14 +244,14 @@ func StopRealVpn() {
 
 	session.stopOnce.Do(func() {
 		session.stopping.Store(true)
-		emitRealVpnState(session.listener, "stopping", "", "Stopping the real aTrust VPN data plane", session)
+		emitRealVpnState(session.listener, "stopping", "", "lifecycle.stop", "Stopping the real aTrust VPN data plane", session)
 		session.client.Close()
 		closeTunFile(session.tun)
 	})
 	select {
 	case <-session.doneCh:
 	case <-time.After(2 * time.Second):
-		emitRealVpnState(session.listener, "error", "stopTimeout", "Timed out waiting for VPN cleanup", session)
+		emitRealVpnState(session.listener, "error", "stopTimeout", "lifecycle.stop", "Timed out waiting for VPN cleanup", session)
 	}
 }
 
@@ -253,7 +263,7 @@ func (s *realVpnSession) run() {
 	}
 	closeTunFile(s.tun)
 	if s.stopping.Load() {
-		emitRealVpnState(s.listener, "stopped", "", "Real aTrust VPN stopped", s)
+		emitRealVpnState(s.listener, "stopped", "", "lifecycle.stop", "Real aTrust VPN stopped", s)
 		clearActiveRealVpn(s)
 		return
 	}
@@ -261,15 +271,17 @@ func (s *realVpnSession) run() {
 	if failure == nil {
 		failure = &realVpnFailure{
 			code:    "vpnDataPlaneStopped",
+			stage:   "dataplane.runtime",
 			message: "The real aTrust VPN data plane stopped unexpectedly",
 		}
 	}
-	emitRealVpnState(s.listener, "error", failure.code, failure.message, s)
+	emitRealVpnState(s.listener, "error", failure.code, failure.stage, failure.message, s)
 	clearActiveRealVpn(s)
 }
 
 type realVpnFailure struct {
 	code    string
+	stage   string
 	message string
 }
 
@@ -278,11 +290,12 @@ func safeRunRealVpnStack(session *realVpnSession) (failure *realVpnFailure) {
 		if recovered := recover(); recovered != nil {
 			failure = &realVpnFailure{
 				code:    "vpnDataPlanePanic",
+				stage:   "dataplane.runtime",
 				message: "The real aTrust VPN data plane failed",
 			}
 		}
 	}()
-	emitRealVpnState(session.listener, "active", "", "Real aTrust VPN is active", session)
+	emitRealVpnState(session.listener, "active", "", "dataplane.active", "Real aTrust VPN is active", session)
 	return runRealVpnStack(session)
 }
 
@@ -294,6 +307,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	if err != nil {
 		return &realVpnFailure{
 			code:    "l3ConnectionInitFailed",
+			stage:   "dataplane.l3.init",
 			message: "Unable to initialize the aTrust data connection",
 		}
 	}
@@ -305,7 +319,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 		for {
 			n, readErr := session.tun.Read(buf)
 			if readErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnTunReadFailed", message: "Unable to read the Android VPN interface"}
+				failureCh <- &realVpnFailure{code: "vpnTunReadFailed", stage: "dataplane.tun.read", message: "Unable to read the Android VPN interface"}
 				return
 			}
 			if n == 0 {
@@ -318,7 +332,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 				if errors.Is(writeErr, client.ErrResourceNotFound) {
 					continue
 				}
-				failureCh <- &realVpnFailure{code: "vpnPacketForwardFailed", message: "The aTrust data connection rejected a VPN packet"}
+				failureCh <- &realVpnFailure{code: "vpnPacketForwardFailed", stage: "dataplane.l3.write", message: "The aTrust data connection rejected a VPN packet"}
 				return
 			}
 		}
@@ -329,14 +343,14 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 		for {
 			n, readErr := l3Conn.Read(buf)
 			if readErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnServerReadFailed", message: "The aTrust data connection closed unexpectedly"}
+				failureCh <- &realVpnFailure{code: "vpnServerReadFailed", stage: "dataplane.l3.read", message: "The aTrust data connection closed unexpectedly"}
 				return
 			}
 			if n == 0 {
 				continue
 			}
 			if _, writeErr := session.tun.Write(buf[:n]); writeErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnTunWriteFailed", message: "Unable to write aTrust data to the Android VPN interface"}
+				failureCh <- &realVpnFailure{code: "vpnTunWriteFailed", stage: "dataplane.tun.write", message: "Unable to write aTrust data to the Android VPN interface"}
 				return
 			}
 		}
@@ -384,7 +398,7 @@ func currentInteractiveResult() (auth.InteractiveResult, error) {
 	return result, nil
 }
 
-func emitRealVpnState(listener BridgeListener, state, code, message string, session *realVpnSession) {
+func emitRealVpnState(listener BridgeListener, state, code, stage, message string, session *realVpnSession) {
 	if listener == nil {
 		return
 	}
@@ -393,6 +407,7 @@ func emitRealVpnState(listener BridgeListener, state, code, message string, sess
 		Type:          "vpnState",
 		State:         state,
 		Code:          code,
+		Stage:         stage,
 		Message:       message,
 	}
 	if session != nil {
@@ -402,11 +417,53 @@ func emitRealVpnState(listener BridgeListener, state, code, message string, sess
 }
 
 func realVpnError(code, message string) string {
+	return realVpnErrorAt(code, "prepare", message)
+}
+
+func realVpnErrorAt(code, stage, message string) string {
+	return realVpnErrorWithCause(code, stage, "", message)
+}
+
+// classifyRealVpnSetupError produces a stable, non-sensitive log category.
+// Do not pass err.Error() across the mobile callback boundary: upstream errors
+// can contain server responses that are not safe to put in UI or logcat.
+func classifyRealVpnSetupError(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	errText := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(errText, "timeout") || strings.Contains(errText, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(errText, "no route to host") ||
+		strings.Contains(errText, "network is unreachable") ||
+		strings.Contains(errText, "connection refused") ||
+		strings.Contains(errText, "connection reset") ||
+		strings.Contains(errText, "network unavailable"):
+		return "networkUnavailable"
+	case strings.Contains(errText, "permission denied") || strings.Contains(errText, "operation not permitted"):
+		return "permissionDenied"
+	case strings.Contains(errText, "x509") || strings.Contains(errText, "tls") || strings.Contains(errText, "certificate"):
+		return "tlsValidation"
+	case strings.Contains(errText, "no reachable node"):
+		return "noReachableNode"
+	case strings.Contains(errText, "failed to connect to the server"):
+		return "serverRejected"
+	case strings.Contains(errText, "unexpected response"):
+		return "protocolRejected"
+	default:
+		return "unexpected"
+	}
+}
+
+func realVpnErrorWithCause(code, stage, cause, message string) string {
 	return marshal(realVpnPreparedEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "error",
 		State:         "error",
 		Code:          code,
+		Stage:         stage,
+		Cause:         cause,
 		Message:       message,
 	})
 }

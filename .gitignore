@@ -14,3 +14,4 @@ captures/
 /app/libs/*-sources.jar
 /app/libs/*.build-info.json
 /.gomobile-toolchain/
+screenshot/

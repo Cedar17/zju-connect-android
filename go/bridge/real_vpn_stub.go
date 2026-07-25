@@ -16,6 +16,8 @@ type realVpnPreparedEvent struct {
 	Type          string         `json:"type"`
 	State         string         `json:"state"`
 	Code          string         `json:"code,omitempty"`
+	Stage         string         `json:"stage,omitempty"`
+	Cause         string         `json:"cause,omitempty"`
 	Message       string         `json:"message"`
 	Address       string         `json:"address,omitempty"`
 	MTU           int            `json:"mtu,omitempty"`
@@ -35,11 +37,21 @@ func StartRealVpn(_ int, _ SocketProtector, listener BridgeListener) {
 func StopRealVpn() {}
 
 func realVpnError(code, message string) string {
+	return realVpnErrorAt(code, "prepare", message)
+}
+
+func realVpnErrorAt(code, stage, message string) string {
+	return realVpnErrorWithCause(code, stage, "", message)
+}
+
+func realVpnErrorWithCause(code, stage, cause, message string) string {
 	return marshal(realVpnPreparedEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "error",
 		State:         "error",
 		Code:          code,
+		Stage:         stage,
+		Cause:         cause,
 		Message:       message,
 	})
 }

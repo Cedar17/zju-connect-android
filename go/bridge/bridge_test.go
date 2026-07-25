@@ -1,11 +1,38 @@
 package core
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestVerifyPinnedNodeSPKI(t *testing.T) {
+	certificate := &x509.Certificate{RawSubjectPublicKeyInfo: []byte("expected-node-key")}
+	expected := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
+
+	if err := verifyPinnedNodeSPKI([]*x509.Certificate{certificate}, [][sha256.Size]byte{expected}); err != nil {
+		t.Fatalf("matching node pin rejected: %v", err)
+	}
+	if err := verifyPinnedNodeSPKI(nil, [][sha256.Size]byte{expected}); err == nil {
+		t.Fatal("missing node certificate was accepted")
+	}
+	if err := verifyPinnedNodeSPKI(
+		[]*x509.Certificate{{RawSubjectPublicKeyInfo: []byte("unexpected-node-key")}},
+		[][sha256.Size]byte{expected},
+	); err == nil {
+		t.Fatal("unexpected node certificate was accepted")
+	}
+}
+
+func TestZjuAtrustNodeTLSConfigPinsDespiteCustomVerification(t *testing.T) {
+	config := zjuAtrustNodeTLSConfig()
+	if !config.InsecureSkipVerify || config.VerifyConnection == nil {
+		t.Fatal("node TLS config must replace appliance PKI validation with a mandatory pin")
+	}
+}
 
 type recordingListener struct {
 	events []string
@@ -82,7 +109,7 @@ func TestAuthenticationFailureIsRedacted(t *testing.T) {
 }
 
 func TestRealVpnErrorIsRedactedAndVersioned(t *testing.T) {
-	encoded := realVpnError("vpnSetupFailed", "Unable to prepare the authenticated aTrust VPN")
+	encoded := realVpnErrorWithCause("vpnSetupFailed", "prepare.setup", "timeout", "Unable to prepare the authenticated aTrust VPN")
 
 	var event realVpnPreparedEvent
 	if err := json.Unmarshal([]byte(encoded), &event); err != nil {
@@ -90,6 +117,12 @@ func TestRealVpnErrorIsRedactedAndVersioned(t *testing.T) {
 	}
 	if event.SchemaVersion != schemaVersion || event.Type != "error" || event.State != "error" {
 		t.Fatalf("unexpected real VPN error event: %#v", event)
+	}
+	if event.Stage != "prepare.setup" {
+		t.Errorf("stage = %q, want prepare.setup", event.Stage)
+	}
+	if event.Cause != "timeout" {
+		t.Errorf("cause = %q, want timeout", event.Cause)
 	}
 	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey"} {
 		if strings.Contains(encoded, forbidden) {

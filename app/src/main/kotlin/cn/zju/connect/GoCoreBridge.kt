@@ -140,6 +140,8 @@ class GoCoreBridge {
             state = event.optString("state", "unknown"),
             code = event.optString("code", ""),
             message = event.optString("message", "Real VPN response received"),
+            stage = event.optString("stage", ""),
+            cause = event.optString("cause", ""),
             address = event.optString("address", ""),
             mtu = event.optInt("mtu", 1400),
             routes = event.optJSONArray("routes").toVpnRoutes(),
@@ -158,6 +160,8 @@ class GoCoreBridge {
             state = event.optString("state", "unknown"),
             code = event.optString("code", ""),
             message = event.optString("message", "Real VPN event received"),
+            stage = event.optString("stage", ""),
+            cause = event.optString("cause", ""),
         )
     }.getOrElse {
         GoVpnEvent(
@@ -262,6 +266,8 @@ data class GoVpnPrepared(
     val state: String,
     val code: String,
     val message: String,
+    val stage: String = "",
+    val cause: String = "",
     val address: String = "",
     val mtu: Int = 1400,
     val routes: List<GoVpnRoute> = emptyList(),
@@ -271,6 +277,8 @@ data class GoVpnEvent(
     val state: String,
     val code: String,
     val message: String,
+    val stage: String = "",
+    val cause: String = "",
 )
 
 data class GoAuthMethod(
