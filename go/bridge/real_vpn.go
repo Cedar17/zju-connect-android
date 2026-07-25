@@ -19,7 +19,16 @@ import (
 	"github.com/mythologyli/zju-connect/stack/tun"
 )
 
-const realVpnMTU = int(tun.MTU)
+const (
+	realVpnMTU = int(tun.MTU)
+	// l3Conn implements io.Reader by copying one complete server packet into
+	// the caller's buffer. A buffer limited to the interface MTU silently
+	// truncates any larger packet because that reader cannot report
+	// io.ErrShortBuffer. Keep the TUN MTU at 1400, but retain a complete IPv4
+	// packet here so a write failure is attributable to Android rather than a
+	// locally corrupted packet.
+	realVpnInboundBufferSize = 65535
+)
 
 type realVpnRoute struct {
 	Address      string `json:"address"`
@@ -275,13 +284,14 @@ func (s *realVpnSession) run() {
 			message: "The real aTrust VPN data plane stopped unexpectedly",
 		}
 	}
-	emitRealVpnState(s.listener, "error", failure.code, failure.stage, failure.message, s)
+	emitRealVpnFailure(s.listener, failure, s)
 	clearActiveRealVpn(s)
 }
 
 type realVpnFailure struct {
 	code    string
 	stage   string
+	cause   string
 	message string
 }
 
@@ -339,7 +349,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	}()
 
 	go func() {
-		buf := make([]byte, realVpnMTU)
+		buf := make([]byte, realVpnInboundBufferSize)
 		for {
 			n, readErr := l3Conn.Read(buf)
 			if readErr != nil {
@@ -350,7 +360,12 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 				continue
 			}
 			if _, writeErr := session.tun.Write(buf[:n]); writeErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnTunWriteFailed", stage: "dataplane.tun.write", message: "Unable to write aTrust data to the Android VPN interface"}
+				failureCh <- &realVpnFailure{
+					code:    "vpnTunWriteFailed",
+					stage:   "dataplane.tun.write",
+					cause:   classifyTunWriteError(writeErr),
+					message: "Unable to write aTrust data to the Android VPN interface",
+				}
 				return
 			}
 		}
@@ -409,6 +424,25 @@ func emitRealVpnState(listener BridgeListener, state, code, stage, message strin
 		Code:          code,
 		Stage:         stage,
 		Message:       message,
+	}
+	if session != nil {
+		event.MTU = realVpnMTU
+	}
+	listener.OnEvent(marshal(event))
+}
+
+func emitRealVpnFailure(listener BridgeListener, failure *realVpnFailure, session *realVpnSession) {
+	if listener == nil || failure == nil {
+		return
+	}
+	event := realVpnPreparedEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "vpnState",
+		State:         "error",
+		Code:          failure.code,
+		Stage:         failure.stage,
+		Cause:         failure.cause,
+		Message:       failure.message,
 	}
 	if session != nil {
 		event.MTU = realVpnMTU

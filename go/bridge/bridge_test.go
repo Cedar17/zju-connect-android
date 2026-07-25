@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -127,6 +128,26 @@ func TestRealVpnErrorIsRedactedAndVersioned(t *testing.T) {
 	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey"} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("real VPN error contained forbidden field %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestClassifyTunWriteErrorUsesOnlyStableCategories(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{err: syscall.EBADF, want: "fdClosed"},
+		{err: syscall.EAGAIN, want: "wouldBlock"},
+		{err: syscall.EMSGSIZE, want: "packetTooLarge"},
+		{err: syscall.EINVAL, want: "invalidPacket"},
+		{err: syscall.EIO, want: "tunUnavailable"},
+		{err: fmt.Errorf("provider response contained credential-like text"), want: "io"},
+	}
+
+	for _, test := range tests {
+		if got := classifyTunWriteError(test.err); got != test.want {
+			t.Errorf("classifyTunWriteError(%v) = %q, want %q", test.err, got, test.want)
 		}
 	}
 }

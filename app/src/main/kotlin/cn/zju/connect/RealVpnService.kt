@@ -49,7 +49,7 @@ class RealVpnService : VpnService() {
         )
         if (event.state == "error") {
             val failure = synchronized(stateLock) {
-                lifecycle.recordFailure(event.code, event.message)
+                lifecycle.recordFailure(event.code, realVpnErrorMessage(event))
             }
             if (failure != null) {
                 publishFailure("goCallback", failure)
@@ -323,6 +323,26 @@ class RealVpnService : VpnService() {
         }
     }
 }
+
+/**
+ * The bridge's raw I/O errors are intentionally not exposed. For the one
+ * packet-injection boundary that currently needs device diagnosis, show only
+ * the fixed, non-sensitive reason category in the existing error message.
+ */
+internal fun realVpnErrorMessage(event: GoVpnEvent): String {
+    val message = event.message.ifBlank { "The real aTrust VPN stopped unexpectedly" }
+    val cause = event.cause.takeIf { it in TUN_WRITE_DIAGNOSTIC_CAUSES } ?: return message
+    return "$message (diagnostic: ${event.stage}/$cause)"
+}
+
+private val TUN_WRITE_DIAGNOSTIC_CAUSES = setOf(
+    "fdClosed",
+    "wouldBlock",
+    "packetTooLarge",
+    "invalidPacket",
+    "tunUnavailable",
+    "io",
+)
 
 data class RealVpnUiState(
     val state: String = "idle",

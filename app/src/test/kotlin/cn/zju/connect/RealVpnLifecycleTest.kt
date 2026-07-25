@@ -80,4 +80,38 @@ class RealVpnLifecycleTest {
 
         assertEquals(RealVpnTerminalOutcome.Stopped, lifecycle.terminalOutcome())
     }
+
+    @Test
+    fun tunWriteDiagnosticIsSafeAndVisibleInTheExistingMessage() {
+        val message = realVpnErrorMessage(
+            GoVpnEvent(
+                state = "error",
+                code = "vpnTunWriteFailed",
+                message = "Unable to write aTrust data to the Android VPN interface",
+                stage = "dataplane.tun.write",
+                cause = "invalidPacket",
+            ),
+        )
+
+        assertEquals(
+            "Unable to write aTrust data to the Android VPN interface " +
+                "(diagnostic: dataplane.tun.write/invalidPacket)",
+            message,
+        )
+    }
+
+    @Test
+    fun unknownBridgeCauseIsNotShown() {
+        val message = realVpnErrorMessage(
+            GoVpnEvent(
+                state = "error",
+                code = "vpnTunWriteFailed",
+                message = "Unable to write aTrust data to the Android VPN interface",
+                stage = "dataplane.tun.write",
+                cause = "server-response-that-must-not-reach-ui",
+            ),
+        )
+
+        assertEquals("Unable to write aTrust data to the Android VPN interface", message)
+    }
 }
