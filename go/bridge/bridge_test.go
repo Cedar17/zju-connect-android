@@ -151,3 +151,92 @@ func TestClassifyTunWriteErrorUsesOnlyStableCategories(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectRealVpnPacketReportsOnlySafeMetadata(t *testing.T) {
+	packet := buildMarkedPacket()
+	meta := inspectRealVpnPacket("dataplane.tun.read", packet)
+
+	if !meta.Valid || meta.Truncated {
+		t.Fatalf("valid packet classified incorrectly: %#v", meta)
+	}
+	if meta.IPVersion != 4 || meta.Protocol != "udp" {
+		t.Fatalf("packet protocol metadata = %#v", meta)
+	}
+	if meta.SourceIP != "10.255.0.2" || meta.DestinationIP != "192.0.2.1" {
+		t.Fatalf("packet address metadata = %#v", meta)
+	}
+	if meta.SourcePort != 49152 || meta.DestinationPort != 34890 {
+		t.Fatalf("packet port metadata = %#v", meta)
+	}
+	encoded := marshal(meta)
+	if strings.Contains(encoded, testMarker) {
+		t.Fatalf("packet metadata leaked payload marker: %s", encoded)
+	}
+}
+
+func TestInspectRealVpnPacketDetectsTruncation(t *testing.T) {
+	packet := buildMarkedPacket()
+	packet = packet[:len(packet)-1]
+	meta := inspectRealVpnPacket("dataplane.l3.read", packet)
+
+	if meta.Valid || !meta.Truncated {
+		t.Fatalf("truncated packet classified incorrectly: %#v", meta)
+	}
+}
+
+func TestRealVpnDiagnosticsCountersAreMonotonic(t *testing.T) {
+	var diagnostics realVpnDiagnostics
+	diagnostics.tunReadPackets.Add(1)
+	diagnostics.tunReadBytes.Add(48)
+	first := diagnostics.snapshot()
+	diagnostics.tunReadPackets.Add(2)
+	diagnostics.tunReadBytes.Add(96)
+	diagnostics.l3WriteAttempts.Add(3)
+	diagnostics.l3WriteSuccesses.Add(2)
+	second := diagnostics.snapshot()
+
+	if second.TunReadPackets < first.TunReadPackets || second.TunReadBytes < first.TunReadBytes {
+		t.Fatalf("diagnostic counters regressed: first=%#v second=%#v", first, second)
+	}
+	if second.L3WriteAttempts != 3 || second.L3WriteSuccesses != 2 {
+		t.Fatalf("unexpected L3 counters: %#v", second)
+	}
+}
+
+func TestRealVpnPacketSamplingIsBoundedAndUniquePerStageAndFlow(t *testing.T) {
+	var diagnostics realVpnDiagnostics
+	packet := buildMarkedPacket()
+	first := diagnostics.samplePacket("dataplane.tun.read", packet)
+	duplicate := diagnostics.samplePacket("dataplane.tun.read", packet)
+	nextStage := diagnostics.samplePacket("dataplane.l3.write", packet)
+
+	if first == nil || first.Sequence != 1 {
+		t.Fatalf("first sample = %#v, want sequence 1", first)
+	}
+	if duplicate != nil {
+		t.Fatalf("duplicate flow was sampled again: %#v", duplicate)
+	}
+	if nextStage == nil || nextStage.Sequence != 2 {
+		t.Fatalf("next-stage sample = %#v, want sequence 2", nextStage)
+	}
+}
+
+func TestRealVpnDiagnosticEventContainsNoAuthenticationFields(t *testing.T) {
+	snapshot := realVpnDiagnosticsSnapshot{TunReadPackets: 1, L3WriteSuccesses: 1}
+	packet := inspectRealVpnPacket("dataplane.l3.write", buildMarkedPacket())
+	encoded := marshal(realVpnPreparedEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "vpnDiagnostic",
+		State:         "diagnostic",
+		Stage:         "dataplane.l3.write",
+		Message:       "Real VPN data-plane observation",
+		Diagnostics:   &snapshot,
+		Packet:        &packet,
+	})
+
+	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey", testMarker} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("diagnostic event contained forbidden value %q: %s", forbidden, encoded)
+		}
+	}
+}

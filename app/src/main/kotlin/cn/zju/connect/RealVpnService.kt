@@ -47,7 +47,12 @@ class RealVpnService : VpnService() {
             "bridge state=${event.state} code=${event.code.ifBlank { "none" }} " +
                 "stage=${event.stage.ifBlank { "none" }} cause=${event.cause.ifBlank { "none" }}",
         )
-        if (event.state == "error") {
+        realVpnDiagnosticLog(event)?.let { Log.i(REAL_VPN_LOG_TAG, it) }
+        if (event.state == "diagnostic") {
+            // Diagnostic observations must never replace the user-visible
+            // lifecycle state (for example, active) in the Compose store.
+            Unit
+        } else if (event.state == "error") {
             val failure = synchronized(stateLock) {
                 lifecycle.recordFailure(event.code, realVpnErrorMessage(event))
             }
@@ -343,6 +348,32 @@ private val TUN_WRITE_DIAGNOSTIC_CAUSES = setOf(
     "tunUnavailable",
     "io",
 )
+
+internal fun realVpnDiagnosticLog(event: GoVpnEvent): String? {
+    val diagnostics = event.diagnostics ?: return null
+    return buildString {
+        append(
+            "dataplane counters " +
+                "tunRead=${diagnostics.tunReadPackets}/${diagnostics.tunReadBytes} " +
+                "forwardable=${diagnostics.forwardablePackets} filtered=${diagnostics.filteredPackets} " +
+                "l3Write=${diagnostics.l3WriteSuccesses}/${diagnostics.l3WriteAttempts} " +
+                "resourceDrops=${diagnostics.resourceDrops} " +
+                "l3Read=${diagnostics.l3ReadPackets}/${diagnostics.l3ReadBytes} " +
+                "l3Invalid=${diagnostics.l3InvalidPackets} " +
+                "tunWrite=${diagnostics.tunWriteSuccesses}/${diagnostics.tunWriteAttempts}/" +
+                diagnostics.tunWriteBytes,
+        )
+        event.packet?.let { packet ->
+            append(
+                " packet seq=${packet.sequence} direction=${packet.direction} " +
+                    "ip=${packet.ipVersion} protocol=${packet.protocol} " +
+                    "${packet.sourceIp}:${packet.sourcePort}->" +
+                    "${packet.destinationIp}:${packet.destinationPort} " +
+                    "len=${packet.length} valid=${packet.valid} truncated=${packet.truncated}",
+            )
+        }
+    }
+}
 
 data class RealVpnUiState(
     val state: String = "idle",

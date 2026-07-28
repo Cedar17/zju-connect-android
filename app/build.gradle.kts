@@ -53,6 +53,7 @@ dependencies {
     implementation(files("libs/zju-connect-core.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 val goCoreAar = layout.projectDirectory.file("libs/zju-connect-core.aar")

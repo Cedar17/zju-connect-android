@@ -154,7 +154,7 @@ class GoCoreBridge {
         )
     }
 
-    private fun parseVpnEvent(eventJson: String): GoVpnEvent = runCatching {
+    internal fun parseVpnEvent(eventJson: String): GoVpnEvent = runCatching {
         val event = JSONObject(eventJson)
         GoVpnEvent(
             state = event.optString("state", "unknown"),
@@ -162,6 +162,8 @@ class GoCoreBridge {
             message = event.optString("message", "Real VPN event received"),
             stage = event.optString("stage", ""),
             cause = event.optString("cause", ""),
+            diagnostics = event.optJSONObject("diagnostics").toVpnDiagnostics(),
+            packet = event.optJSONObject("packet").toVpnPacketMetadata(),
         )
     }.getOrElse {
         GoVpnEvent(
@@ -232,6 +234,42 @@ class GoCoreBridge {
             }
         }
 
+    private fun JSONObject?.toVpnDiagnostics(): GoVpnDiagnostics? =
+        this?.let { diagnostics ->
+            GoVpnDiagnostics(
+                tunReadPackets = diagnostics.optLong("tunReadPackets", 0),
+                tunReadBytes = diagnostics.optLong("tunReadBytes", 0),
+                forwardablePackets = diagnostics.optLong("forwardablePackets", 0),
+                filteredPackets = diagnostics.optLong("filteredPackets", 0),
+                l3WriteAttempts = diagnostics.optLong("l3WriteAttempts", 0),
+                l3WriteSuccesses = diagnostics.optLong("l3WriteSuccesses", 0),
+                resourceDrops = diagnostics.optLong("resourceDrops", 0),
+                l3ReadPackets = diagnostics.optLong("l3ReadPackets", 0),
+                l3ReadBytes = diagnostics.optLong("l3ReadBytes", 0),
+                l3InvalidPackets = diagnostics.optLong("l3InvalidPackets", 0),
+                tunWriteAttempts = diagnostics.optLong("tunWriteAttempts", 0),
+                tunWriteSuccesses = diagnostics.optLong("tunWriteSuccesses", 0),
+                tunWriteBytes = diagnostics.optLong("tunWriteBytes", 0),
+            )
+        }
+
+    private fun JSONObject?.toVpnPacketMetadata(): GoVpnPacketMetadata? =
+        this?.let { packet ->
+            GoVpnPacketMetadata(
+                sequence = packet.optLong("sequence", 0),
+                direction = packet.optString("direction", ""),
+                ipVersion = packet.optInt("ipVersion", 0),
+                protocol = packet.optString("protocol", "unknown"),
+                sourceIp = packet.optString("sourceIp", ""),
+                destinationIp = packet.optString("destinationIp", ""),
+                sourcePort = packet.optInt("sourcePort", 0),
+                destinationPort = packet.optInt("destinationPort", 0),
+                length = packet.optInt("length", 0),
+                valid = packet.optBoolean("valid", false),
+                truncated = packet.optBoolean("truncated", false),
+            )
+        }
+
     private companion object {
         const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
         const val ZJU_ATRUST_PORT = 443
@@ -279,6 +317,38 @@ data class GoVpnEvent(
     val message: String,
     val stage: String = "",
     val cause: String = "",
+    val diagnostics: GoVpnDiagnostics? = null,
+    val packet: GoVpnPacketMetadata? = null,
+)
+
+data class GoVpnDiagnostics(
+    val tunReadPackets: Long = 0,
+    val tunReadBytes: Long = 0,
+    val forwardablePackets: Long = 0,
+    val filteredPackets: Long = 0,
+    val l3WriteAttempts: Long = 0,
+    val l3WriteSuccesses: Long = 0,
+    val resourceDrops: Long = 0,
+    val l3ReadPackets: Long = 0,
+    val l3ReadBytes: Long = 0,
+    val l3InvalidPackets: Long = 0,
+    val tunWriteAttempts: Long = 0,
+    val tunWriteSuccesses: Long = 0,
+    val tunWriteBytes: Long = 0,
+)
+
+data class GoVpnPacketMetadata(
+    val sequence: Long = 0,
+    val direction: String = "",
+    val ipVersion: Int = 0,
+    val protocol: String = "unknown",
+    val sourceIp: String = "",
+    val destinationIp: String = "",
+    val sourcePort: Int = 0,
+    val destinationPort: Int = 0,
+    val length: Int = 0,
+    val valid: Boolean = false,
+    val truncated: Boolean = false,
 )
 
 data class GoAuthMethod(

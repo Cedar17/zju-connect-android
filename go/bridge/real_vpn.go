@@ -36,26 +36,30 @@ type realVpnRoute struct {
 }
 
 type realVpnPreparedEvent struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Type          string         `json:"type"`
-	State         string         `json:"state"`
-	Code          string         `json:"code,omitempty"`
-	Stage         string         `json:"stage,omitempty"`
-	Cause         string         `json:"cause,omitempty"`
-	Message       string         `json:"message"`
-	Address       string         `json:"address,omitempty"`
-	MTU           int            `json:"mtu,omitempty"`
-	Routes        []realVpnRoute `json:"routes,omitempty"`
+	SchemaVersion int                         `json:"schemaVersion"`
+	Type          string                      `json:"type"`
+	State         string                      `json:"state"`
+	Code          string                      `json:"code,omitempty"`
+	Stage         string                      `json:"stage,omitempty"`
+	Cause         string                      `json:"cause,omitempty"`
+	Message       string                      `json:"message"`
+	Address       string                      `json:"address,omitempty"`
+	MTU           int                         `json:"mtu,omitempty"`
+	Routes        []realVpnRoute              `json:"routes,omitempty"`
+	Diagnostics   *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
+	Packet        *realVpnPacketMetadata      `json:"packet,omitempty"`
 }
 
 type realVpnSession struct {
-	client   *atrust.Client
-	tun      *os.File
-	l3Conn   io.ReadWriteCloser
-	listener BridgeListener
-	doneCh   chan struct{}
-	stopping atomic.Bool
-	stopOnce sync.Once
+	client      *atrust.Client
+	tun         *os.File
+	l3Conn      io.ReadWriteCloser
+	listener    BridgeListener
+	doneCh      chan struct{}
+	stopping    atomic.Bool
+	stopOnce    sync.Once
+	emitMu      sync.Mutex
+	diagnostics realVpnDiagnostics
 }
 
 type preparedRealVpn struct {
@@ -207,6 +211,12 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 	realVpnState.Unlock()
 
 	prepared.client.SetSocketProtector(protector)
+	if err := prepareTunFileDescriptor(tunFD); err != nil {
+		prepared.client.Close()
+		closeTunFile(os.NewFile(uintptr(tunFD), "zju-connect-real-tun-invalid"))
+		emitRealVpnState(listener, "error", "tunInitializationFailed", "attach.tun", "Unable to prepare the Android VPN interface", nil)
+		return
+	}
 	tunFile := os.NewFile(uintptr(tunFD), "zju-connect-real-tun")
 	if tunFile == nil {
 		prepared.client.Close()
@@ -335,16 +345,34 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 			if n == 0 {
 				continue
 			}
-			if !isForwardableIPv4Packet(buf[:n]) {
+			session.diagnostics.tunReadPackets.Add(1)
+			session.diagnostics.tunReadBytes.Add(uint64(n))
+			packet := buf[:n]
+			if !isForwardableRealVpnPacket(packet) {
+				session.diagnostics.filteredPackets.Add(1)
+				emitRealVpnObservation(session, "dataplane.tun.read", "filteredPacket", packet)
 				continue
 			}
-			if _, writeErr := l3Conn.Write(buf[:n]); writeErr != nil {
+			session.diagnostics.forwardablePackets.Add(1)
+			emitRealVpnObservation(session, "dataplane.tun.read", "", packet)
+
+			session.diagnostics.l3WriteAttempts.Add(1)
+			if _, writeErr := l3Conn.Write(packet); writeErr != nil {
 				if errors.Is(writeErr, client.ErrResourceNotFound) {
+					session.diagnostics.resourceDrops.Add(1)
+					emitRealVpnObservation(session, "dataplane.l3.write", "resourceNotFound", packet)
 					continue
 				}
-				failureCh <- &realVpnFailure{code: "vpnPacketForwardFailed", stage: "dataplane.l3.write", message: "The aTrust data connection rejected a VPN packet"}
+				failureCh <- &realVpnFailure{
+					code:    "vpnPacketForwardFailed",
+					stage:   "dataplane.l3.write",
+					cause:   classifyL3WriteError(writeErr),
+					message: "The aTrust data connection rejected a VPN packet",
+				}
 				return
 			}
+			session.diagnostics.l3WriteSuccesses.Add(1)
+			emitRealVpnObservation(session, "dataplane.l3.write", "", packet)
 		}
 	}()
 
@@ -359,7 +387,23 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 			if n == 0 {
 				continue
 			}
-			if _, writeErr := session.tun.Write(buf[:n]); writeErr != nil {
+			session.diagnostics.l3ReadPackets.Add(1)
+			session.diagnostics.l3ReadBytes.Add(uint64(n))
+			packet := buf[:n]
+			meta := inspectRealVpnPacket("dataplane.l3.read", packet)
+			readCause := ""
+			if !meta.Valid {
+				session.diagnostics.l3InvalidPackets.Add(1)
+				if meta.Truncated {
+					readCause = "truncatedPacket"
+				} else {
+					readCause = "invalidPacket"
+				}
+			}
+			emitRealVpnObservation(session, "dataplane.l3.read", readCause, packet)
+
+			session.diagnostics.tunWriteAttempts.Add(1)
+			if _, writeErr := session.tun.Write(packet); writeErr != nil {
 				failureCh <- &realVpnFailure{
 					code:    "vpnTunWriteFailed",
 					stage:   "dataplane.tun.write",
@@ -368,21 +412,13 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 				}
 				return
 			}
+			session.diagnostics.tunWriteSuccesses.Add(1)
+			session.diagnostics.tunWriteBytes.Add(uint64(n))
+			emitRealVpnObservation(session, "dataplane.tun.write", "", packet)
 		}
 	}()
 
 	return <-failureCh
-}
-
-func isForwardableIPv4Packet(packet []byte) bool {
-	if len(packet) < 20 || packet[0]>>4 != 4 {
-		return false
-	}
-	headerLength := int(packet[0]&0x0f) * 4
-	if headerLength < 20 || len(packet) < headerLength {
-		return false
-	}
-	return packet[9] == 6 || packet[9] == 17
 }
 
 func clearActiveRealVpn(session *realVpnSession) {
@@ -427,8 +463,32 @@ func emitRealVpnState(listener BridgeListener, state, code, stage, message strin
 	}
 	if session != nil {
 		event.MTU = realVpnMTU
+		snapshot := session.diagnostics.snapshot()
+		event.Diagnostics = &snapshot
 	}
-	listener.OnEvent(marshal(event))
+	emitRealVpnEvent(listener, session, event)
+}
+
+func emitRealVpnObservation(session *realVpnSession, stage, cause string, packet []byte) {
+	if session == nil || session.listener == nil {
+		return
+	}
+	meta := session.diagnostics.samplePacket(stage, packet)
+	if meta == nil {
+		return
+	}
+	snapshot := session.diagnostics.snapshot()
+	emitRealVpnEvent(session.listener, session, realVpnPreparedEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "vpnDiagnostic",
+		State:         "diagnostic",
+		Stage:         stage,
+		Cause:         cause,
+		Message:       "Real VPN data-plane observation",
+		MTU:           realVpnMTU,
+		Diagnostics:   &snapshot,
+		Packet:        meta,
+	})
 }
 
 func emitRealVpnFailure(listener BridgeListener, failure *realVpnFailure, session *realVpnSession) {
@@ -446,6 +506,19 @@ func emitRealVpnFailure(listener BridgeListener, failure *realVpnFailure, sessio
 	}
 	if session != nil {
 		event.MTU = realVpnMTU
+		snapshot := session.diagnostics.snapshot()
+		event.Diagnostics = &snapshot
+	}
+	emitRealVpnEvent(listener, session, event)
+}
+
+func emitRealVpnEvent(listener BridgeListener, session *realVpnSession, event realVpnPreparedEvent) {
+	if listener == nil {
+		return
+	}
+	if session != nil {
+		session.emitMu.Lock()
+		defer session.emitMu.Unlock()
 	}
 	listener.OnEvent(marshal(event))
 }
