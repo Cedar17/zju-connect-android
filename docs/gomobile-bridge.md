@@ -11,7 +11,7 @@ The authoritative machine-readable record is
 | Input | Pinned value |
 | --- | --- |
 | zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Android real-VPN fork | **Cedar17/zju-connect** `dev/android-real-vpn-tls-pin-win` at **ae70e4f185ef33dd274ca761411e82106b29457d** |
+| Android real-VPN fork | **Cedar17/zju-connect** `dev/android` at **ae70e4f185ef33dd274ca761411e82106b29457d** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |

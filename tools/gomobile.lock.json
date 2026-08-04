@@ -18,7 +18,7 @@
     "forkModule": "github.com/Cedar17/zju-connect",
     "forkVersion": "v0.0.0-20260725103347-ae70e4f185ef",
     "forkCommit": "ae70e4f185ef33dd274ca761411e82106b29457d",
-    "forkBranch": "dev/android-real-vpn-tls-pin-win",
+    "forkBranch": "dev/android",
     "forkRepository": "https://github.com/Cedar17/zju-connect",
     "license": "AGPL-3.0-only"
   },

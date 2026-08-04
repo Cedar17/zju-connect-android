@@ -19,7 +19,7 @@ import (
 const (
 	schemaVersion       = 1
 	upstreamCommit      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
-	forkCommit          = "929702d2bb1a82d114b38e8bce4b5728e1de9d98"
+	forkCommit          = "ae70e4f185ef33dd274ca761411e82106b29457d"
 	upstreamModule      = "github.com/mythologyli/zju-connect"
 	zjuAtrustServer     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort = 443
