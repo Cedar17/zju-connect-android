@@ -4,7 +4,7 @@ go 1.25.6
 
 require github.com/mythologyli/zju-connect v1.2.2-0.20260717055316-7776cdcfa33e
 
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.2-0.20260810033101-65d7d8089f68
+replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.2-0.20260810060822-758838e90cdf
 
 require (
 	github.com/ebitengine/purego v0.10.0 // indirect

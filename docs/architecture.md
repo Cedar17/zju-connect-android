@@ -207,6 +207,18 @@ resources, or provide production connection UI.
 This phase intentionally does not add automatic reconnect or complex network
 switching.
 
+Issue #11 validation on 2026-08-10 completed the real data-plane framing loop on
+the preserved-data K40 installation. The aTrust length-framed response parser
+now keeps the negotiated mode and reassembles IPv4 packets split across server
+frames; malformed length streams fail closed instead of desynchronizing the
+TUN. Android diagnostics expose only bounded packet metadata (including TCP
+flags/sequence/ack/window and checksum status) at the four data-plane stages,
+never payload or authentication material. CLI requests to `cc98.org` (including
+redirects), `office.ckc.zju.edu.cn`, and the internal console endpoint returned
+real HTTP responses, and Edge rendered the CC98 homepage. The required OnePlus
+Ace 3V cellular acceptance remains pending; this evidence does not claim a
+merged or deployed release.
+
 ### Phase 6 — Session recovery: minimum checkpoint implemented
 
 - Export only cookies plus the exact device ID after successful authentication.

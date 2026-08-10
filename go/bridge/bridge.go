@@ -23,7 +23,7 @@ const (
 	authenticationSnapshotSchemaVersion = 1
 	maxAuthenticationSnapshotSize       = 64 * 1024
 	upstreamCommit                      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
-	forkCommit                          = "65d7d8089f6811187f7e2d4ff7f7806976edef93"
+	forkCommit                          = "758838e90cdf65c2543845f6d12cae27f0f9ec80"
 	upstreamModule                      = "github.com/mythologyli/zju-connect"
 	zjuAtrustServer                     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort                 = 443

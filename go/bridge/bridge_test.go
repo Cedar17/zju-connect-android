@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,6 +256,9 @@ func TestInspectRealVpnPacketReportsOnlySafeMetadata(t *testing.T) {
 	if meta.SourcePort != 49152 || meta.DestinationPort != 34890 {
 		t.Fatalf("packet port metadata = %#v", meta)
 	}
+	if meta.DataLength != len(testMarker) || meta.IPChecksum != "valid" || meta.TransportChecksum != "valid" {
+		t.Fatalf("packet checksum metadata = %#v", meta)
+	}
 	encoded := marshal(meta)
 	if strings.Contains(encoded, testMarker) {
 		t.Fatalf("packet metadata leaked payload marker: %s", encoded)
@@ -306,6 +310,53 @@ func TestRealVpnPacketSamplingIsBoundedAndUniquePerStageAndFlow(t *testing.T) {
 	if nextStage == nil || nextStage.Sequence != 2 {
 		t.Fatalf("next-stage sample = %#v, want sequence 2", nextStage)
 	}
+}
+
+func TestRealVpnPacketSamplingDistinguishesPacketsWithinTCPFlow(t *testing.T) {
+	var diagnostics realVpnDiagnostics
+	packet := buildTCPPacketForDiagnostics(0x02, nil)
+	first := diagnostics.samplePacket("dataplane.tun.read", packet)
+
+	packet = buildTCPPacketForDiagnostics(0x18, []byte("client hello metadata only"))
+	second := diagnostics.samplePacket("dataplane.tun.read", packet)
+
+	if first == nil || second == nil {
+		t.Fatalf("TCP flow packets were collapsed: first=%#v second=%#v", first, second)
+	}
+	if first.TCPFlags != 0x02 || first.DataLength != 0 {
+		t.Fatalf("SYN metadata = %#v", first)
+	}
+	if second.TCPFlags != 0x18 || second.DataLength == 0 {
+		t.Fatalf("data metadata = %#v", second)
+	}
+	if second.TCPSequence != 1234 || second.TCPAcknowledgment != 5678 || second.TCPWindow != 65535 {
+		t.Fatalf("TCP sequence metadata = %#v", second)
+	}
+}
+
+func buildTCPPacketForDiagnostics(flags byte, payload []byte) []byte {
+	packet := make([]byte, 20+20+len(payload))
+	packet[0] = 0x45
+	packet[8] = 64
+	packet[9] = 6
+	copy(packet[12:16], []byte{10, 190, 130, 250})
+	copy(packet[16:20], []byte{10, 10, 98, 98})
+	binary.BigEndian.PutUint16(packet[20:22], 49152)
+	binary.BigEndian.PutUint16(packet[22:24], 443)
+	packet[32] = 0x50
+	packet[33] = flags
+	binary.BigEndian.PutUint32(packet[24:28], 1234)
+	binary.BigEndian.PutUint32(packet[28:32], 5678)
+	binary.BigEndian.PutUint16(packet[34:36], 65535)
+	copy(packet[40:], payload)
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	binary.BigEndian.PutUint16(packet[10:12], internetChecksum(packet[:20]))
+	pseudo := append([]byte{}, packet[12:20]...)
+	pseudo = append(pseudo, 0, 6)
+	pseudo = append(pseudo, byte(len(packet[20:])>>8), byte(len(packet[20:])))
+	pseudo = append(pseudo, packet[20:]...)
+	binary.BigEndian.PutUint16(packet[36:38], internetChecksum(pseudo))
+	return packet
 }
 
 func TestRealVpnDiagnosticEventContainsNoAuthenticationFields(t *testing.T) {

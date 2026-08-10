@@ -71,7 +71,7 @@ An open-source Android client for ZJU aTrust remote access, powered by zju-conne
 系统备份；进程重启时先由服务端验证，再重新获取用户名与资源。固定版本、构建命令和边界见
 [gomobile bridge 文档](docs/gomobile-bridge.md)。
 
-当前 `dev/issue-11-real-atrust-vpn` 分支正在推进以下真实闭环：
+当前 `dev/issue-11-real-atrust-vpn` 分支正在收束以下真实闭环：
 
 ```text
 zju-connect
@@ -82,6 +82,13 @@ zju-connect
 → 校内资源路由
 → 正常断开与资源回收
 ```
+
+Issue #11 的 session recovery 已通过真机验收；真实 aTrust 数据面也已完成
+首个断点定位和修复。长度帧现在会跨服务端响应帧重组 IPv4 包，Android
+diagnostics 沿 `TUN read → L3 write → L3 read → TUN write` 记录不含载荷的
+TCP/IP 元数据。2026-08-10 在保留 App 数据的 K40 上，CLI 访问 `cc98.org`
+（含跳转）、`office.ckc.zju.edu.cn` 和校内 console 地址均闭环；Edge 打开
+CC98 首页也已通过。OnePlus Ace 3V 蜂窝网络验收仍按设备规则保持 pending。
 
 本阶段暂不实现自动重连、复杂网络切换和正式 UI 打磨。K40 仅用于
 验证认证、隧道生命周期和异常回收；校外访问验收必须使用蜂窝网络下的

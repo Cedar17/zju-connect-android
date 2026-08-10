@@ -1,5 +1,5 @@
-github.com/Cedar17/zju-connect v1.2.2-0.20260810033101-65d7d8089f68 h1:Bfs7boTvzv2QNCuKMwVBwwV0WqWA9hsvsPUoNrNKPV4=
-github.com/Cedar17/zju-connect v1.2.2-0.20260810033101-65d7d8089f68/go.mod h1:saMsv20lKIPXlBbhyKm7ws3SYbA3fixwmlUnfFWvCv4=
+github.com/Cedar17/zju-connect v1.2.2-0.20260810060822-758838e90cdf h1:c+4mE3OXbUXGZeAdiRfAGdxtA+kTkvLvX+CBlKUBtmA=
+github.com/Cedar17/zju-connect v1.2.2-0.20260810060822-758838e90cdf/go.mod h1:saMsv20lKIPXlBbhyKm7ws3SYbA3fixwmlUnfFWvCv4=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dvyukov/go-fuzz v0.0.0-20210103155950-6a8e9d1f2415/go.mod h1:11Gm+ccJnvAhCNLlf5+cS9KjtbaD5I5zaZpFMsTHWTw=

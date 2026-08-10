@@ -5,13 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import cn.zju.connect.gocore.core.SocketProtector
+import java.net.Inet4Address
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -173,6 +177,9 @@ class RealVpnService : VpnService() {
             config.routes.forEach { route ->
                 builder.addRoute(route.address, route.prefixLength)
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                builder.excludeCurrentUnderlaySubnets()
+            }
 
             setStatus("attaching", "Establishing the Android VPN interface")
             Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
@@ -265,6 +272,25 @@ class RealVpnService : VpnService() {
     }
 
     private fun acceptsStartProgress(): Boolean = synchronized(stateLock) { lifecycle.acceptsProgress() }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun Builder.excludeCurrentUnderlaySubnets() {
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        val prefixes = connectivity.allNetworks
+            .asSequence()
+            .filter { network ->
+                connectivity.getNetworkCapabilities(network)
+                    ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) != true
+            }
+            .mapNotNull(connectivity::getLinkProperties)
+            .flatMap { properties -> properties.linkAddresses.asSequence() }
+            .filter { link -> link.address is Inet4Address && link.prefixLength in 1..31 }
+            .map { link -> IpPrefix(link.address, link.prefixLength) }
+            .distinct()
+            .toList()
+        prefixes.forEach(::excludeRoute)
+        Log.i(REAL_VPN_LOG_TAG, "phase=tun.routes.exclude-underlay prefixes=${prefixes.size}")
+    }
 
     private fun closeDetachedTunFd(fd: Int?) {
         fd?.let { descriptor ->
@@ -369,7 +395,12 @@ internal fun realVpnDiagnosticLog(event: GoVpnEvent): String? {
                     "ip=${packet.ipVersion} protocol=${packet.protocol} " +
                     "${packet.sourceIp}:${packet.sourcePort}->" +
                     "${packet.destinationIp}:${packet.destinationPort} " +
-                    "len=${packet.length} valid=${packet.valid} truncated=${packet.truncated}",
+                    "len=${packet.length} dataLen=${packet.dataLength} " +
+                    "tcpFlags=0x${packet.tcpFlags.toString(16)} " +
+                    "seq=${packet.tcpSequence} ack=${packet.tcpAcknowledgment} " +
+                    "window=${packet.tcpWindow} " +
+                    "checksums=${packet.ipChecksum}/${packet.transportChecksum} " +
+                    "valid=${packet.valid} truncated=${packet.truncated}",
             )
         }
     }
