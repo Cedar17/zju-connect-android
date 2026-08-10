@@ -250,7 +250,7 @@ func TestInspectRealVpnPacketReportsOnlySafeMetadata(t *testing.T) {
 	if meta.IPVersion != 4 || meta.Protocol != "udp" {
 		t.Fatalf("packet protocol metadata = %#v", meta)
 	}
-	if meta.SourceIP != "10.255.0.2" || meta.DestinationIP != "192.0.2.1" {
+	if meta.SourceIP != "192.168.255.2" || meta.DestinationIP != "192.168.255.1" {
 		t.Fatalf("packet address metadata = %#v", meta)
 	}
 	if meta.SourcePort != 49152 || meta.DestinationPort != 34890 {

@@ -49,9 +49,10 @@ pinned modules. Gradle's verifyGoCoreAar task fails early with the required
 command when the AAR has not been built. It does not download a toolchain as
 a side effect of a normal Android build.
 
-The Gradle unit-test task covers the Kotlin CAPTCHA coordinate mapper and the
-encrypted-session envelope codec. It does not replace the Go bridge and fork
-state-machine tests above.
+The Gradle unit-test task covers the Kotlin connection policies, CAPTCHA
+coordinate mapper, encrypted-session envelope codec, VPN lifecycle, and
+redacted diagnostics. It does not replace the Go bridge and fork state-machine
+tests above.
 
 ## Kotlin–Go contract
 
@@ -65,10 +66,10 @@ The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
   is limited to server and port; it never accepts credentials.
 
 [GoCoreBridge.kt](../app/src/main/kotlin/cn/zju/connect/GoCoreBridge.kt) owns
-the generated Java API. The startup screen calls both build-info methods and
-shows the returned upstream commit, which makes the binding and reverse
-callback observable without a network connection. The authentication UI uses
-the same wrapper for the single active authentication flow.
+the generated Java API. Build-info and credential-free discovery functions
+remain validation surfaces, but the production home screen neither calls nor
+displays them. `ConnectionViewModel` uses the same wrapper for the single active
+authentication flow, beginning network work only after the user taps Connect.
 
 All event payloads contain schemaVersion and type. Future callback events must
 preserve this versioned JSON boundary and must not contain passwords, cookies,
@@ -93,10 +94,11 @@ Authentication success leaves its client/resource result in Go memory for the
 real VPN phase. Its exported recovery snapshot contains only a schema version,
 the exact device ID, and the complete endpoint cookie set. Kotlin encrypts
 those bytes with Android Keystore AES-GCM and atomically stores the envelope in
-`noBackupFilesDir`. On startup, Go validates the restored cookies with the
-server and refetches username and resources before recreating the in-memory
-result. An explicit `sessionInvalid` clears the snapshot; transport and TLS
-failures retain it for retry.
+`noBackupFilesDir`. After a process restart, the user's Connect action asks Go
+to validate the restored cookies with the server and refetch username and
+resources before recreating the in-memory result. App startup itself does not
+read or validate the snapshot. An explicit `sessionInvalid` clears the
+snapshot; transport and TLS failures retain it for retry.
 
 The bridge exposes `PrepareRealVpn()`, which prepares an
 `atrust.Client` and returns a versioned event containing only the assigned IPv4

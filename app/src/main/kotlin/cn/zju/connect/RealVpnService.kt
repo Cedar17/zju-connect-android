@@ -11,9 +11,6 @@ import android.net.VpnService
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import cn.zju.connect.gocore.core.SocketProtector
 import java.net.Inet4Address
 import java.util.concurrent.ExecutorService
@@ -21,6 +18,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 private const val REAL_VPN_CHANNEL = "zju_connect_real_vpn"
 private const val REAL_VPN_NOTIFICATION_ID = 1002
@@ -46,6 +47,7 @@ class RealVpnService : VpnService() {
     }
 
     private val goListener: (GoVpnEvent) -> Unit = { event ->
+        RedactedDiagnostics.recordVpnEvent(applicationContext, event)
         Log.i(
             REAL_VPN_LOG_TAG,
             "bridge state=${event.state} code=${event.code.ifBlank { "none" }} " +
@@ -300,11 +302,13 @@ class RealVpnService : VpnService() {
 
     private fun setStatus(state: String, message: String) {
         Log.i(REAL_VPN_LOG_TAG, "service state=$state")
+        RedactedDiagnostics.recordVpnServiceState(applicationContext, state)
         RealVpnStateStore.setStatus(state, message)
     }
 
     private fun publishFailure(origin: String, failure: RealVpnFailure) {
         Log.e(REAL_VPN_LOG_TAG, "terminal failure origin=$origin code=${failure.code}")
+        RedactedDiagnostics.recordVpnServiceState(applicationContext, "error", failure.code)
         RealVpnStateStore.setError(failure.code, failure.message)
     }
 
@@ -413,30 +417,28 @@ data class RealVpnUiState(
 )
 
 object RealVpnStateStore {
-    var state by mutableStateOf(RealVpnUiState())
-        private set
+    private val mutableState = MutableStateFlow(RealVpnUiState())
+    val state: StateFlow<RealVpnUiState> = mutableState.asStateFlow()
 
-    @Synchronized
     fun update(event: GoVpnEvent) {
-        state = state.copy(
-            state = event.state,
-            code = event.code,
-            message = event.message,
-        )
+        mutableState.update {
+            it.copy(
+                state = event.state,
+                code = event.code,
+                message = event.message,
+            )
+        }
     }
 
-    @Synchronized
     fun setStatus(nextState: String, message: String) {
-        state = state.copy(state = nextState, code = "", message = message)
+        mutableState.update { it.copy(state = nextState, code = "", message = message) }
     }
 
-    @Synchronized
     fun setError(code: String, message: String) {
-        state = state.copy(state = "error", code = code, message = message)
+        mutableState.update { it.copy(state = "error", code = code, message = message) }
     }
 
-    @Synchronized
     fun reset() {
-        state = RealVpnUiState()
+        mutableState.value = RealVpnUiState()
     }
 }

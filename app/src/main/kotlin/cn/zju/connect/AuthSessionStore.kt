@@ -132,8 +132,9 @@ internal class AuthSessionStore(context: Context) {
         }
     }
 
-    fun clear() {
+    fun clear(): Boolean {
         sessionFile.delete()
+        return !sessionFile.baseFile.exists()
     }
 
     private fun getOrCreateKey(): SecretKey {
