@@ -47,6 +47,7 @@ class RealVpnService : VpnService() {
     }
 
     private val goListener: (GoVpnEvent) -> Unit = { event ->
+        RedactedDiagnostics.recordVpnEvent(applicationContext, event)
         Log.i(
             REAL_VPN_LOG_TAG,
             "bridge state=${event.state} code=${event.code.ifBlank { "none" }} " +
@@ -301,11 +302,13 @@ class RealVpnService : VpnService() {
 
     private fun setStatus(state: String, message: String) {
         Log.i(REAL_VPN_LOG_TAG, "service state=$state")
+        RedactedDiagnostics.recordVpnServiceState(applicationContext, state)
         RealVpnStateStore.setStatus(state, message)
     }
 
     private fun publishFailure(origin: String, failure: RealVpnFailure) {
         Log.e(REAL_VPN_LOG_TAG, "terminal failure origin=$origin code=${failure.code}")
+        RedactedDiagnostics.recordVpnServiceState(applicationContext, "error", failure.code)
         RealVpnStateStore.setError(failure.code, failure.message)
     }
 

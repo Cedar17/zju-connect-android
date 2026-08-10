@@ -127,6 +127,16 @@ Required security properties:
 - Write the encrypted envelope atomically and bind its format to fixed authenticated data.
 - Do not bypass server-required SMS, captcha, TLS certificate, or hostname validation.
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
+- The user-facing diagnostics report is an application-owned, bounded redacted
+  event buffer rather than a Logcat viewer. It records only allowlisted state,
+  stable codes, and data-plane counters; it excludes credentials, account
+  identity, endpoints, packet metadata, routes, raw messages, and Logcat.
+- The diagnostics Activity separates the user-facing summary from the copied
+  report: the default screen shows the latest state and a short, de-duplicated
+  monospaced history suitable for a screenshot, while copying retains the complete
+  bounded event history, environment header, and counters. Consecutive equal
+  display states (including counter-only changes) are grouped only in the
+  display projection; persisted records remain unchanged for issue reports.
 - When a snapshot is invalid or expired, fall back clearly to re-authentication instead of silently retrying forever.
 
 ## VpnService and socket protection
@@ -198,7 +208,7 @@ resources, or provide production connection UI.
   retains the live result in Go memory while Android encrypts only its minimal
   recovery snapshot for a later process.
 
-### Phase 5 — Real VPN minimum loop
+### Phase 5 — Real VPN minimum loop: validated
 
 - Reuse the in-memory authentication result without repeating password login.
 - Prepare the aTrust client and expose only the assigned address and resource routes.
@@ -206,7 +216,7 @@ resources, or provide production connection UI.
 - Stop and revoke the service without leaving TUN descriptors, sockets, or L3 readers.
 - Drop split-tunnel packets outside the aTrust resource set instead of stopping
   the whole VPN; report TUN/L3 failures with stable UI error codes.
-- Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data.
+- Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data; both validations are complete.
 
 This phase intentionally does not add automatic reconnect or complex network
 switching.
@@ -215,13 +225,13 @@ Issue #11 validation on 2026-08-10 completed the real data-plane framing loop on
 the preserved-data K40 installation. The aTrust length-framed response parser
 now keeps the negotiated mode and reassembles IPv4 packets split across server
 frames; malformed length streams fail closed instead of desynchronizing the
-TUN. Android diagnostics expose only bounded packet metadata (including TCP
-flags/sequence/ack/window and checksum status) at the four data-plane stages,
-never payload or authentication material. CLI requests to `cc98.org` (including
+TUN. Android diagnostics expose only allowlisted connection/VPN/service states,
+stable error codes, and bounded data-plane counters; they never include packet
+metadata, payload, or authentication material. CLI requests to `cc98.org` (including
 redirects), `office.ckc.zju.edu.cn`, and the internal console endpoint returned
-real HTTP responses, and Edge rendered the CC98 homepage. The required OnePlus
-Ace 3V cellular acceptance remains pending; this evidence does not claim a
-merged or deployed release.
+real HTTP responses, and Edge rendered the CC98 homepage. OnePlus Ace 3V
+cellular acceptance was manually completed on 2026-08-10; this evidence does
+not claim a merged or deployed release.
 
 ### Phase 6 — Session recovery: minimum checkpoint implemented
 
@@ -258,9 +268,16 @@ merged or deployed release.
 - K40 connection smoke checks use CLI HTTP requests to
   `https://www.cc98.org/` and `http://10.10.98.98/`; opening a browser is
   not required for this checkpoint.
-- The first checkpoint is accepted on the K40. A separate redacted diagnostics
-  Activity, visual polish, and OnePlus Ace 3V cellular acceptance remain follow-up
-  work within Issue #14.
+- The first checkpoint is accepted on the K40. Issue #14 follow-up work is
+  implemented on the same state machine and Material 3 components: a
+  disconnected-only account switch, vertically centered form-free home states,
+  IME-safe scrolling authentication forms, and a non-exported redacted
+  diagnostics Activity. The Activity persists only the most recent 100
+  allowlisted records in `noBackupFilesDir`, exposes copy/clear controls, and
+  is safe to paste into a public issue. OnePlus Ace 3V cellular acceptance was
+  manually completed on 2026-08-10. Draft PR #15 remains open for final manual
+  review and merge; notifications, automatic reconnect, network-switch
+  recovery, and Release work remain out of scope.
 
 ## Release blockers
 

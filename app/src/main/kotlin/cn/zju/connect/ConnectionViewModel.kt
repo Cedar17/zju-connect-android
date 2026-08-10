@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -134,6 +136,7 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "unsupportedAuthMethod" -> "学校当前要求的登录方式暂不受支持。"
     "invalidInput", "authenticationFailed" -> "登录未完成，请检查账号、密码或验证码后重试。"
     "sessionStoreUnavailable" -> "无法读取本机保存的登录状态，请稍后重试。"
+    "accountSwitchClearFailed" -> "无法清除本机登录状态，请稍后重试。"
     "sessionRestoreUnavailable" -> "暂时无法验证已保存的登录状态，请检查网络后重试。"
     "authInfoUnavailable", "initializationFailed" -> "暂时无法连接学校 VPN 服务，请检查网络后重试。"
     "vpnRevoked" -> "系统已撤销 VPN 权限，请重新连接。"
@@ -175,6 +178,8 @@ internal class AccountStore(context: Context) {
         return preferences.edit().putString(KEY_USERNAME, username).commit()
     }
 
+    fun clear(): Boolean = preferences.edit().remove(KEY_USERNAME).commit()
+
     private companion object {
         const val PREFERENCES_NAME = "connection_preferences"
         const val KEY_USERNAME = "last_authenticated_username"
@@ -182,6 +187,7 @@ internal class AccountStore(context: Context) {
 }
 
 class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
+    private val appContext = application.applicationContext
     private val bridge = GoCoreBridge()
     private val sessionStore = AuthSessionStore(application)
     private val accountStore = AccountStore(application)
@@ -208,11 +214,26 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             RealVpnStateStore.state.collect(::consumeVpnState)
         }
+        viewModelScope.launch {
+            state
+                .map { it.phase to it.internalCode }
+                .distinctUntilChanged()
+                .collect { (phase, code) ->
+                    RedactedDiagnostics.recordConnectionState(appContext, phase, code)
+                }
+        }
     }
 
     fun onPrimaryAction() {
         when (_state.value.phase) {
-            ConnectionPhase.DISCONNECTED, ConnectionPhase.ERROR -> beginConnection()
+            ConnectionPhase.DISCONNECTED -> beginConnection()
+            ConnectionPhase.ERROR -> {
+                if (_state.value.internalCode == "accountSwitchClearFailed") {
+                    retryAccountSwitchClear()
+                } else {
+                    beginConnection()
+                }
+            }
             ConnectionPhase.AWAITING_CREDENTIALS -> submitCredentials()
             ConnectionPhase.AWAITING_PHONE -> submitPhone()
             ConnectionPhase.AWAITING_SMS -> submitSmsCode()
@@ -244,6 +265,48 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun clearCaptchaPoints() = _state.update { it.copy(captchaPoints = emptyList()) }
+
+    fun switchAccount() {
+        if (!canSwitchAccount(_state.value)) return
+
+        beginAccountSwitch()
+    }
+
+    private fun retryAccountSwitchClear() {
+        if (!shouldRetryAccountSwitchClear(_state.value)) {
+            return
+        }
+        beginAccountSwitch()
+    }
+
+    private fun beginAccountSwitch() {
+        val attemptId = attempts.invalidate()
+        pendingPermissionAttemptId = null
+        restoringStoredSession = false
+        hasAuthenticatedResult = false
+        bridge.cancelAuthentication()
+        bridge.clearAuthenticatedResult()
+        _state.update(::accountSwitchPendingState)
+
+        viewModelScope.launch {
+            val cleared = try {
+                withContext(Dispatchers.IO) {
+                    val sessionCleared = sessionStore.clear()
+                    val accountCleared = accountStore.clear()
+                    sessionCleared && accountCleared
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                false
+            }
+            if (!attempts.accepts(attemptId)) return@launch
+            if (!cleared) {
+                showError("accountSwitchClearFailed")
+                return@launch
+            }
+            startFreshAuthentication(attemptId)
+        }
+    }
 
     fun cancelConnection() {
         val currentPhase = _state.value.phase
@@ -758,6 +821,24 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
     captchaHeight = 0,
     captchaPoints = emptyList(),
 )
+
+internal fun canSwitchAccount(state: ConnectionUiState): Boolean =
+    state.phase == ConnectionPhase.DISCONNECTED && state.rememberedUsername.isNotBlank()
+
+internal fun accountSwitchPendingState(state: ConnectionUiState): ConnectionUiState =
+    state.withoutSensitiveInputs().copy(
+        phase = ConnectionPhase.FETCHING_AUTH_METHODS,
+        statusMessage = "正在切换账号…",
+        internalCode = "",
+        notice = "",
+        rememberedUsername = "",
+        username = "",
+    )
+
+internal fun shouldRetryAccountSwitchClear(state: ConnectionUiState): Boolean =
+    state.phase == ConnectionPhase.ERROR && state.internalCode == "accountSwitchClearFailed"
+
+internal fun usesScrollableHomeLayout(phase: ConnectionPhase): Boolean = phase in AUTH_INPUT_PHASES
 
 private val AUTH_INPUT_PHASES = setOf(
     ConnectionPhase.AWAITING_CREDENTIALS,

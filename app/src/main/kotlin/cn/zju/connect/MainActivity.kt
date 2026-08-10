@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -137,7 +138,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun ZjuConnectTheme(content: @Composable () -> Unit) {
+internal fun ZjuConnectTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val colors = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         dynamicDarkColorScheme(context)
@@ -156,95 +157,149 @@ private fun ZjuConnectApp(
     state: ConnectionUiState,
     viewModel: ConnectionViewModel,
 ) {
+    val context = LocalContext.current
     Surface(modifier = Modifier.fillMaxSize()) {
         Scaffold { contentPadding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(contentPadding)
-                    .padding(horizontal = 24.dp, vertical = 28.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                    .padding(contentPadding),
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "ZJU Connect",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.SemiBold,
+                val contentModifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp, vertical = 28.dp)
+                if (usesScrollableHomeLayout(state.phase)) {
+                    ConnectionHomeContent(
+                        state = state,
+                        viewModel = viewModel,
+                        modifier = contentModifier
+                            .imePadding()
+                            .verticalScroll(rememberScrollState())
+                            .padding(top = 36.dp),
+                        centered = false,
                     )
-                    Text(
-                        text = "浙江大学 VPN",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                ConnectionIndicator(state.phase)
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = connectionTitle(state.phase),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            text = connectionSupportingText(state),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (state.phase == ConnectionPhase.ERROR) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-
-                if (state.notice.isNotBlank()) {
-                    Text(
-                        text = state.notice,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
+                } else {
+                    ConnectionHomeContent(
+                        state = state,
+                        viewModel = viewModel,
+                        modifier = contentModifier,
+                        centered = true,
                     )
                 }
 
-                AuthenticationStep(state, viewModel)
-
-                Button(
-                    onClick = viewModel::onPrimaryAction,
-                    enabled = isPrimaryActionEnabled(state),
+                TextButton(
+                    onClick = {
+                        context.startActivity(Intent(context, DiagnosticsActivity::class.java))
+                    },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp),
-                    shape = RoundedCornerShape(18.dp),
+                        .align(Alignment.TopEnd)
+                        .padding(end = 8.dp, top = 4.dp),
                 ) {
-                    if (isConnectionProgress(state.phase)) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Text(primaryActionLabel(state.phase))
-                    }
+                    Text("诊断")
                 }
+            }
+        }
+    }
+}
 
-                if (canCancelConnection(state.phase)) {
-                    TextButton(onClick = viewModel::cancelConnection) {
-                        Text("取消连接")
-                    }
-                }
+@Composable
+private fun ConnectionHomeContent(
+    state: ConnectionUiState,
+    viewModel: ConnectionViewModel,
+    modifier: Modifier,
+    centered: Boolean,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = if (centered) {
+            Arrangement.spacedBy(20.dp, Alignment.CenterVertically)
+        } else {
+            Arrangement.spacedBy(20.dp)
+        },
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "ZJU Connect",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "浙江大学 VPN",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        ConnectionIndicator(state.phase)
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = connectionTitle(state.phase),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = connectionSupportingText(state),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (state.phase == ConnectionPhase.ERROR) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+
+        if (state.notice.isNotBlank()) {
+            Text(
+                text = state.notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+
+        AuthenticationStep(state, viewModel)
+
+        Button(
+            onClick = viewModel::onPrimaryAction,
+            enabled = isPrimaryActionEnabled(state),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            if (isConnectionProgress(state.phase)) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Text(primaryActionLabel(state.phase))
+            }
+        }
+
+        if (canSwitchAccount(state)) {
+            TextButton(onClick = viewModel::switchAccount) {
+                Text("切换账号")
+            }
+        }
+
+        if (canCancelConnection(state.phase)) {
+            TextButton(onClick = viewModel::cancelConnection) {
+                Text("取消连接")
             }
         }
     }

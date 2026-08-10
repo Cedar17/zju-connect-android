@@ -21,6 +21,99 @@ class ConnectionPolicyTest {
     }
 
     @Test
+    fun accountSwitchIsAvailableOnlyForDisconnectedRememberedIdentity() {
+        assertTrue(
+            canSwitchAccount(
+                ConnectionUiState(
+                    phase = ConnectionPhase.DISCONNECTED,
+                    rememberedUsername = "student",
+                ),
+            ),
+        )
+        assertFalse(canSwitchAccount(ConnectionUiState(rememberedUsername = "")))
+        assertFalse(
+            canSwitchAccount(
+                ConnectionUiState(
+                    phase = ConnectionPhase.CONNECTED,
+                    rememberedUsername = "student",
+                ),
+            ),
+        )
+        assertFalse(
+            canSwitchAccount(
+                ConnectionUiState(
+                    phase = ConnectionPhase.ERROR,
+                    rememberedUsername = "student",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun accountSwitchPendingStateRemovesPriorIdentityAndSensitiveInputs() {
+        val pending = accountSwitchPendingState(
+            ConnectionUiState(
+                phase = ConnectionPhase.DISCONNECTED,
+                rememberedUsername = "student",
+                username = "student",
+                password = "secret",
+                phone = "13800000000",
+                smsCode = "123456",
+                phoneNumbers = listOf("138****0000"),
+                captchaImage = byteArrayOf(1, 2, 3),
+                captchaWidth = 20,
+                captchaHeight = 10,
+                captchaPoints = listOf(CaptchaPoint(1, 2)),
+            ),
+        )
+
+        assertEquals(ConnectionPhase.FETCHING_AUTH_METHODS, pending.phase)
+        assertEquals("", pending.rememberedUsername)
+        assertEquals("", pending.username)
+        assertTrue(pending.password.isEmpty())
+        assertTrue(pending.phone.isEmpty())
+        assertTrue(pending.smsCode.isEmpty())
+        assertTrue(pending.phoneNumbers.isEmpty())
+        assertNull(pending.captchaImage)
+        assertTrue(pending.captchaPoints.isEmpty())
+    }
+
+    @Test
+    fun accountSwitchClearFailureRetriesClearingInsteadOfRestoringOldSession() {
+        assertTrue(
+            shouldRetryAccountSwitchClear(
+                ConnectionUiState(
+                    phase = ConnectionPhase.ERROR,
+                    internalCode = "accountSwitchClearFailed",
+                ),
+            ),
+        )
+        assertFalse(shouldRetryAccountSwitchClear(ConnectionUiState(phase = ConnectionPhase.ERROR)))
+        assertFalse(
+            shouldRetryAccountSwitchClear(
+                ConnectionUiState(
+                    phase = ConnectionPhase.DISCONNECTED,
+                    internalCode = "accountSwitchClearFailed",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun onlyAuthenticationInputPhasesUseScrollableHomeLayout() {
+        val inputPhases = setOf(
+            ConnectionPhase.AWAITING_CREDENTIALS,
+            ConnectionPhase.AWAITING_PHONE,
+            ConnectionPhase.AWAITING_SMS,
+            ConnectionPhase.AWAITING_CAPTCHA,
+        )
+
+        ConnectionPhase.entries.forEach { phase ->
+            assertEquals(phase in inputPhases, usesScrollableHomeLayout(phase))
+        }
+    }
+
+    @Test
     fun stableStatusUsesRememberedAccountAsItsOnlySupportingLine() {
         val disconnected = ConnectionUiState(
             rememberedUsername = "student",
