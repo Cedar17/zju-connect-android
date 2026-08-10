@@ -11,7 +11,7 @@ The authoritative machine-readable record is
 | Input | Pinned value |
 | --- | --- |
 | zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Android authentication fork | **Cedar17/zju-connect** `android/auth-control` at **7c49d88fae5d7a203198b278cb2ed5a1c7c3b39c** |
+| Android real-VPN fork | **Cedar17/zju-connect** `dev/android` at **758838e90cdf65c2543845f6d12cae27f0f9ec80** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -49,8 +49,9 @@ pinned modules. Gradle's verifyGoCoreAar task fails early with the required
 command when the AAR has not been built. It does not download a toolchain as
 a side effect of a normal Android build.
 
-The Gradle unit-test task covers the Kotlin CAPTCHA coordinate mapper. It does
-not replace the Go bridge and fork state-machine tests above.
+The Gradle unit-test task covers the Kotlin CAPTCHA coordinate mapper and the
+encrypted-session envelope codec. It does not replace the Go bridge and fork
+state-machine tests above.
 
 ## Kotlin–Go contract
 
@@ -82,16 +83,37 @@ validation and replaces its synchronous CLI interactions. The Android façade
 provides password, server-triggered SMS, and CAPTCHA state transitions as
 structured events; `StartAuthentication`, `SubmitAuthentication`,
 `GetPendingCaptchaImage`, `CancelAuthentication`, and
-`ClearAuthenticatedResult`; and a single active flow that never puts
+`ClearAuthenticatedResult`; `ExportAuthenticatedSession` and
+`ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
+single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
 responses into callback JSON.
 
-Authentication success leaves its client/resource result in Go memory only for
-the next tunnel phase. Cancelling returns without waiting for an in-flight
-request: it cancels the request context, closes that session's active HTTP
-connections, and clears its sensitive state before any stale event can reach
-the UI. No aTrust TUN, session persistence, QR/CAS/OAuth login, or production
-connection lifecycle is implemented by this bridge.
+Authentication success leaves its client/resource result in Go memory for the
+real VPN phase. Its exported recovery snapshot contains only a schema version,
+the exact device ID, and the complete endpoint cookie set. Kotlin encrypts
+those bytes with Android Keystore AES-GCM and atomically stores the envelope in
+`noBackupFilesDir`. On startup, Go validates the restored cookies with the
+server and refetches username and resources before recreating the in-memory
+result. An explicit `sessionInvalid` clears the snapshot; transport and TLS
+failures retain it for retry.
+
+The bridge exposes `PrepareRealVpn()`, which prepares an
+`atrust.Client` and returns a versioned event containing only the assigned IPv4
+address and IPv4 resource prefixes. `StartRealVpn(tunFD, protector, listener)`
+attaches the Android TUN and installs the `VpnService.protect()` boundary for
+future underlay connections. `StopRealVpn()` is idempotent and closes the
+client, TUN, underlay sockets, and L3 readers. Cancelling returns without
+waiting for an in-flight request: it cancels the request context, closes that
+session's active HTTP connections, and clears its sensitive state before any
+stale event can reach the UI. QR/CAS/OAuth login and complex reconnect behavior
+remain out of scope for this phase.
+
+The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
+aTrust resource set are dropped as split-tunnel traffic instead of terminating
+the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
+codes, and cleanup preserves the original failure instead of replacing it with
+an uninformative `stopped` state.
 
 ## Issue #6 experimental data-plane boundary
 

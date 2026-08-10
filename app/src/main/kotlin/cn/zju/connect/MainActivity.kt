@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +65,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private val realVpnPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                startRealVpnService()
+            } else {
+                RealVpnStateStore.setError("vpnPermissionDenied", "VPN permission was not granted")
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,6 +85,9 @@ class MainActivity : ComponentActivity() {
                 onStartTestVpn = ::requestStartTestVpn,
                 onStopTestVpn = ::stopTestVpn,
                 onResetTestVpn = TestVpnStateStore::reset,
+                onStartRealVpn = ::requestStartRealVpn,
+                onStopRealVpn = ::stopRealVpn,
+                onResetRealVpn = RealVpnStateStore::reset,
             )
         }
     }
@@ -102,6 +115,31 @@ class MainActivity : ComponentActivity() {
                 .setAction(TestVpnService.ACTION_STOP),
         )
     }
+
+    private fun requestStartRealVpn() {
+        RealVpnStateStore.setStatus("preparingPermission", "Checking Android VPN permission")
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent != null) {
+            realVpnPermissionLauncher.launch(prepareIntent)
+        } else {
+            startRealVpnService()
+        }
+    }
+
+    private fun startRealVpnService() {
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, RealVpnService::class.java)
+                .setAction(RealVpnService.ACTION_START),
+        )
+    }
+
+    private fun stopRealVpn() {
+        startService(
+            Intent(this, RealVpnService::class.java)
+                .setAction(RealVpnService.ACTION_STOP),
+        )
+    }
 }
 
 @Composable
@@ -111,6 +149,9 @@ private fun ZjuConnectApp(
     onStartTestVpn: () -> Unit,
     onStopTestVpn: () -> Unit,
     onResetTestVpn: () -> Unit,
+    onStartRealVpn: () -> Unit,
+    onStopRealVpn: () -> Unit,
+    onResetRealVpn: () -> Unit,
 ) {
     val goCoreBridge = remember { GoCoreBridge() }
     var bridgeStatus by remember {
@@ -123,6 +164,7 @@ private fun ZjuConnectApp(
         )
     }
     val testState = TestVpnStateStore.state
+    val realVpnState = RealVpnStateStore.state
     val testIsActive = testState.state in setOf(
         "starting",
         "preparingVpnPermission",
@@ -159,6 +201,15 @@ private fun ZjuConnectApp(
                     AuthenticationPanel(authState, authViewModel)
 
                     Spacer(modifier = Modifier.height(12.dp))
+                    RealVpnPanel(
+                        authState = authState,
+                        vpnState = realVpnState,
+                        onStart = onStartRealVpn,
+                        onStop = onStopRealVpn,
+                        onReset = onResetRealVpn,
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "实验性 TUN 数据面",
                         style = MaterialTheme.typography.titleMedium,
@@ -173,7 +224,9 @@ private fun ZjuConnectApp(
                     )
                     Button(
                         onClick = onStartTestVpn,
-                        enabled = !testIsActive && !isAuthenticationActive(authState.phase),
+                        enabled = !testIsActive &&
+                            !isAuthenticationActive(authState.phase) &&
+                            !isRealVpnActive(realVpnState.state),
                     ) {
                         Text("启动测试 VPN")
                     }
@@ -196,6 +249,43 @@ private fun ZjuConnectApp(
 }
 
 @Composable
+private fun RealVpnPanel(
+    authState: AuthUiState,
+    vpnState: RealVpnUiState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onReset: () -> Unit,
+) {
+    Text(
+        text = "真实浙江大学 aTrust VPN",
+        style = MaterialTheme.typography.titleMedium,
+    )
+    Text(text = "状态：${vpnState.state}")
+    Text(text = vpnState.message)
+    if (vpnState.code.isNotBlank()) {
+        Text(text = "代码：${vpnState.code}", color = MaterialTheme.colorScheme.error)
+    }
+
+    Button(
+        onClick = onStart,
+        enabled = authState.phase == "authenticated" && !isRealVpnActive(vpnState.state),
+    ) {
+        Text("连接真实 VPN")
+    }
+    OutlinedButton(
+        onClick = onStop,
+        enabled = isRealVpnActive(vpnState.state),
+    ) {
+        Text("断开真实 VPN")
+    }
+    if (vpnState.state == "error" || vpnState.state == "stopped") {
+        OutlinedButton(onClick = onReset) {
+            Text("重置 VPN 状态")
+        }
+    }
+}
+
+@Composable
 private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
     Text(
         text = "浙江大学 aTrust 认证",
@@ -212,7 +302,7 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
             Text("开始登录")
         }
 
-        "fetchingAuthMethods", "authenticating" -> RowProgress()
+        "restoringSession", "fetchingAuthMethods", "authenticating" -> RowProgress()
 
         "awaitingMethod" -> {
             Text("选择登录方式")
@@ -300,7 +390,13 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
                 text = "认证已完成${state.authenticatedUsername.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}",
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text("认证结果仅保留在当前进程内，尚未建立 VPN 隧道。")
+            Text(
+                if (state.code == "sessionSaveFailed") {
+                    "当前认证仅在进程内可用；重启前需要重新保存。"
+                } else {
+                    "认证状态已安全保存；可在下方连接真实 VPN。"
+                },
+            )
             OutlinedButton(onClick = viewModel::cancelAuthentication) {
                 Text("清除本次认证结果")
             }
@@ -308,7 +404,7 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
 
         "error" -> {
             Button(onClick = viewModel::retryAuthentication) {
-                Text("重试登录")
+                Text(if (state.code.startsWith("session")) "重试恢复" else "重试登录")
             }
             CancelButton(viewModel)
         }
@@ -375,3 +471,12 @@ private fun CaptchaChallenge(state: AuthUiState, viewModel: AuthViewModel) {
 }
 
 private fun isAuthenticationActive(phase: String): Boolean = phase !in setOf("idle", "cancelled", "error", "authenticated")
+
+private fun isRealVpnActive(state: String): Boolean = state in setOf(
+    "preparing",
+    "preparingPermission",
+    "attaching",
+    "starting",
+    "active",
+    "stopping",
+)

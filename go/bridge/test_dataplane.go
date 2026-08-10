@@ -107,6 +107,9 @@ type testDataPlaneSession struct {
 }
 
 func (s *testDataPlaneSession) openTransport() error {
+	if err := prepareTunFileDescriptor(s.tunFD); err != nil {
+		return fmt.Errorf("unable to prepare TUN file descriptor: %w", err)
+	}
 	tun := os.NewFile(uintptr(s.tunFD), "zju-connect-test-tun")
 	if tun == nil {
 		return errors.New("unable to wrap TUN file descriptor")

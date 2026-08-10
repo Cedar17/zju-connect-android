@@ -1,12 +1,16 @@
 package cn.zju.connect
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -57,14 +61,38 @@ object CaptchaCoordinateMapper {
     }
 }
 
-class AuthViewModel : ViewModel() {
+class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val bridge = GoCoreBridge()
+    private val sessionStore = AuthSessionStore(application)
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
+    private var restoringStoredSession = false
+    private var storedSessionRetryAvailable = false
+
+    init {
+        restoreStoredSession()
+    }
 
     fun startAuthentication() {
         _state.update { it.copy(phase = "fetchingAuthMethods", code = "", message = "Fetching available authentication methods") }
-        consume(bridge.startAuthentication(::consume))
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { sessionStore.clear() }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                _state.update {
+                    it.copy(
+                        phase = "error",
+                        code = "sessionStoreUnavailable",
+                        message = "Saved authentication data could not be cleared",
+                    )
+                }
+                return@launch
+            }
+            restoringStoredSession = false
+            storedSessionRetryAvailable = false
+            consume(bridge.startAuthentication(::consume))
+        }
     }
 
     fun selectMethod(method: GoAuthMethod) {
@@ -157,13 +185,22 @@ class AuthViewModel : ViewModel() {
     }
 
     fun retryAuthentication() {
-        _state.update { it.copy(phase = "fetchingAuthMethods", code = "", message = "Retrying authentication") }
-        submit(JSONObject().put("action", "retry"))
+        if (storedSessionRetryAvailable) {
+            restoreStoredSession()
+        } else {
+            _state.update { it.copy(phase = "fetchingAuthMethods", code = "", message = "Retrying authentication") }
+            submit(JSONObject().put("action", "retry"))
+        }
     }
 
     fun cancelAuthentication() {
         bridge.cancelAuthentication()
+        restoringStoredSession = false
+        storedSessionRetryAvailable = false
         _state.value = AuthUiState(phase = "cancelled", code = "cancelled", message = "Authentication cancelled")
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { sessionStore.clear() }
+        }
     }
 
     private fun submit(response: JSONObject) {
@@ -202,32 +239,11 @@ class AuthViewModel : ViewModel() {
                     )
                 }
 
-                "authenticated" -> _state.update {
-                    it.copy(
-                        phase = event.state,
-                        code = "",
-                        message = event.message,
-                        authenticatedUsername = event.username,
-                        password = "",
-                        smsCode = "",
-                        phone = "",
-                        captchaImage = null,
-                        captchaPoints = emptyList(),
-                    )
-                }
+                "authenticated" -> persistAuthenticatedSession(event)
 
-                "error" -> _state.update {
-                    it.copy(
-                        phase = "error",
-                        code = event.code,
-                        message = event.message,
-                        password = "",
-                        smsCode = "",
-                        phone = "",
-                        captchaImage = null,
-                        captchaPoints = emptyList(),
-                    )
-                }
+                "sessionInvalid" -> discardInvalidStoredSession(event)
+
+                "error" -> handleAuthenticationError(event)
 
                 "cancelled" -> _state.value = AuthUiState(
                     phase = "cancelled",
@@ -236,6 +252,9 @@ class AuthViewModel : ViewModel() {
                 )
 
                 else -> _state.update {
+                    if (it.phase == "authenticated" && event.type in setOf("authenticationStarted", "sessionRestoreStarted")) {
+                        return@update it
+                    }
                     it.copy(
                         phase = event.state.takeIf { state -> state.isNotBlank() && state != "unknown" } ?: it.phase,
                         code = event.code,
@@ -244,6 +263,129 @@ class AuthViewModel : ViewModel() {
                     )
                 }
             }
+        }
+    }
+
+    private fun restoreStoredSession() {
+        restoringStoredSession = true
+        storedSessionRetryAvailable = false
+        _state.update {
+            it.copy(
+                phase = "restoringSession",
+                code = "",
+                message = "Checking saved authentication session",
+                password = "",
+                smsCode = "",
+                phone = "",
+                captchaImage = null,
+                captchaPoints = emptyList(),
+            )
+        }
+        viewModelScope.launch {
+            val snapshot = try {
+                withContext(Dispatchers.IO) { sessionStore.read() }
+            } catch (error: InvalidStoredAuthenticationSession) {
+                restoringStoredSession = false
+                _state.value = AuthUiState(
+                    phase = "idle",
+                    code = "storedSessionInvalid",
+                    message = "Saved authentication data was unreadable; sign in again",
+                )
+                return@launch
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                restoringStoredSession = false
+                storedSessionRetryAvailable = true
+                _state.update {
+                    it.copy(
+                        phase = "error",
+                        code = "sessionStoreUnavailable",
+                        message = "Saved authentication data could not be read",
+                    )
+                }
+                return@launch
+            }
+            if (snapshot == null) {
+                restoringStoredSession = false
+                _state.value = AuthUiState()
+                return@launch
+            }
+            try {
+                consume(bridge.resumeAuthentication(snapshot, ::consume))
+            } finally {
+                snapshot.fill(0)
+            }
+        }
+    }
+
+    private suspend fun persistAuthenticatedSession(event: GoAuthEvent) {
+        val snapshot = bridge.exportAuthenticatedSession()
+        val saveError = if (snapshot.isEmpty()) {
+            IllegalStateException("Go did not provide an authentication snapshot")
+        } else {
+            try {
+                withContext(Dispatchers.IO) { sessionStore.write(snapshot) }
+                null
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                error
+            } finally {
+                snapshot.fill(0)
+            }
+        }
+        restoringStoredSession = false
+        storedSessionRetryAvailable = false
+        _state.update {
+            it.copy(
+                phase = "authenticated",
+                code = if (saveError == null) "" else "sessionSaveFailed",
+                message = if (saveError == null) event.message else "Authenticated, but the session could not be saved",
+                authenticatedUsername = event.username,
+                password = "",
+                smsCode = "",
+                phone = "",
+                captchaImage = null,
+                captchaPoints = emptyList(),
+            )
+        }
+    }
+
+    private suspend fun discardInvalidStoredSession(event: GoAuthEvent) {
+        withContext(Dispatchers.IO) { sessionStore.clear() }
+        restoringStoredSession = false
+        storedSessionRetryAvailable = false
+        _state.value = AuthUiState(
+            phase = "idle",
+            code = event.code,
+            message = event.message,
+        )
+    }
+
+    private suspend fun handleAuthenticationError(event: GoAuthEvent) {
+        if (restoringStoredSession && event.code == "invalidSession") {
+            withContext(Dispatchers.IO) { sessionStore.clear() }
+            restoringStoredSession = false
+            storedSessionRetryAvailable = false
+            _state.value = AuthUiState(
+                phase = "idle",
+                code = "storedSessionInvalid",
+                message = "Saved authentication data was invalid; sign in again",
+            )
+            return
+        }
+        storedSessionRetryAvailable = restoringStoredSession
+        restoringStoredSession = false
+        _state.update {
+            it.copy(
+                phase = "error",
+                code = event.code,
+                message = event.message,
+                password = "",
+                smsCode = "",
+                phone = "",
+                captchaImage = null,
+                captchaPoints = emptyList(),
+            )
         }
     }
 

@@ -17,8 +17,10 @@ The Android baseline and a deliberately minimal Go binding are now in place:
 Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`,
 a pinned gomobile AAR, and a debug APK that has been built, installed, and
 launched on a physical device. The experimental TUN data plane and the aTrust
-authentication control plane are implemented separately; formal tunnel
-connection and session recovery remain future work.
+authentication control plane are implemented separately on `master`. The Issue
+#11 development branch adds the real aTrust client setup, resource routes,
+Android VPN service, deterministic shutdown, and the minimum encrypted
+authentication-recovery checkpoint.
 
 ## Scope
 
@@ -34,7 +36,7 @@ Compose UI
 ConnectionViewModel / StateFlow
     ↓
 VpnRepository
-    ├── VpnServiceController
+    ├── VpnServiceController / RealVpnService
     ├── SecureSessionStore
     ├── SettingsStore
     └── GoCoreBridge
@@ -54,6 +56,7 @@ Use a closed state model with explicit events rather than inferring phases from 
 
 ```text
 Idle
+RestoringSession
 PreparingVpnPermission
 Authenticating
 AwaitingPassword
@@ -83,30 +86,41 @@ The implemented authentication interface is:
 ```text
 StartAuthentication(requestJson, listener)
 SubmitAuthentication(actionJson)
+ResumeAuthentication(snapshotBytes, listener)
+ExportAuthenticatedSession()
 GetPendingCaptchaImage()
 CancelAuthentication()
 ClearAuthenticatedResult()
 ```
 
-The versioned events are `authenticationStarted`, `authMethodsReady`,
+The versioned events are `authenticationStarted`, `sessionRestoreStarted`,
+`sessionInvalid`, `authMethodsReady`,
 `credentialsRequired`, `phoneRequired`, `smsRequired`, `captchaRequired`,
 `authenticated`, `cancelled`, `retryStarted`, and safe-code `error` events.
 CAPTCHA image bytes pass only through `GetPendingCaptchaImage`, not callback
 JSON, shared files, or temporary files. Callback events contain no passwords,
 cookies, SID, device identifiers, sign keys, CAPTCHA bytes, or raw responses.
 
-Attaching a production TUN, stopping a production connection, and exporting or
-importing a session remain future work. Any such extension must keep the
-Android-specific surface small and be assessed for potential upstreaming.
+The real VPN bridge adds `PrepareRealVpn`, `StartRealVpn`, and `StopRealVpn`.
+Preparation consumes the authenticated result already held in Go memory and
+returns only the assigned IPv4 address plus IPv4 resource prefixes. Android
+creates the TUN from those routes, then attaches it with a `SocketProtector` so
+future aTrust underlay sockets are protected from the VPN interface.
 
 ## Session snapshot and security
 
-Persist only the minimum state required for recovery, using a versioned schema. Candidate fields include `schemaVersion`, server identity, username, authentication data, session identifiers, resource data, creation time, and core version. Do not persist a password by default; only persist other sensitive material if recovery experiments prove it is necessary.
+The implemented snapshot persists only `schemaVersion`, the exact `deviceId`,
+and the complete authentication cookie set returned for the fixed ZJU endpoint.
+SID remains inside that cookie set. Username, resources, connection ID, sign
+key, password, verification input, creation time, and server identity are not
+persisted; the server identity is fixed by the bridge, resources and username
+are fetched after validation, and connection-scoped identifiers are regenerated.
 
 Required security properties:
 
 - Encrypt persisted state with an Android Keystore-backed non-exportable key, for example AES-GCM.
 - Store ciphertext in a location excluded from system backup, such as `noBackupFilesDir` or its equivalent.
+- Write the encrypted envelope atomically and bind its format to fixed authenticated data.
 - Do not bypass server-required SMS, captcha, TLS certificate, or hostname validation.
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
 - When a snapshot is invalid or expired, fall back clearly to re-authentication instead of silently retrying forever.
@@ -115,7 +129,10 @@ Required security properties:
 
 Once Android creates a TUN, the Go core's control/data connection to the VPN service must not be routed back through that TUN. The Android boundary must therefore allow the underlying socket to be passed through `VpnService.protect(fd)` before it connects, or create and protect the socket before handing it to Go.
 
-This design is not yet implemented. Its validation must cover Wi-Fi and mobile networks, network switching, failed connection cleanup, and release of the TUN file descriptor, sockets, goroutines, and foreground service.
+The current Issue #11 implementation installs this boundary after Android
+establishes the TUN. Its validation must cover Wi-Fi and mobile networks,
+network switching, failed connection cleanup, and release of the TUN file
+descriptor, sockets, goroutines, and foreground service.
 
 ## Reproducibility and upstream integration
 
@@ -174,15 +191,41 @@ resources, or provide production connection UI.
   temporary files.
 - Authentication enforces normal TLS certificate and hostname validation,
   supports cancellation/retry, maps UI-visible failures to stable codes, and
-  retains the successful result only in Go process memory for the future tunnel
-  phase.
+  retains the live result in Go memory while Android encrypts only its minimal
+  recovery snapshot for a later process.
 
-### Phase 5 — Session recovery
+### Phase 5 — Real VPN minimum loop
 
-- Export a minimal session snapshot after successful authentication.
-- Encrypt it with Keystore-backed storage.
-- Recover after process death while the session is valid.
-- Reliably fall back to authentication after expiry or invalidation.
+- Reuse the in-memory authentication result without repeating password login.
+- Prepare the aTrust client and expose only the assigned address and resource routes.
+- Establish Android `VpnService`, protect the real underlay sockets, and attach the TUN.
+- Stop and revoke the service without leaving TUN descriptors, sockets, or L3 readers.
+- Drop split-tunnel packets outside the aTrust resource set instead of stopping
+  the whole VPN; report TUN/L3 failures with stable UI error codes.
+- Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data.
+
+This phase intentionally does not add automatic reconnect or complex network
+switching.
+
+Issue #11 validation on 2026-08-10 completed the real data-plane framing loop on
+the preserved-data K40 installation. The aTrust length-framed response parser
+now keeps the negotiated mode and reassembles IPv4 packets split across server
+frames; malformed length streams fail closed instead of desynchronizing the
+TUN. Android diagnostics expose only bounded packet metadata (including TCP
+flags/sequence/ack/window and checksum status) at the four data-plane stages,
+never payload or authentication material. CLI requests to `cc98.org` (including
+redirects), `office.ckc.zju.edu.cn`, and the internal console endpoint returned
+real HTTP responses, and Edge rendered the CC98 homepage. The required OnePlus
+Ace 3V cellular acceptance remains pending; this evidence does not claim a
+merged or deployed release.
+
+### Phase 6 — Session recovery: minimum checkpoint implemented
+
+- Export only cookies plus the exact device ID after successful authentication.
+- Encrypt the snapshot with Android Keystore AES-GCM in `noBackupFilesDir`.
+- Validate with the server and refresh username/resources after process death.
+- Delete explicitly invalid or locally unreadable snapshots; retain snapshots
+  across transient network/TLS failures so restoration can be retried.
 
 ## Release blockers
 
