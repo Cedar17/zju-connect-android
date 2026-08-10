@@ -64,10 +64,10 @@ func TestReflectUDPv4PacketSwapsEndpointsAndChecksums(t *testing.T) {
 		t.Fatalf("reflectUDPv4Packet returned error: %v", err)
 	}
 
-	if got, want := net.IP(reflected[12:16]).String(), "192.0.2.1"; got != want {
+	if got, want := net.IP(reflected[12:16]).String(), "192.168.255.1"; got != want {
 		t.Errorf("source IP = %s, want %s", got, want)
 	}
-	if got, want := net.IP(reflected[16:20]).String(), "10.255.0.2"; got != want {
+	if got, want := net.IP(reflected[16:20]).String(), "192.168.255.2"; got != want {
 		t.Errorf("destination IP = %s, want %s", got, want)
 	}
 	if got, want := binary.BigEndian.Uint16(reflected[20:22]), uint16(34890); got != want {
@@ -146,8 +146,8 @@ func buildMarkedPacket() []byte {
 	packet[0] = 0x45
 	packet[8] = 64
 	packet[9] = 17
-	copy(packet[12:16], []byte{10, 255, 0, 2})
-	copy(packet[16:20], []byte{192, 0, 2, 1})
+	copy(packet[12:16], []byte{192, 168, 255, 2})
+	copy(packet[16:20], []byte{192, 168, 255, 1})
 	binary.BigEndian.PutUint16(packet[20:22], 49152)
 	binary.BigEndian.PutUint16(packet[22:24], 34890)
 	binary.BigEndian.PutUint16(packet[24:26], uint16(8+len(payload)))

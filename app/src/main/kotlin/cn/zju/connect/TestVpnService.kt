@@ -22,8 +22,8 @@ import java.util.concurrent.Executors
 
 private const val TEST_VPN_CHANNEL = "zju_connect_test_vpn"
 private const val TEST_VPN_NOTIFICATION_ID = 1001
-private const val TEST_VPN_ADDRESS = "10.255.0.2"
-private const val TEST_VPN_DESTINATION = "192.0.2.1"
+private const val TEST_VPN_ADDRESS = "192.168.255.2"
+private const val TEST_VPN_DESTINATION = "192.168.255.1"
 private const val TEST_VPN_PORT = 34890
 private const val TEST_VPN_MTU = 1400
 private const val TEST_MARKER = "zju-connect-tun-test-v1"

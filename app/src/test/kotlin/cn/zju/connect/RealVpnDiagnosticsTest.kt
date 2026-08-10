@@ -49,8 +49,8 @@ class RealVpnDiagnosticsTest {
                 "direction":"dataplane.l3.write",
                 "ipVersion":4,
                 "protocol":"tcp",
-                "sourceIp":"10.190.160.8",
-                "destinationIp":"198.51.100.20",
+                "sourceIp":"private-ip",
+                "destinationIp":"public-ip",
                 "sourcePort":49152,
                 "destinationPort":443,
                 "length":60,
@@ -70,7 +70,7 @@ class RealVpnDiagnosticsTest {
         assertEquals(3L, event.diagnostics?.tunReadPackets)
         assertEquals(1L, event.diagnostics?.l3WriteSuccesses)
         assertEquals(1L, event.diagnostics?.resourceDrops)
-        assertEquals("198.51.100.20", event.packet?.destinationIp)
+        assertEquals("public-ip", event.packet?.destinationIp)
         assertEquals(443, event.packet?.destinationPort)
         assertEquals(8, event.packet?.dataLength)
         assertEquals(24, event.packet?.tcpFlags)
@@ -96,8 +96,8 @@ class RealVpnDiagnosticsTest {
                 direction = "dataplane.tun.read",
                 ipVersion = 4,
                 protocol = "tcp",
-                sourceIp = "10.190.160.8",
-                destinationIp = "198.51.100.20",
+                sourceIp = "private-ip",
+                destinationIp = "public-ip",
                 sourcePort = 49152,
                 destinationPort = 443,
                 length = 60,
