@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/mythologyli/zju-connect/client/atrust/auth"
 )
 
 func TestVerifyPinnedNodeSPKI(t *testing.T) {
@@ -106,6 +109,90 @@ func TestAuthenticationFailureIsRedacted(t *testing.T) {
 	}
 	if strings.Contains(encoded, secret) {
 		t.Fatalf("authentication event leaked a secret: %s", encoded)
+	}
+}
+
+func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
+	host := "vpn.zju.edu.cn:443"
+	authData, err := json.Marshal(auth.ClientAuthData{
+		DeviceID: "ABCDEF0123456789ABCDEF0123456789",
+		Cookies: []auth.Cookie{
+			{Host: host, Scheme: "https", Name: "sid", Value: "session-cookie"},
+			{Host: host, Scheme: "https", Name: "sid.sig", Value: "session-signature"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal auth data: %v", err)
+	}
+
+	encoded, err := encodeAuthenticationSnapshot(authData)
+	if err != nil {
+		t.Fatalf("encodeAuthenticationSnapshot: %v", err)
+	}
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &snapshot); err != nil {
+		t.Fatalf("Unmarshal snapshot: %v", err)
+	}
+	for _, required := range []string{"schemaVersion", "deviceId", "cookies"} {
+		if _, ok := snapshot[required]; !ok {
+			t.Errorf("snapshot omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{"password", "username", "sid", "resourceData", "connectionId", "signKey", "createdAt"} {
+		if _, ok := snapshot[forbidden]; ok {
+			t.Errorf("snapshot contained forbidden field %q", forbidden)
+		}
+	}
+
+	decoded, err := decodeAuthenticationSnapshot(encoded)
+	if err != nil {
+		t.Fatalf("decodeAuthenticationSnapshot: %v", err)
+	}
+	var roundTrip auth.ClientAuthData
+	if err := json.Unmarshal(decoded, &roundTrip); err != nil {
+		t.Fatalf("Unmarshal round trip: %v", err)
+	}
+	if roundTrip.DeviceID != "ABCDEF0123456789ABCDEF0123456789" || len(roundTrip.Cookies) != 2 {
+		t.Fatalf("round-trip authentication data = %#v", roundTrip)
+	}
+}
+
+func TestAuthenticationSnapshotRejectsInvalidScopeAndVersion(t *testing.T) {
+	tests := []authenticationSnapshot{
+		{SchemaVersion: 2, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 1, DeviceID: "not-a-device-id", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 1, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "example.com:443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 1, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid.sig", Value: "value"}}},
+	}
+	for _, snapshot := range tests {
+		if err := validateAuthenticationSnapshot(snapshot); err == nil {
+			t.Errorf("invalid snapshot accepted: %#v", snapshot)
+		}
+	}
+}
+
+func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) {
+	invalid := sessionRestoreFailure(auth.ErrSessionInvalid)
+	if invalid.Type != "sessionInvalid" || invalid.Code != "sessionInvalid" || invalid.State != "idle" {
+		t.Fatalf("invalid-session event = %#v", invalid)
+	}
+
+	secret := "cookie-value-that-must-not-leak"
+	unavailable := sessionRestoreFailure(errors.New("network failure: " + secret))
+	encoded := marshal(unavailable)
+	if unavailable.Code != "sessionRestoreUnavailable" || strings.Contains(encoded, secret) {
+		t.Fatalf("restore failure leaked or misclassified: %s", encoded)
+	}
+}
+
+func TestResumeAuthenticationRejectsMalformedSnapshotWithoutNetworking(t *testing.T) {
+	result := ResumeAuthentication([]byte(`{"schemaVersion":1}`), &recordingListener{})
+	var response authInfoResponse
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatalf("ResumeAuthentication returned invalid JSON: %v", err)
+	}
+	if response.Code != "invalidSession" {
+		t.Fatalf("ResumeAuthentication code = %q, want invalidSession", response.Code)
 	}
 }
 

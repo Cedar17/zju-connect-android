@@ -302,7 +302,7 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
             Text("开始登录")
         }
 
-        "fetchingAuthMethods", "authenticating" -> RowProgress()
+        "restoringSession", "fetchingAuthMethods", "authenticating" -> RowProgress()
 
         "awaitingMethod" -> {
             Text("选择登录方式")
@@ -390,7 +390,13 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
                 text = "认证已完成${state.authenticatedUsername.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}",
                 color = MaterialTheme.colorScheme.primary,
             )
-            Text("认证结果仅保留在当前进程内；可在下方连接真实 VPN。")
+            Text(
+                if (state.code == "sessionSaveFailed") {
+                    "当前认证仅在进程内可用；重启前需要重新保存。"
+                } else {
+                    "认证状态已安全保存；可在下方连接真实 VPN。"
+                },
+            )
             OutlinedButton(onClick = viewModel::cancelAuthentication) {
                 Text("清除本次认证结果")
             }
@@ -398,7 +404,7 @@ private fun AuthenticationPanel(state: AuthUiState, viewModel: AuthViewModel) {
 
         "error" -> {
             Button(onClick = viewModel::retryAuthentication) {
-                Text("重试登录")
+                Text(if (state.code.startsWith("session")) "重试恢复" else "重试登录")
             }
             CancelButton(viewModel)
         }

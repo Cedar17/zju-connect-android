@@ -78,6 +78,13 @@ class GoCoreBridge {
             ),
         )
 
+    fun resumeAuthentication(
+        snapshot: ByteArray,
+        onEvent: (GoAuthEvent) -> Unit,
+    ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, authListener(onEvent)))
+
+    fun exportAuthenticatedSession(): ByteArray = Core.exportAuthenticatedSession()
+
     fun submitAuthentication(
         response: JSONObject,
         onEvent: (GoAuthEvent) -> Unit,

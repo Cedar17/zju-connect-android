@@ -19,8 +19,8 @@ a pinned gomobile AAR, and a debug APK that has been built, installed, and
 launched on a physical device. The experimental TUN data plane and the aTrust
 authentication control plane are implemented separately on `master`. The Issue
 #11 development branch adds the real aTrust client setup, resource routes,
-Android VPN service, and deterministic shutdown; long-lived session recovery
-remains future work.
+Android VPN service, deterministic shutdown, and the minimum encrypted
+authentication-recovery checkpoint.
 
 ## Scope
 
@@ -56,6 +56,7 @@ Use a closed state model with explicit events rather than inferring phases from 
 
 ```text
 Idle
+RestoringSession
 PreparingVpnPermission
 Authenticating
 AwaitingPassword
@@ -85,12 +86,15 @@ The implemented authentication interface is:
 ```text
 StartAuthentication(requestJson, listener)
 SubmitAuthentication(actionJson)
+ResumeAuthentication(snapshotBytes, listener)
+ExportAuthenticatedSession()
 GetPendingCaptchaImage()
 CancelAuthentication()
 ClearAuthenticatedResult()
 ```
 
-The versioned events are `authenticationStarted`, `authMethodsReady`,
+The versioned events are `authenticationStarted`, `sessionRestoreStarted`,
+`sessionInvalid`, `authMethodsReady`,
 `credentialsRequired`, `phoneRequired`, `smsRequired`, `captchaRequired`,
 `authenticated`, `cancelled`, `retryStarted`, and safe-code `error` events.
 CAPTCHA image bytes pass only through `GetPendingCaptchaImage`, not callback
@@ -105,12 +109,18 @@ future aTrust underlay sockets are protected from the VPN interface.
 
 ## Session snapshot and security
 
-Persist only the minimum state required for recovery, using a versioned schema. Candidate fields include `schemaVersion`, server identity, username, authentication data, session identifiers, resource data, creation time, and core version. Do not persist a password by default; only persist other sensitive material if recovery experiments prove it is necessary.
+The implemented snapshot persists only `schemaVersion`, the exact `deviceId`,
+and the complete authentication cookie set returned for the fixed ZJU endpoint.
+SID remains inside that cookie set. Username, resources, connection ID, sign
+key, password, verification input, creation time, and server identity are not
+persisted; the server identity is fixed by the bridge, resources and username
+are fetched after validation, and connection-scoped identifiers are regenerated.
 
 Required security properties:
 
 - Encrypt persisted state with an Android Keystore-backed non-exportable key, for example AES-GCM.
 - Store ciphertext in a location excluded from system backup, such as `noBackupFilesDir` or its equivalent.
+- Write the encrypted envelope atomically and bind its format to fixed authenticated data.
 - Do not bypass server-required SMS, captcha, TLS certificate, or hostname validation.
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
 - When a snapshot is invalid or expired, fall back clearly to re-authentication instead of silently retrying forever.
@@ -181,8 +191,8 @@ resources, or provide production connection UI.
   temporary files.
 - Authentication enforces normal TLS certificate and hostname validation,
   supports cancellation/retry, maps UI-visible failures to stable codes, and
-  retains the successful result only in Go process memory for the future tunnel
-  phase.
+  retains the live result in Go memory while Android encrypts only its minimal
+  recovery snapshot for a later process.
 
 ### Phase 5 — Real VPN minimum loop
 
@@ -194,15 +204,16 @@ resources, or provide production connection UI.
   the whole VPN; report TUN/L3 failures with stable UI error codes.
 - Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data.
 
-This phase intentionally does not add session persistence, automatic reconnect, or
-complex network switching.
+This phase intentionally does not add automatic reconnect or complex network
+switching.
 
-### Phase 6 — Session recovery
+### Phase 6 — Session recovery: minimum checkpoint implemented
 
-- Export a minimal session snapshot after successful authentication.
-- Encrypt it with Keystore-backed storage.
-- Recover after process death while the session is valid.
-- Reliably fall back to authentication after expiry or invalidation.
+- Export only cookies plus the exact device ID after successful authentication.
+- Encrypt the snapshot with Android Keystore AES-GCM in `noBackupFilesDir`.
+- Validate with the server and refresh username/resources after process death.
+- Delete explicitly invalid or locally unreadable snapshots; retain snapshots
+  across transient network/TLS failures so restoration can be retried.
 
 ## Release blockers
 

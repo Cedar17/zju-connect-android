@@ -6,7 +6,9 @@
 package core
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -17,12 +19,14 @@ import (
 )
 
 const (
-	schemaVersion       = 1
-	upstreamCommit      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
-	forkCommit          = "ae70e4f185ef33dd274ca761411e82106b29457d"
-	upstreamModule      = "github.com/mythologyli/zju-connect"
-	zjuAtrustServer     = "vpn.zju.edu.cn"
-	zjuAtrustServerPort = 443
+	schemaVersion                       = 1
+	authenticationSnapshotSchemaVersion = 1
+	maxAuthenticationSnapshotSize       = 64 * 1024
+	upstreamCommit                      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
+	forkCommit                          = "65d7d8089f6811187f7e2d4ff7f7806976edef93"
+	upstreamModule                      = "github.com/mythologyli/zju-connect"
+	zjuAtrustServer                     = "vpn.zju.edu.cn"
+	zjuAtrustServerPort                 = 443
 )
 
 // BridgeListener is implemented by Kotlin. Event payloads use versioned JSON
@@ -81,6 +85,15 @@ type authenticationEvent struct {
 	Username      string          `json:"username,omitempty"`
 }
 
+// authenticationSnapshot is the only sensitive value allowed to cross from
+// Go to Kotlin for persistence. It deliberately excludes password, username,
+// standalone SID, resources, connection ID, and sign key.
+type authenticationSnapshot struct {
+	SchemaVersion int           `json:"schemaVersion"`
+	DeviceID      string        `json:"deviceId"`
+	Cookies       []auth.Cookie `json:"cookies"`
+}
+
 type authenticationSession struct {
 	mu       sync.Mutex
 	flow     *auth.InteractiveFlow
@@ -116,7 +129,7 @@ func EmitBuildInfo(listener BridgeListener) {
 // FetchAuthInfo obtains the server's advertised aTrust authentication methods.
 // It deliberately accepts no credentials and returns only a redacted structured
 // result. Password, SMS, CAPTCHA, session persistence, TUN, and socket
-// protection need dedicated lifecycle APIs before they may be exposed here.
+// protection are exposed only through their dedicated lifecycle APIs.
 func FetchAuthInfo(requestJSON string) string {
 	var request authInfoRequest
 	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
@@ -284,6 +297,127 @@ func ClearAuthenticatedResult() {
 	}
 }
 
+// ExportAuthenticatedSession returns the minimum versioned state needed to
+// validate this authentication again. The returned JSON bytes are sensitive:
+// callers must encrypt them immediately and must never log them.
+func ExportAuthenticatedSession() []byte {
+	currentAuthentication.mu.Lock()
+	flow := currentAuthentication.flow
+	currentAuthentication.mu.Unlock()
+	if flow == nil {
+		return nil
+	}
+	result, ok := flow.Result()
+	if !ok {
+		return nil
+	}
+	encoded, err := encodeAuthenticationSnapshot(result.AuthData)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// ResumeAuthentication validates an encrypted-at-rest snapshot after Kotlin
+// decrypts it. The flow is restricted to ZJU's endpoint and emits only safe
+// lifecycle events; snapshot values never enter callback JSON.
+func ResumeAuthentication(snapshotBytes []byte, listener BridgeListener) string {
+	if listener == nil {
+		return authError("invalidRequest", "Authentication listener is required")
+	}
+	authData, err := decodeAuthenticationSnapshot(snapshotBytes)
+	if err != nil {
+		return authError("invalidSession", "Saved authentication data is invalid")
+	}
+
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.flow != nil {
+		currentAuthentication.mu.Unlock()
+		return authError("alreadyRunning", "An authentication session is already active")
+	}
+	flow, err := newAuthenticationFlow(zjuAtrustServer, zjuAtrustServerPort)
+	if err != nil {
+		currentAuthentication.mu.Unlock()
+		return authError("initializationFailed", "Unable to initialize session restoration")
+	}
+	currentAuthentication.flow = flow
+	currentAuthentication.listener = listener
+	currentAuthentication.server = zjuAtrustServer
+	currentAuthentication.port = zjuAtrustServerPort
+	currentAuthentication.busy = true
+	currentAuthentication.mu.Unlock()
+
+	go runSessionRestore(flow, listener, authData)
+	return marshal(authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "sessionRestoreStarted",
+		State:         "restoringSession",
+		Message:       "Validating saved authentication session",
+	})
+}
+
+func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
+	var clientAuthData auth.ClientAuthData
+	if err := json.Unmarshal(authData, &clientAuthData); err != nil {
+		return nil, err
+	}
+	snapshot := authenticationSnapshot{
+		SchemaVersion: authenticationSnapshotSchemaVersion,
+		DeviceID:      clientAuthData.DeviceID,
+		Cookies:       append([]auth.Cookie(nil), clientAuthData.Cookies...),
+	}
+	if err := validateAuthenticationSnapshot(snapshot); err != nil {
+		return nil, err
+	}
+	return json.Marshal(snapshot)
+}
+
+func decodeAuthenticationSnapshot(snapshotBytes []byte) ([]byte, error) {
+	if len(snapshotBytes) == 0 || len(snapshotBytes) > maxAuthenticationSnapshotSize {
+		return nil, fmt.Errorf("authentication snapshot size is invalid")
+	}
+	var snapshot authenticationSnapshot
+	if err := json.Unmarshal(snapshotBytes, &snapshot); err != nil {
+		return nil, err
+	}
+	if err := validateAuthenticationSnapshot(snapshot); err != nil {
+		return nil, err
+	}
+	return json.Marshal(auth.ClientAuthData{
+		DeviceID: snapshot.DeviceID,
+		Cookies:  append([]auth.Cookie(nil), snapshot.Cookies...),
+	})
+}
+
+func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
+	if snapshot.SchemaVersion != authenticationSnapshotSchemaVersion {
+		return fmt.Errorf("unsupported authentication snapshot version")
+	}
+	if len(snapshot.DeviceID) != 32 {
+		return fmt.Errorf("device ID length is invalid")
+	}
+	if _, err := hex.DecodeString(snapshot.DeviceID); err != nil {
+		return fmt.Errorf("device ID is invalid")
+	}
+	if len(snapshot.Cookies) == 0 || len(snapshot.Cookies) > 64 {
+		return fmt.Errorf("cookie count is invalid")
+	}
+	expectedHost := net.JoinHostPort(zjuAtrustServer, fmt.Sprint(zjuAtrustServerPort))
+	hasSID := false
+	for _, cookie := range snapshot.Cookies {
+		if cookie.Host != expectedHost || cookie.Scheme != "https" || cookie.Name == "" || cookie.Value == "" {
+			return fmt.Errorf("cookie scope is invalid")
+		}
+		if cookie.Name == "sid" {
+			hasSID = true
+		}
+	}
+	if !hasSID {
+		return fmt.Errorf("sid cookie is missing")
+	}
+	return nil
+}
+
 func newAuthenticationFlow(server string, port int) (*auth.InteractiveFlow, error) {
 	return auth.NewInteractiveFlow(net.JoinHostPort(server, fmt.Sprint(port)))
 }
@@ -355,6 +489,66 @@ func runAuthenticationOperation(
 		event.Type = "stateChanged"
 	}
 	emitAuthenticationEvent(listener, event)
+}
+
+func runSessionRestore(flow *auth.InteractiveFlow, listener BridgeListener, authData []byte) {
+	defer clear(authData)
+	prompt, err := flow.Resume(authData)
+	releaseAuthenticationOperation(flow)
+	if !isCurrentAuthenticationFlow(flow, listener) {
+		return
+	}
+	if err != nil {
+		discardAuthenticationFlow(flow)
+		emitAuthenticationEvent(listener, sessionRestoreFailure(err))
+		return
+	}
+	event := authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "authenticated",
+		State:         prompt.State,
+		Message:       prompt.Message,
+	}
+	if result, ok := flow.Result(); ok {
+		event.Username = result.Username
+	}
+	emitAuthenticationEvent(listener, event)
+}
+
+func discardAuthenticationFlow(flow *auth.InteractiveFlow) {
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.flow == flow {
+		currentAuthentication.flow = nil
+		currentAuthentication.listener = nil
+		currentAuthentication.server = ""
+		currentAuthentication.port = 0
+		currentAuthentication.busy = false
+	}
+	currentAuthentication.mu.Unlock()
+	flow.Cancel()
+}
+
+func sessionRestoreFailure(err error) authenticationEvent {
+	if errors.Is(err, auth.ErrSessionInvalid) {
+		return authenticationEvent{
+			SchemaVersion: schemaVersion,
+			Type:          "sessionInvalid",
+			State:         "idle",
+			Code:          "sessionInvalid",
+			Message:       "Saved authentication session has expired",
+		}
+	}
+	code := "sessionRestoreUnavailable"
+	if strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "tls:") {
+		code = "certificateRejected"
+	}
+	return authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "error",
+		State:         "error",
+		Code:          code,
+		Message:       "Saved authentication session could not be validated",
+	}
 }
 
 func retryAuthentication() string {

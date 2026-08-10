@@ -66,7 +66,9 @@ An open-source Android client for ZJU aTrust remote access, powered by zju-conne
 已完成 Android 基线、最小 Go binding 和真实 aTrust 认证控制面：固定版本的
 工具链可生成本地 gomobile AAR；Kotlin 通过结构化状态与内存中的验证码字节
 驱动账号密码、服务端短信和图形验证码。认证流启用正常 TLS 证书与主机名校验，
-不使用命令行、临时文件或浏览器回调。固定版本、构建命令和边界见
+不使用命令行、临时文件或浏览器回调。最小认证恢复 checkpoint 只持久化完整
+认证 cookie 集合和对应设备标识，使用 Android Keystore AES-GCM 加密并排除
+系统备份；进程重启时先由服务端验证，再重新获取用户名与资源。固定版本、构建命令和边界见
 [gomobile bridge 文档](docs/gomobile-bridge.md)。
 
 当前 `dev/issue-11-real-atrust-vpn` 分支正在推进以下真实闭环：
@@ -81,14 +83,14 @@ zju-connect
 → 正常断开与资源回收
 ```
 
-本阶段暂不实现长期会话恢复、复杂网络切换和正式 UI 打磨。K40 仅用于
+本阶段暂不实现自动重连、复杂网络切换和正式 UI 打磨。K40 仅用于
 验证认证、隧道生命周期和异常回收；校外访问验收必须使用蜂窝网络下的
 一加 Ace 3V。
 
 当前已加入仅用于 Issue #6 验证的实验性 Android TUN、`VpnService.protect`
 和 Go 合成数据面路径。该路径需要用户手动授权系统 VPN，使用固定 marker 和
 本地 fake transport，不接入真实 aTrust、认证、会话持久化或正式连接 UI。
-这些生产能力仍须按架构文档的后续阶段实现和验证。
+真实认证、加密会话恢复和 VPN 路径由独立的生产边界实现和验证。
 
 ## 免责声明
 
