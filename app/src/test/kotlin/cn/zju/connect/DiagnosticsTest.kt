@@ -203,4 +203,23 @@ class DiagnosticsTest {
         assertEquals(2L, preview.first().event.timestampMillis)
         assertEquals((MAX_DIAGNOSTIC_PREVIEW_GROUPS + 1).toLong(), preview.last().event.timestampMillis)
     }
+
+    @Test
+    fun recoveryStatesRemainVisibleAfterRedaction() {
+        val recovering = RedactedDiagnosticEvent(
+            timestampMillis = 1,
+            category = "service",
+            state = "recovering",
+        ).redacted()
+        val waiting = RedactedDiagnosticEvent(
+            timestampMillis = 2,
+            category = "service",
+            state = "waitingForNetwork",
+        ).redacted()
+
+        assertEquals("recovering", recovering.state)
+        assertEquals("waitingForNetwork", waiting.state)
+        assertEquals("服务恢复中", diagnosticStateLabel(recovering))
+        assertEquals("服务等待网络", diagnosticStateLabel(waiting))
+    }
 }

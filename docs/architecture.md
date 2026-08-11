@@ -1,8 +1,10 @@
-# Android client architecture and validation plan
+# Android client architecture and validation
 
-## Purpose and current status
+## Purpose and capabilities
 
-The project aims to provide an unofficial Android client for Zhejiang University aTrust/RVPN. The first objective is a safe, stable, and recoverable end-to-end connection path rather than a feature-complete UI:
+The project provides an unofficial Android client for Zhejiang University
+aTrust/RVPN. Its design prioritizes a safe, stable, and recoverable end-to-end
+connection path over feature breadth:
 
 ```text
 zju-connect
@@ -13,22 +15,24 @@ zju-connect
 → recovery after process restart
 ```
 
-The Android baseline and a deliberately minimal Go binding are now in place:
-Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29`,
-a pinned gomobile AAR, and a debug APK that has been built, installed, and
-launched on a physical device. The experimental TUN data plane, aTrust
-authentication control plane, real Android VPN service, deterministic shutdown,
-and encrypted session recovery are implemented on `master`. The Issue #14
-development line consolidates those separate validation tools into one
-user-triggered connection flow.
+The client combines Kotlin, Jetpack Compose, Material 3, a reproducible Gradle
+Wrapper, `minSdk = 29`, and a pinned gomobile AAR. Its production path includes
+the aTrust authentication control plane, a real Android VPN service and TUN data
+plane, deterministic shutdown, encrypted session recovery, a one-tap connection
+flow, and Android-owned tunnel reconstruction after underlay network changes.
+The Go bridge remains deliberately small and does not become a mobility layer.
 
 ## Scope
 
-The first usable version targets the current Zhejiang University aTrust service only. It does not initially include the legacy EasyConnect protocol, WebVPN, multiple accounts, port forwarding, a local proxy, Always-on VPN, boot-time auto-connect, or complex advanced configuration.
+The client targets the current Zhejiang University aTrust service only. It does
+not include the legacy EasyConnect protocol, WebVPN, multiple accounts, port
+forwarding, a local proxy, Always-on VPN, boot-time auto-connect, or complex
+advanced configuration.
 
-Keep the initial Android app as a single `app` module. Split out Go or API modules only when the binding build or ownership boundary creates a demonstrated need.
+Keep the Android app as a single `app` module. Split out Go or API modules only
+when the binding build or ownership boundary creates a demonstrated need.
 
-## Proposed layers
+## Layers
 
 ```text
 Compose UI
@@ -136,7 +140,7 @@ Required security properties:
   monospaced history suitable for a screenshot, while copying retains the complete
   bounded event history, environment header, and counters. Consecutive equal
   display states (including counter-only changes) are grouped only in the
-  display projection; persisted records remain unchanged for issue reports.
+  display projection; persisted records remain unchanged for public problem reports.
 - When a snapshot is invalid or expired, fall back clearly to re-authentication instead of silently retrying forever.
 
 ## VpnService and socket protection
@@ -148,9 +152,24 @@ validation must cover Wi-Fi and mobile networks, network switching, failed
 connection cleanup, and release of the TUN file descriptor, sockets, goroutines,
 and foreground service.
 
+The service observes all non-VPN networks with Internet capability instead of
+the application's default network, which can be the VPN itself. An opaque,
+in-memory fingerprint covers network identity, transport, suspension, interface,
+and IPv4/default-route changes; addresses and network names never enter logs or
+diagnostics. A stable change is debounced for 1.5 seconds, then the service stops
+the old Go/TUN session and rebuilds it from the authenticated result already held
+in Go memory. If no usable underlay exists, the foreground service waits until a
+network returns. User stop, revoke, destruction, and the first terminal failure
+always cancel pending recovery.
+
+The protected Go sockets use the system-selected underlay and are not explicitly
+bound to an Android `Network`, so the service deliberately leaves
+`setUnderlyingNetworks` at its default rather than publishing a binding it does
+not own.
+
 ## Reproducibility and upstream integration
 
-The current gomobile integration follows these requirements; future changes must
+The gomobile integration follows these requirements; future changes must
 continue to follow them:
 
 - Pin the upstream `zju-connect` commit.
@@ -159,44 +178,41 @@ continue to follow them:
 - Do not commit an AAR whose source and toolchain cannot be traced and reproduced.
 - Keep Android-specific structured authentication and socket-protection interfaces small and suitable for upstream contribution where practical.
 
-## Validation phases
+## Capabilities and validation boundaries
 
-### Phase 1 — Android baseline: complete
+### Android application baseline
 
-- Kotlin, Compose, and Material 3 project builds with the checked-in wrapper.
-- Debug APK is generated and launched on a physical device.
-- Windows/PowerShell and Git Bash wrapper usage is documented.
+- The single Android application module uses Kotlin, Compose, and Material 3
+  and builds with the checked-in Gradle Wrapper.
+- The project produces a debug APK for physical-device validation through the
+  documented Windows Android toolchain.
+- Android VPN permission remains a user-approved system boundary.
 
-### Phase 2 — Go binding: complete
+### Gomobile binding
 
 - The pinned source, toolchain lockfile, bootstrap command, and minimal bridge
   are defined in [gomobile-bridge.md](gomobile-bridge.md).
-- Kotlin calls a minimal Go API and receives a versioned JSON callback through
-  the generated AAR.
-- The pinned toolchain has built the AAR and debug APK, and the debug APK has
-  been installed on the physical-device target. Future changes must repeat the
-  documented build and device checks.
+- Kotlin calls a narrow Go API and receives versioned JSON control-plane events
+  through the generated AAR; packet data uses file descriptors.
+- AAR, Go bridge, Android unit, build, and device checks remain distinct
+  verification surfaces and must be repeated when their inputs change.
 
-### Phase 3 — TUN data plane
+### Experimental TUN diagnostic path
 
-The repository now contains an experimental Issue #6 validation path. It is not
-an aTrust connection implementation:
+The repository contains a debug-only integration probe that is separate from
+the production aTrust connection path:
 
-- A debug-only VpnService requests permission and creates a blocking TUN.
-- The current app is the only allowed application, with a test route and MTU 1400.
-- Go receives ownership of the detached TUN descriptor.
-- Go creates a local fake UDP transport and asks Android to protect its socket
-  before connecting.
-- A fixed marker UDP packet is sent through the TUN and reflected back through
-  Go, allowing the Android UI to show packet and byte counters.
-- Start is single-session, stop is idempotent, and service revoke/destroy paths
-  close the Go data plane.
+- A `VpnService` requests permission and creates a blocking TUN for the current
+  app, a fixed test route, and MTU 1400.
+- Go owns the detached TUN descriptor, opens a protected local fake UDP
+  transport, and reflects a fixed marker packet so the UI can report counters.
+- Start is single-session; stop, revoke, and service destruction close the
+  diagnostic data plane idempotently.
 
-The experimental path still requires a person to approve the system VPN dialog
-on the first run. It deliberately does not authenticate to aTrust, parse real
-resources, or provide production connection UI.
+This probe does not authenticate to aTrust, parse real resources, or prove
+access to school-network resources.
 
-### Phase 4 — Authentication control plane: implemented
+### Authentication control plane
 
 - The Android fork exposes a single in-memory aTrust flow for server-advertised
   password login, server-triggered SMS, and graphical CAPTCHA steps.
@@ -204,80 +220,79 @@ resources, or provide production connection UI.
   gomobile boundary; it never parses CLI output or exchanges secrets through
   temporary files.
 - Authentication enforces normal TLS certificate and hostname validation,
-  supports cancellation/retry, maps UI-visible failures to stable codes, and
-  retains the live result in Go memory while Android encrypts only its minimal
-  recovery snapshot for a later process.
+  supports cancellation and retry, maps UI-visible failures to stable codes,
+  and retains the live result in Go memory while Android encrypts only the
+  minimal recovery snapshot.
 
-### Phase 5 — Real VPN minimum loop: validated
+### Real VPN data plane
 
-- Reuse the in-memory authentication result without repeating password login.
-- Prepare the aTrust client and expose only the assigned address and resource routes.
-- Establish Android `VpnService`, protect the real underlay sockets, and attach the TUN.
-- Stop and revoke the service without leaving TUN descriptors, sockets, or L3 readers.
-- Drop split-tunnel packets outside the aTrust resource set instead of stopping
-  the whole VPN; report TUN/L3 failures with stable UI error codes.
-- Validate lifecycle on K40, then validate off-campus resource access on a OnePlus Ace 3V over cellular data; both validations are complete.
+- The VPN reuses the in-memory authentication result without repeating password
+  login and exposes only the assigned address and resource routes to Android.
+- Android establishes `VpnService`, protects real underlay sockets, attaches the
+  TUN, and owns deterministic stop and revoke cleanup.
+- Packets outside the aTrust resource set are dropped as split-tunnel traffic;
+  TUN and L3 failures use stable UI error codes.
+- The length-framed response parser preserves the negotiated mode, reassembles
+  IPv4 packets split across server frames, and fails closed on malformed length
+  streams instead of desynchronizing the TUN.
+- Diagnostics expose only allowlisted states, stable codes, and bounded counters;
+  they exclude packet metadata, payloads, authentication material, and network
+  identifiers.
 
-This phase intentionally does not add automatic reconnect or complex network
-switching.
+The real data plane and lifecycle have been exercised on the K40, including CLI
+requests to CC98 and private campus resources. Off-campus resource access over
+cellular data has also been manually verified on a OnePlus Ace 3V.
 
-Issue #11 validation on 2026-08-10 completed the real data-plane framing loop on
-the preserved-data K40 installation. The aTrust length-framed response parser
-now keeps the negotiated mode and reassembles IPv4 packets split across server
-frames; malformed length streams fail closed instead of desynchronizing the
-TUN. Android diagnostics expose only allowlisted connection/VPN/service states,
-stable error codes, and bounded data-plane counters; they never include packet
-metadata, payload, or authentication material. CLI requests to `cc98.org` (including
-redirects), `office.ckc.zju.edu.cn`, and the internal console endpoint returned
-real HTTP responses, and Edge rendered the CC98 homepage. OnePlus Ace 3V
-cellular acceptance was manually completed on 2026-08-10; this evidence does
-not claim a merged or deployed release.
+### Encrypted session recovery
 
-### Phase 6 — Session recovery: minimum checkpoint implemented
+- Successful authentication exports only cookies plus the exact device ID.
+- Android encrypts the snapshot with Keystore-backed AES-GCM in
+  `noBackupFilesDir`.
+- Recovery validates the snapshot with the server and refreshes username and
+  resources after process death.
+- Explicitly invalid or locally unreadable snapshots are deleted; transient
+  network and TLS failures retain the snapshot for a later retry.
 
-- Export only cookies plus the exact device ID after successful authentication.
-- Encrypt the snapshot with Android Keystore AES-GCM in `noBackupFilesDir`.
-- Validate with the server and refresh username/resources after process death.
-- Delete explicitly invalid or locally unreadable snapshots; retain snapshots
-  across transient network/TLS failures so restoration can be retried.
-
-### Phase 7 — One-tap daily connection: functional checkpoint
+### Daily connection experience
 
 - App launch loads only the locally remembered username and observes any
-  already-running VPN service; it does not read or validate the encrypted
-  session and does not start authentication network traffic.
-- The user's Connect action owns one closed Android connection state machine:
-  restore and validate a saved session, fall back to the minimum server-required
-  authentication steps, request Android VPN permission, and start the real VPN.
-- `auth/psw` with the `Radius` login domain is selected automatically when it is
-  advertised. A different method is selected only when it is the sole method
-  supported by the mobile interactive bridge.
+  already-running VPN service; it does not validate the encrypted session or
+  start authentication traffic.
+- The Connect action owns one closed Android state machine that restores a
+  session, requests only required authentication input, obtains Android VPN
+  permission, and starts the real VPN.
+- `auth/psw` with the `Radius` login domain is selected automatically when
+  advertised. Another method is selected only when it is the sole method the
+  mobile bridge supports.
 - Definite session invalidation deletes only the encrypted authentication
-  snapshot and retains the separately remembered username. Cancellation and VPN
-  disconnection retain the snapshot; passwords and verification input are never
-  persisted.
-- The primary Compose surface is Material 3, dynamic-color, and dark-only. It
-  exposes one context-sensitive primary action, the last server-confirmed
-  username, and only the authentication input currently required by the server.
-  Password input is hidden by default with an explicit show/hide control; raw
-  bridge codes and the synthetic TUN tool are no longer shown on the home screen.
-- The status card keeps a two-line hierarchy: a large connection state and one
-  supporting line. Stable states use the supporting line for the remembered
-  account; in-progress and error states use it for actionable detail. Rare
-  non-blocking warnings render outside the status card.
-- K40 connection smoke checks use CLI HTTP requests to
-  `https://www.cc98.org/` and `http://10.10.98.98/`; opening a browser is
-  not required for this checkpoint.
-- The first checkpoint is accepted on the K40. Issue #14 follow-up work is
-  implemented on the same state machine and Material 3 components: a
-  disconnected-only account switch, vertically centered form-free home states,
-  IME-safe scrolling authentication forms, and a non-exported redacted
-  diagnostics Activity. The Activity persists only the most recent 100
-  allowlisted records in `noBackupFilesDir`, exposes copy/clear controls, and
-  is safe to paste into a public issue. OnePlus Ace 3V cellular acceptance was
-  manually completed on 2026-08-10. Draft PR #15 remains open for final manual
-  review and merge; notifications, automatic reconnect, network-switch
-  recovery, and Release work remain out of scope.
+  snapshot and retains the remembered username. Cancellation and disconnection
+  retain the snapshot; passwords and verification input are never persisted.
+- The Material 3 home surface provides one context-sensitive primary action, a
+  disconnected-only account switch, IME-safe authentication forms, and a
+  non-exported redacted diagnostics Activity. The Activity stores at most 100
+  allowlisted records in `noBackupFilesDir` and exposes copy and clear controls.
+
+The daily connection flow has been exercised on K40 and on OnePlus Ace 3V over
+cellular data. K40 smoke checks use CLI requests to `https://www.cc98.org/` and
+`http://10.10.98.98/`; browser rendering is not required.
+
+### Underlay network recovery
+
+- Android observes Internet-capable non-VPN networks for identity, transport,
+  suspension, interface, IPv4 address, and default-route changes.
+- Callback bursts are coalesced before Android closes the old TUN and aTrust
+  data plane and rebuilds them with the existing authenticated result.
+- If no underlay is usable, the foreground service waits indefinitely for a
+  network. User disconnect, revoke, destruction, and terminal failures cancel
+  recovery.
+- Recovery adds only `recovering` and `waitingForNetwork` to the redacted state
+  contract and never records network identifiers.
+
+Recovery policy is covered by JVM tests. On K40, three complete Wi-Fi
+disable/enable cycles switched between Wi-Fi and Ethernet while ADB and SSH
+remained reachable; every stable transition produced one reconstruction,
+returned to `active`, and passed both campus-resource requests. Wi-Fi ↔ cellular
+recovery has also been manually accepted on a OnePlus Ace 3V.
 
 ## Release blockers
 

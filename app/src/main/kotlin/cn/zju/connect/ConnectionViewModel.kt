@@ -142,6 +142,7 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "vpnRevoked" -> "系统已撤销 VPN 权限，请重新连接。"
     "vpnStopDispatchFailed" -> "未能发送断开请求，请稍后重试。"
     "vpnStartDispatchFailed" -> "未能启动 VPN 服务，请稍后重试。"
+    "networkMonitorUnavailable" -> "Android 无法监测当前网络，请重新连接。"
     "vpnSetupFailed", "vpnConfigurationUnavailable", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
         "学校 VPN 暂时无法完成连接，请稍后重试。"
     "tunEstablishFailed", "tunEstablishTimeout", "tunInitializationFailed" ->
@@ -752,6 +753,28 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         it.copy(
                             phase = ConnectionPhase.ESTABLISHING_VPN,
                             statusMessage = "正在建立 VPN…",
+                            internalCode = "",
+                        )
+                    }
+                }
+            }
+            "recovering" -> {
+                if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
+                    _state.update {
+                        it.copy(
+                            phase = ConnectionPhase.ESTABLISHING_VPN,
+                            statusMessage = "网络已切换，正在恢复 VPN…",
+                            internalCode = "",
+                        )
+                    }
+                }
+            }
+            "waitingForNetwork" -> {
+                if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
+                    _state.update {
+                        it.copy(
+                            phase = ConnectionPhase.ESTABLISHING_VPN,
+                            statusMessage = "正在等待可用网络…",
                             internalCode = "",
                         )
                     }
