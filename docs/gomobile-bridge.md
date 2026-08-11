@@ -1,7 +1,8 @@
 # Reproducible gomobile bridge
 
-This document implements Issue #3's Phase 2 boundary. It builds a local AAR
-from a pinned source and toolchain; the AAR is intentionally ignored by Git.
+This document defines the reproducible gomobile boundary. It builds a local
+AAR from pinned source and toolchain inputs; the AAR is intentionally ignored
+by Git.
 
 ## Pinned inputs
 
@@ -11,7 +12,7 @@ The authoritative machine-readable record is
 | Input | Pinned value |
 | --- | --- |
 | zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Android real-VPN fork | **Cedar17/zju-connect** `dev/android` at **758838e90cdf65c2543845f6d12cae27f0f9ec80** |
+| Android real-VPN fork | **Cedar17/zju-connect** at **758838e90cdf65c2543845f6d12cae27f0f9ec80** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -90,8 +91,8 @@ single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
 responses into callback JSON.
 
-Authentication success leaves its client/resource result in Go memory for the
-real VPN phase. Its exported recovery snapshot contains only a schema version,
+Authentication success leaves its client/resource result in Go memory for real
+VPN setup. Its exported recovery snapshot contains only a schema version,
 the exact device ID, and the complete endpoint cookie set. Kotlin encrypts
 those bytes with Android Keystore AES-GCM and atomically stores the envelope in
 `noBackupFilesDir`. After a process restart, the user's Connect action asks Go
@@ -108,8 +109,8 @@ future underlay connections. `StopRealVpn()` is idempotent and closes the
 client, TUN, underlay sockets, and L3 readers. Cancelling returns without
 waiting for an in-flight request: it cancels the request context, closes that
 session's active HTTP connections, and clears its sensitive state before any
-stale event can reach the UI. QR/CAS/OAuth login and complex reconnect behavior
-remain out of scope for this phase.
+stale event can reach the UI. QR/CAS/OAuth login and bridge-owned reconnect
+behavior are out of scope.
 
 Android owns network-switch recovery by calling the existing idempotent
 `StopRealVpn()`, then `PrepareRealVpn()` and `StartRealVpn()` again after the
@@ -122,7 +123,7 @@ the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
 codes, and cleanup preserves the original failure instead of replacing it with
 an uninformative `stopped` state.
 
-## Issue #6 experimental data-plane boundary
+## Experimental data-plane validation boundary
 
 The bridge additionally exposes a credential-free validation surface:
 
@@ -138,12 +139,12 @@ The bridge additionally exposes a credential-free validation surface:
 
 This is an integration probe for Android TUN, gomobile callbacks, descriptor
 ownership, socket protection, and cleanup. It must not be mistaken for the
-future aTrust client API or a proof of real school-network access.
+production aTrust client API or a proof of real school-network access.
 
 ## Licensing
 
 The pinned zju-connect repository is licensed under AGPL-3.0-only. Linking it
 into a distributable Android application requires preserving the applicable
-license notices and satisfying its source-availability obligations. This issue
-does not make a release-compliance determination; do that before distributing
-an APK containing the generated AAR.
+license notices and satisfying its source-availability obligations. Release
+compliance must be established before distributing an APK containing the
+generated AAR.
