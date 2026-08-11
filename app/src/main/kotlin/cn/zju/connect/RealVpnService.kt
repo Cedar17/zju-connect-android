@@ -27,6 +27,7 @@ private const val REAL_VPN_CHANNEL = "zju_connect_real_vpn"
 private const val REAL_VPN_NOTIFICATION_ID = 1002
 private const val REAL_VPN_LOG_TAG = "ZjuConnectRealVpn"
 private const val TUN_ESTABLISH_TIMEOUT_SECONDS = 20L
+private const val UNDERLAY_RECOVERY_DEBOUNCE_MILLIS = 1_500L
 
 /** Owns the production Android TUN and the authenticated zju-connect client. */
 class RealVpnService : VpnService() {
@@ -40,7 +41,13 @@ class RealVpnService : VpnService() {
     private val watchdogExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private val goCoreBridge = GoCoreBridge()
     private val stateLock = Any()
+    private val recoveryLock = Any()
     private val lifecycle = RealVpnLifecycle()
+    private val recoveryCoordinator = RealVpnRecoveryCoordinator()
+    private lateinit var underlayNetworkMonitor: UnderlayNetworkMonitor
+    private var underlayMonitorFailure: Throwable? = null
+    private var recoveryDebounce: ScheduledFuture<*>? = null
+    private var publishedRecoveryPresentation = RealVpnRecoveryPresentation.NONE
 
     private val socketProtector = object : SocketProtector {
         override fun protect(socketFd: Long): Boolean = this@RealVpnService.protect(socketFd.toInt())
@@ -63,15 +70,25 @@ class RealVpnService : VpnService() {
                 lifecycle.recordFailure(event.code, realVpnErrorMessage(event))
             }
             if (failure != null) {
+                terminateRecovery()
                 publishFailure("goCallback", failure)
                 requestStop()
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored bridge error after user stop")
             }
+        } else if (event.state != "active" && isRecoveryInProgress()) {
+            Log.i(REAL_VPN_LOG_TAG, "ignored intentional recovery ${event.state} callback")
         } else {
             val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
             if (acceptsProgress) {
                 RealVpnStateStore.update(event)
+                if (event.state == "active") {
+                    updateForegroundNotification("ZJU aTrust VPN is active")
+                    val commands = synchronized(recoveryLock) {
+                        recoveryCoordinator.onSessionActive(underlaySnapshot())
+                    }
+                    handleRecoveryCommands(commands)
+                }
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored bridge progress after terminal transition")
             }
@@ -81,6 +98,12 @@ class RealVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        underlayNetworkMonitor = UnderlayNetworkMonitor(applicationContext, ::onUnderlayNetworkChanged)
+        runCatching { underlayNetworkMonitor.start() }
+            .onFailure { error ->
+                underlayMonitorFailure = error
+                Log.e(REAL_VPN_LOG_TAG, "unable to register underlay network monitor")
+            }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -99,6 +122,10 @@ class RealVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        terminateRecovery()
+        if (::underlayNetworkMonitor.isInitialized) {
+            underlayNetworkMonitor.stop()
+        }
         val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
         if (failure != null) {
             publishFailure("onDestroy", failure)
@@ -117,6 +144,7 @@ class RealVpnService : VpnService() {
     }
 
     private fun requestStop(userInitiated: Boolean = false) {
+        terminateRecovery()
         synchronized(stateLock) {
             if (userInitiated) {
                 lifecycle.requestUserStop()
@@ -136,14 +164,39 @@ class RealVpnService : VpnService() {
             return
         }
 
-        setStatus("preparing", "Preparing the authenticated aTrust VPN")
+        val canStart = synchronized(recoveryLock) {
+            recoveryCoordinator.beginSession(underlaySnapshot())
+        }
+        if (!canStart) {
+            synchronized(stateLock) { lifecycle.beginCleanup() }
+            publishRecoveryPresentation()
+            return
+        }
+
+        val recovering = synchronized(recoveryLock) {
+            recoveryCoordinator.presentation != RealVpnRecoveryPresentation.NONE
+        }
+        if (recovering) {
+            publishRecoveryPresentation()
+        } else {
+            setStatus("preparing", "Preparing the authenticated aTrust VPN")
+        }
         var detachedTunFd: Int? = null
         try {
             // Android requires a foreground service to publish its notification
             // before doing network work. PrepareRealVpn performs TLS requests
             // and resource parsing, so doing this afterwards can make Android
             // kill the service before the TUN is established.
-            startForegroundCompat()
+            underlayMonitorFailure?.let {
+                throw RealVpnStartFailure(
+                    code = "networkMonitorUnavailable",
+                    stage = "underlay.monitor",
+                    message = "Android could not monitor the underlying network",
+                )
+            }
+            startForegroundCompat(
+                if (recovering) "Network changed; reconnecting VPN" else "ZJU aTrust VPN is active",
+            )
             val config = goCoreBridge.prepareRealVpn()
             Log.i(
                 REAL_VPN_LOG_TAG,
@@ -183,7 +236,9 @@ class RealVpnService : VpnService() {
                 builder.excludeCurrentUnderlaySubnets()
             }
 
-            setStatus("attaching", "Establishing the Android VPN interface")
+            if (!recovering) {
+                setStatus("attaching", "Establishing the Android VPN interface")
+            }
             Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
             val watchdog = scheduleTunEstablishWatchdog()
             val tun = try {
@@ -230,6 +285,7 @@ class RealVpnService : VpnService() {
                 lifecycle.recordFailure(failure.code, failure.message)
             }
             if (retainedFailure != null) {
+                terminateRecovery()
                 publishFailure("startInternal", retainedFailure)
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored startup failure after user stop")
@@ -273,9 +329,117 @@ class RealVpnService : VpnService() {
         stopSelf()
     }
 
+    private fun onUnderlayNetworkChanged(snapshot: UnderlayNetworkSnapshot) {
+        val commands = synchronized(recoveryLock) {
+            recoveryCoordinator.onNetworkChanged(snapshot)
+        }
+        handleRecoveryCommands(commands)
+    }
+
+    private fun handleRecoveryCommands(commands: List<RealVpnRecoveryCommand>) {
+        publishRecoveryPresentation()
+        commands.forEach { command ->
+            when (command) {
+                RealVpnRecoveryCommand.CancelDebounce -> cancelRecoveryDebounce()
+                is RealVpnRecoveryCommand.ScheduleDebounce -> scheduleRecoveryDebounce(command.revision)
+                RealVpnRecoveryCommand.StopSession -> requestRecoveryStop()
+                RealVpnRecoveryCommand.StartSession -> requestRecoveryStart()
+            }
+        }
+    }
+
+    private fun scheduleRecoveryDebounce(revision: Long) {
+        if (watchdogExecutor.isShutdown) return
+        synchronized(recoveryLock) {
+            recoveryDebounce?.cancel(false)
+            recoveryDebounce = watchdogExecutor.schedule(
+                {
+                    val commands = synchronized(recoveryLock) {
+                        recoveryDebounce = null
+                        recoveryCoordinator.onDebounceElapsed(revision)
+                    }
+                    handleRecoveryCommands(commands)
+                },
+                UNDERLAY_RECOVERY_DEBOUNCE_MILLIS,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+    }
+
+    private fun cancelRecoveryDebounce() {
+        synchronized(recoveryLock) {
+            recoveryDebounce?.cancel(false)
+            recoveryDebounce = null
+        }
+    }
+
+    private fun requestRecoveryStop() {
+        if (!cleanupExecutor.isShutdown) {
+            cleanupExecutor.execute(::stopForRecoveryInternal)
+        }
+    }
+
+    private fun stopForRecoveryInternal() {
+        if (!isStoppingForRecovery()) return
+        synchronized(stateLock) { lifecycle.beginCleanup() }
+        goCoreBridge.stopRealVpn()
+        val commands = synchronized(recoveryLock) {
+            if (recoveryCoordinator.isStoppingForRecovery) {
+                recoveryCoordinator.onRecoveryStopCompleted(underlaySnapshot())
+            } else {
+                emptyList()
+            }
+        }
+        handleRecoveryCommands(commands)
+    }
+
+    private fun requestRecoveryStart() {
+        if (!executor.isShutdown) {
+            executor.execute(::startInternal)
+        }
+    }
+
+    private fun terminateRecovery() {
+        val commands = synchronized(recoveryLock) { recoveryCoordinator.terminate() }
+        handleRecoveryCommands(commands)
+    }
+
+    private fun isStoppingForRecovery(): Boolean = synchronized(recoveryLock) {
+        recoveryCoordinator.isStoppingForRecovery
+    }
+
+    private fun isRecoveryInProgress(): Boolean = synchronized(recoveryLock) {
+        recoveryCoordinator.presentation != RealVpnRecoveryPresentation.NONE
+    }
+
+    private fun underlaySnapshot(): UnderlayNetworkSnapshot =
+        if (::underlayNetworkMonitor.isInitialized) {
+            underlayNetworkMonitor.snapshot()
+        } else {
+            UnderlayNetworkSnapshot()
+        }
+
+    private fun publishRecoveryPresentation() {
+        val presentation = synchronized(recoveryLock) { recoveryCoordinator.presentation }
+        if (presentation == publishedRecoveryPresentation) return
+        publishedRecoveryPresentation = presentation
+        when (presentation) {
+            RealVpnRecoveryPresentation.NONE -> Unit
+            RealVpnRecoveryPresentation.RECOVERING -> {
+                setStatus("recovering", "Network changed; reconnecting VPN")
+                updateForegroundNotification("Network changed; reconnecting VPN")
+            }
+            RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
+                setStatus("waitingForNetwork", "Waiting for an underlying network")
+                updateForegroundNotification("Waiting for an underlying network")
+            }
+        }
+    }
+
     private fun acceptsStartProgress(): Boolean = synchronized(stateLock) { lifecycle.acceptsProgress() }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @Suppress("DEPRECATION")
     private fun Builder.excludeCurrentUnderlaySubnets() {
         val connectivity = getSystemService(ConnectivityManager::class.java)
         val prefixes = connectivity.allNetworks
@@ -329,10 +493,10 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun startForegroundCompat() {
+    private fun startForegroundCompat(contentText: String) {
         val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
             .setContentTitle("ZJU Connect")
-            .setContentText("ZJU aTrust VPN is active")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
@@ -347,6 +511,13 @@ class RealVpnService : VpnService() {
         } else {
             startForeground(REAL_VPN_NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun updateForegroundNotification(contentText: String) {
+        // Re-post through the already-running foreground service instead of
+        // NotificationManager.notify(), which would require POST_NOTIFICATIONS
+        // on Android 13+ and is not needed for the VPN lifecycle notification.
+        startForegroundCompat(contentText)
     }
 
     private fun stopForegroundCompat() {

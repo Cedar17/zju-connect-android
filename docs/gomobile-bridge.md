@@ -111,6 +111,11 @@ session's active HTTP connections, and clears its sensitive state before any
 stale event can reach the UI. QR/CAS/OAuth login and complex reconnect behavior
 remain out of scope for this phase.
 
+Android owns network-switch recovery by calling the existing idempotent
+`StopRealVpn()`, then `PrepareRealVpn()` and `StartRealVpn()` again after the
+new underlay settles. The Go bridge does not migrate live sockets, choose an
+Android `Network`, or implement an independent reconnect loop.
+
 The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
 aTrust resource set are dropped as split-tunnel traffic instead of terminating
 the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error

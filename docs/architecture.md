@@ -18,9 +18,10 @@ Kotlin, Jetpack Compose, Material 3, a reproducible Gradle Wrapper, `minSdk = 29
 a pinned gomobile AAR, and a debug APK that has been built, installed, and
 launched on a physical device. The experimental TUN data plane, aTrust
 authentication control plane, real Android VPN service, deterministic shutdown,
-and encrypted session recovery are implemented on `master`. The Issue #14
-development line consolidates those separate validation tools into one
-user-triggered connection flow.
+encrypted session recovery, and the Issue #14 one-tap connection flow are
+implemented on `master`. Issue #13 adds Android-owned underlay monitoring and
+full tunnel reconstruction after a network change without expanding the Go
+bridge into a mobility layer.
 
 ## Scope
 
@@ -147,6 +148,21 @@ Once Android creates a TUN, the Go core's control/data connection to the VPN ser
 validation must cover Wi-Fi and mobile networks, network switching, failed
 connection cleanup, and release of the TUN file descriptor, sockets, goroutines,
 and foreground service.
+
+The service observes all non-VPN networks with Internet capability instead of
+the application's default network, which can be the VPN itself. An opaque,
+in-memory fingerprint covers network identity, transport, suspension, interface,
+and IPv4/default-route changes; addresses and network names never enter logs or
+diagnostics. A stable change is debounced for 1.5 seconds, then the service stops
+the old Go/TUN session and rebuilds it from the authenticated result already held
+in Go memory. If no usable underlay exists, the foreground service waits until a
+network returns. User stop, revoke, destruction, and the first terminal failure
+always cancel pending recovery.
+
+The protected Go sockets use the system-selected underlay and are not explicitly
+bound to an Android `Network`, so the service deliberately leaves
+`setUnderlyingNetworks` at its default rather than publishing a binding it does
+not own.
 
 ## Reproducibility and upstream integration
 
@@ -275,9 +291,28 @@ not claim a merged or deployed release.
   diagnostics Activity. The Activity persists only the most recent 100
   allowlisted records in `noBackupFilesDir`, exposes copy/clear controls, and
   is safe to paste into a public issue. OnePlus Ace 3V cellular acceptance was
-  manually completed on 2026-08-10. Draft PR #15 remains open for final manual
-  review and merge; notifications, automatic reconnect, network-switch
-  recovery, and Release work remain out of scope.
+  manually completed on 2026-08-10. PR #15 was merged into `master` at
+  `383f824b589fb6ae63dce9c4ced9065cbefd63c3`; Release work remains out of scope.
+
+### Phase 8 — Underlay network recovery: validated implementation checkpoint
+
+- Observe Internet-capable non-VPN networks for Wi-Fi, cellular, Ethernet,
+  suspension, interface, IPv4 address, and default-route changes.
+- Coalesce callback bursts, close the old TUN and aTrust data plane, and rebuild
+  with the existing authenticated result without another VPN permission prompt.
+- Keep the foreground service in an explicit waiting state while no underlay is
+  usable; user disconnect and terminal failures cancel recovery.
+- Preserve the redacted diagnostics contract: only `recovering` and
+  `waitingForNetwork` states are added, without network identifiers.
+- JVM recovery-policy tests are implemented. On 2026-08-11, the K40 passed
+  three complete Wi-Fi disable/enable cycles while its Ethernet ADB and SSH
+  transports remained reachable. Each stable transition produced exactly one
+  tunnel reconstruction and returned to `active`; CLI requests to
+  `https://www.cc98.org/` and `http://10.10.98.98/` succeeded after every
+  transition. On the same date, the user manually accepted Wi-Fi ↔ cellular
+  recovery on a OnePlus Ace 3V and confirmed the resulting behavior was
+  satisfactory. Together these checks cover the planned wired simulation and
+  actual mobile-underlay acceptance; the Issue #13 branch is not merged yet.
 
 ## Release blockers
 

@@ -31,6 +31,8 @@ private val SAFE_VPN_STATES = setOf(
     "stopped",
     "error",
     "diagnostic",
+    "recovering",
+    "waitingForNetwork",
 )
 private val SAFE_DIAGNOSTIC_CODES = setOf(
     "authenticationFailed",
@@ -40,6 +42,7 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "invalidEvent",
     "invalidInput",
     "invalidSession",
+    "networkMonitorUnavailable",
     "sessionInvalid",
     "sessionRestoreUnavailable",
     "sessionStoreUnavailable",
@@ -247,6 +250,8 @@ internal fun diagnosticStateLabel(event: RedactedDiagnosticEvent): String = when
         "stopped" -> "VPN 已停止"
         "error" -> "VPN 错误"
         "diagnostic" -> "VPN 数据面"
+        "recovering" -> "VPN 恢复中"
+        "waitingForNetwork" -> "VPN 等待网络"
         else -> "未知 VPN 状态"
     }
     "service" -> when (event.state) {
@@ -259,6 +264,8 @@ internal fun diagnosticStateLabel(event: RedactedDiagnosticEvent): String = when
         "stopped" -> "服务已停止"
         "error" -> "服务错误"
         "diagnostic" -> "服务诊断"
+        "recovering" -> "服务恢复中"
+        "waitingForNetwork" -> "服务等待网络"
         else -> "未知服务状态"
     }
     else -> "未知状态"

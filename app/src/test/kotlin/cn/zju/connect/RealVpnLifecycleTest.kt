@@ -114,4 +114,36 @@ class RealVpnLifecycleTest {
 
         assertEquals("Unable to write aTrust data to the Android VPN interface", message)
     }
+
+    @Test
+    fun recoveryStopFailureRemainsTerminalAndPreventsRestart() {
+        val lifecycle = RealVpnLifecycle()
+        val coordinator = RealVpnRecoveryCoordinator()
+        val initial = UnderlayNetworkSnapshot(
+            revision = 0,
+            networks = setOf(UnderlayNetworkFingerprint(networkHandle = 100)),
+        )
+        assertTrue(lifecycle.beginSession())
+        assertTrue(coordinator.beginSession(initial))
+        coordinator.onSessionActive(initial)
+        coordinator.onNetworkChanged(
+            UnderlayNetworkSnapshot(
+                revision = 1,
+                networks = setOf(UnderlayNetworkFingerprint(networkHandle = 101)),
+            ),
+        )
+        coordinator.onDebounceElapsed(1)
+        lifecycle.beginCleanup()
+
+        lifecycle.recordFailure("stopTimeout", "Timed out waiting for VPN cleanup")
+        coordinator.terminate()
+
+        assertTrue(coordinator.onRecoveryStopCompleted(initial).isEmpty())
+        val outcome = lifecycle.terminalOutcome() as RealVpnTerminalOutcome.Error
+        assertEquals("stopTimeout", outcome.failure.code)
+        assertEquals(
+            "stopTimeout",
+            lifecycle.recordFailure("vpnStartFailed", "late failure")?.code,
+        )
+    }
 }
