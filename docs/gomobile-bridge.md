@@ -66,7 +66,7 @@ The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
   atrust.GetAuthInfoList API and returns a redacted JSON response. Its request
   is limited to server and port; it never accepts credentials.
 
-[GoCoreBridge.kt](../app/src/main/kotlin/cn/zju/connect/GoCoreBridge.kt) owns
+[GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt) owns
 the generated Java API. Build-info and credential-free discovery functions
 remain validation surfaces, but the production home screen neither calls nor
 displays them. `ConnectionViewModel` uses the same wrapper for the single active

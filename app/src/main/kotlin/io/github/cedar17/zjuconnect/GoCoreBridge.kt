@@ -1,8 +1,8 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
-import cn.zju.connect.gocore.core.BridgeListener
-import cn.zju.connect.gocore.core.Core
-import cn.zju.connect.gocore.core.SocketProtector
+import io.github.cedar17.zjuconnect.gocore.core.BridgeListener
+import io.github.cedar17.zjuconnect.gocore.core.Core
+import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
 import org.json.JSONArray
 import org.json.JSONObject
 

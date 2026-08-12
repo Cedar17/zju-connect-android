@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,7 +11,7 @@ import android.net.VpnService
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
-import cn.zju.connect.gocore.core.SocketProtector
+import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
 import java.net.Inet4Address
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -32,8 +32,8 @@ private const val UNDERLAY_RECOVERY_DEBOUNCE_MILLIS = 1_500L
 /** Owns the production Android TUN and the authenticated zju-connect client. */
 class RealVpnService : VpnService() {
     companion object {
-        const val ACTION_START = "cn.zju.connect.action.START_REAL_VPN"
-        const val ACTION_STOP = "cn.zju.connect.action.STOP_REAL_VPN"
+        const val ACTION_START = "io.github.cedar17.zjuconnect.action.START_REAL_VPN"
+        const val ACTION_STOP = "io.github.cedar17.zjuconnect.action.STOP_REAL_VPN"
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()

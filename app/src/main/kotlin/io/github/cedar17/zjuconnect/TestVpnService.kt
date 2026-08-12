@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,7 +11,7 @@ import android.os.IBinder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import cn.zju.connect.gocore.core.SocketProtector
+import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -33,8 +33,8 @@ private const val MARKER_RETRY_DELAY_MS = 100L
 
 class TestVpnService : VpnService() {
     companion object {
-        const val ACTION_START = "cn.zju.connect.action.START_TEST_VPN"
-        const val ACTION_STOP = "cn.zju.connect.action.STOP_TEST_VPN"
+        const val ACTION_START = "io.github.cedar17.zjuconnect.action.START_TEST_VPN"
+        const val ACTION_STOP = "io.github.cedar17.zjuconnect.action.STOP_TEST_VPN"
     }
 
     private val executor: ExecutorService = Executors.newCachedThreadPool()

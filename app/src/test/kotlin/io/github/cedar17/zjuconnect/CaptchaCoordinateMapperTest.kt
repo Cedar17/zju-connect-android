@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
