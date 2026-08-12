@@ -38,6 +38,8 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "authenticationFailed",
     "authInfoUnavailable",
     "certificateRejected",
+    "credentialStoreUnavailable",
+    "deviceIdentityUnavailable",
     "initializationFailed",
     "invalidEvent",
     "invalidInput",

@@ -22,8 +22,8 @@ const (
 	schemaVersion                       = 1
 	authenticationSnapshotSchemaVersion = 1
 	maxAuthenticationSnapshotSize       = 64 * 1024
-	upstreamCommit                      = "7776cdcfa33e3df56ba8da438c17b2274e316128"
-	forkCommit                          = "758838e90cdf65c2543845f6d12cae27f0f9ec80"
+	upstreamCommit                      = "1b6ad138737547782dcfc09def2a950738a67188"
+	forkCommit                          = "1a736c5355b8a2bcafee7827ccf147ea38ab0a32"
 	upstreamModule                      = "github.com/mythologyli/zju-connect"
 	zjuAtrustServer                     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort                 = 443
@@ -57,8 +57,9 @@ type authInfoResponse struct {
 }
 
 type authenticationStartRequest struct {
-	Server string `json:"server"`
-	Port   int    `json:"port"`
+	Server   string `json:"server"`
+	Port     int    `json:"port"`
+	DeviceID string `json:"deviceId"`
 }
 
 type authenticationSubmission struct {
@@ -70,6 +71,7 @@ type authenticationSubmission struct {
 	Phone       string `json:"phone,omitempty"`
 	SMSCode     string `json:"smsCode,omitempty"`
 	Captcha     string `json:"captcha,omitempty"`
+	Token       string `json:"token,omitempty"`
 }
 
 type authenticationEvent struct {
@@ -78,6 +80,7 @@ type authenticationEvent struct {
 	State         string          `json:"state"`
 	Code          string          `json:"code,omitempty"`
 	Message       string          `json:"message"`
+	ChallengeKind string          `json:"challengeKind,omitempty"`
 	AuthMethods   []auth.AuthInfo `json:"authMethods,omitempty"`
 	PhoneNumbers  []string        `json:"phoneNumbers,omitempty"`
 	CaptchaWidth  int             `json:"captchaWidth,omitempty"`
@@ -100,6 +103,7 @@ type authenticationSession struct {
 	listener BridgeListener
 	server   string
 	port     int
+	deviceID string
 	busy     bool
 }
 
@@ -163,6 +167,9 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	if request.Server != zjuAtrustServer || request.Port != zjuAtrustServerPort {
 		return authError("invalidRequest", "Authentication is only available for the ZJU aTrust service")
 	}
+	if err := validateDeviceID(request.DeviceID); err != nil {
+		return authError("invalidRequest", "Authentication requires a valid device identity")
+	}
 	if listener == nil {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
@@ -172,7 +179,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 		currentAuthentication.mu.Unlock()
 		return authError("alreadyRunning", "An authentication session is already active")
 	}
-	flow, err := newAuthenticationFlow(request.Server, request.Port)
+	flow, err := newAuthenticationFlow(request.Server, request.Port, request.DeviceID)
 	if err != nil {
 		currentAuthentication.mu.Unlock()
 		return authError("initializationFailed", "Unable to initialize authentication")
@@ -181,6 +188,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	currentAuthentication.listener = listener
 	currentAuthentication.server = request.Server
 	currentAuthentication.port = request.Port
+	currentAuthentication.deviceID = request.DeviceID
 	currentAuthentication.busy = true
 	currentAuthentication.mu.Unlock()
 
@@ -232,6 +240,10 @@ func SubmitAuthentication(responseJSON string) string {
 		operation = func() (auth.InteractivePrompt, error) {
 			return flow.SubmitCaptcha(response.Captcha)
 		}
+	case "submitToken":
+		operation = func() (auth.InteractivePrompt, error) {
+			return flow.SubmitToken(response.Token)
+		}
 	default:
 		releaseAuthenticationOperation(flow)
 		return authError("invalidRequest", "Unknown authentication response")
@@ -270,6 +282,9 @@ func CancelAuthentication() {
 	listener := currentAuthentication.listener
 	currentAuthentication.flow = nil
 	currentAuthentication.listener = nil
+	currentAuthentication.server = ""
+	currentAuthentication.port = 0
+	currentAuthentication.deviceID = ""
 	currentAuthentication.busy = false
 	currentAuthentication.mu.Unlock()
 	if flow != nil {
@@ -321,11 +336,14 @@ func ExportAuthenticatedSession() []byte {
 // ResumeAuthentication validates an encrypted-at-rest snapshot after Kotlin
 // decrypts it. The flow is restricted to ZJU's endpoint and emits only safe
 // lifecycle events; snapshot values never enter callback JSON.
-func ResumeAuthentication(snapshotBytes []byte, listener BridgeListener) string {
+func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener BridgeListener) string {
 	if listener == nil {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
-	authData, err := decodeAuthenticationSnapshot(snapshotBytes)
+	if err := validateDeviceID(deviceID); err != nil {
+		return authError("invalidRequest", "Session restoration requires a valid device identity")
+	}
+	authData, err := decodeAuthenticationSnapshot(snapshotBytes, deviceID)
 	if err != nil {
 		return authError("invalidSession", "Saved authentication data is invalid")
 	}
@@ -335,7 +353,7 @@ func ResumeAuthentication(snapshotBytes []byte, listener BridgeListener) string 
 		currentAuthentication.mu.Unlock()
 		return authError("alreadyRunning", "An authentication session is already active")
 	}
-	flow, err := newAuthenticationFlow(zjuAtrustServer, zjuAtrustServerPort)
+	flow, err := newAuthenticationFlow(zjuAtrustServer, zjuAtrustServerPort, deviceID)
 	if err != nil {
 		currentAuthentication.mu.Unlock()
 		return authError("initializationFailed", "Unable to initialize session restoration")
@@ -344,6 +362,7 @@ func ResumeAuthentication(snapshotBytes []byte, listener BridgeListener) string 
 	currentAuthentication.listener = listener
 	currentAuthentication.server = zjuAtrustServer
 	currentAuthentication.port = zjuAtrustServerPort
+	currentAuthentication.deviceID = deviceID
 	currentAuthentication.busy = true
 	currentAuthentication.mu.Unlock()
 
@@ -372,7 +391,7 @@ func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
 	return json.Marshal(snapshot)
 }
 
-func decodeAuthenticationSnapshot(snapshotBytes []byte) ([]byte, error) {
+func decodeAuthenticationSnapshot(snapshotBytes []byte, deviceID string) ([]byte, error) {
 	if len(snapshotBytes) == 0 || len(snapshotBytes) > maxAuthenticationSnapshotSize {
 		return nil, fmt.Errorf("authentication snapshot size is invalid")
 	}
@@ -384,7 +403,7 @@ func decodeAuthenticationSnapshot(snapshotBytes []byte) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(auth.ClientAuthData{
-		DeviceID: snapshot.DeviceID,
+		DeviceID: deviceID,
 		Cookies:  append([]auth.Cookie(nil), snapshot.Cookies...),
 	})
 }
@@ -393,11 +412,8 @@ func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
 	if snapshot.SchemaVersion != authenticationSnapshotSchemaVersion {
 		return fmt.Errorf("unsupported authentication snapshot version")
 	}
-	if len(snapshot.DeviceID) != 32 {
-		return fmt.Errorf("device ID length is invalid")
-	}
-	if _, err := hex.DecodeString(snapshot.DeviceID); err != nil {
-		return fmt.Errorf("device ID is invalid")
+	if err := validateDeviceID(snapshot.DeviceID); err != nil {
+		return err
 	}
 	if len(snapshot.Cookies) == 0 || len(snapshot.Cookies) > 64 {
 		return fmt.Errorf("cookie count is invalid")
@@ -418,8 +434,21 @@ func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
 	return nil
 }
 
-func newAuthenticationFlow(server string, port int) (*auth.InteractiveFlow, error) {
-	return auth.NewInteractiveFlow(net.JoinHostPort(server, fmt.Sprint(port)))
+func validateDeviceID(deviceID string) error {
+	if len(deviceID) != 32 {
+		return fmt.Errorf("device ID length is invalid")
+	}
+	if _, err := hex.DecodeString(deviceID); err != nil {
+		return fmt.Errorf("device ID is invalid")
+	}
+	return nil
+}
+
+func newAuthenticationFlow(server string, port int, deviceID string) (*auth.InteractiveFlow, error) {
+	return auth.NewInteractiveFlowWithOptions(
+		net.JoinHostPort(server, fmt.Sprint(port)),
+		auth.InteractiveFlowOptions{DeviceID: deviceID, StrictTLS: true},
+	)
 }
 
 func acquireAuthenticationOperation() (*auth.InteractiveFlow, BridgeListener, bool) {
@@ -460,10 +489,31 @@ func runAuthenticationOperation(
 		emitAuthenticationEvent(listener, authenticationFailure(err))
 		return
 	}
+	runAuthenticationPrompt(flow, listener, prompt)
+}
+
+func runSessionRestore(flow *auth.InteractiveFlow, listener BridgeListener, authData []byte) {
+	defer clear(authData)
+	prompt, err := flow.Resume(authData)
+	releaseAuthenticationOperation(flow)
+	if !isCurrentAuthenticationFlow(flow, listener) {
+		return
+	}
+	if err != nil {
+		discardAuthenticationFlow(flow)
+		emitAuthenticationEvent(listener, sessionRestoreFailure(err))
+		return
+	}
+	runAuthenticationPrompt(flow, listener, prompt)
+}
+
+func runAuthenticationPrompt(flow *auth.InteractiveFlow, listener BridgeListener, prompt auth.InteractivePrompt) {
 	event := authenticationEvent{
 		SchemaVersion: schemaVersion,
 		State:         prompt.State,
+		Code:          prompt.Code,
 		Message:       prompt.Message,
+		ChallengeKind: prompt.ChallengeKind,
 		AuthMethods:   prompt.AuthMethods,
 		PhoneNumbers:  prompt.PhoneNumbers,
 		CaptchaWidth:  prompt.CaptchaWidth,
@@ -480,6 +530,8 @@ func runAuthenticationOperation(
 		event.Type = "smsRequired"
 	case "awaitingCaptcha":
 		event.Type = "captchaRequired"
+	case "awaitingToken":
+		event.Type = "tokenRequired"
 	case "authenticated":
 		event.Type = "authenticated"
 		if result, ok := flow.Result(); ok {
@@ -491,30 +543,6 @@ func runAuthenticationOperation(
 	emitAuthenticationEvent(listener, event)
 }
 
-func runSessionRestore(flow *auth.InteractiveFlow, listener BridgeListener, authData []byte) {
-	defer clear(authData)
-	prompt, err := flow.Resume(authData)
-	releaseAuthenticationOperation(flow)
-	if !isCurrentAuthenticationFlow(flow, listener) {
-		return
-	}
-	if err != nil {
-		discardAuthenticationFlow(flow)
-		emitAuthenticationEvent(listener, sessionRestoreFailure(err))
-		return
-	}
-	event := authenticationEvent{
-		SchemaVersion: schemaVersion,
-		Type:          "authenticated",
-		State:         prompt.State,
-		Message:       prompt.Message,
-	}
-	if result, ok := flow.Result(); ok {
-		event.Username = result.Username
-	}
-	emitAuthenticationEvent(listener, event)
-}
-
 func discardAuthenticationFlow(flow *auth.InteractiveFlow) {
 	currentAuthentication.mu.Lock()
 	if currentAuthentication.flow == flow {
@@ -522,6 +550,7 @@ func discardAuthenticationFlow(flow *auth.InteractiveFlow) {
 		currentAuthentication.listener = nil
 		currentAuthentication.server = ""
 		currentAuthentication.port = 0
+		currentAuthentication.deviceID = ""
 		currentAuthentication.busy = false
 	}
 	currentAuthentication.mu.Unlock()
@@ -558,7 +587,7 @@ func retryAuthentication() string {
 		return authError("invalidState", "Authentication is not ready to retry")
 	}
 	oldFlow := currentAuthentication.flow
-	flow, err := newAuthenticationFlow(currentAuthentication.server, currentAuthentication.port)
+	flow, err := newAuthenticationFlow(currentAuthentication.server, currentAuthentication.port, currentAuthentication.deviceID)
 	if err != nil {
 		currentAuthentication.mu.Unlock()
 		return authError("initializationFailed", "Unable to restart authentication")

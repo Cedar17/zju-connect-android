@@ -67,12 +67,13 @@ class GoCoreBridge {
         Core.stopRealVpn()
     }
 
-    fun startAuthentication(onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
+    fun startAuthentication(deviceID: String, onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
                 JSONObject()
                     .put("server", ZJU_ATRUST_SERVER)
                     .put("port", ZJU_ATRUST_PORT)
+                    .put("deviceId", deviceID)
                     .toString(),
                 authListener(onEvent),
             ),
@@ -80,8 +81,9 @@ class GoCoreBridge {
 
     fun resumeAuthentication(
         snapshot: ByteArray,
+        deviceID: String,
         onEvent: (GoAuthEvent) -> Unit,
-    ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, authListener(onEvent)))
+    ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, deviceID, authListener(onEvent)))
 
     fun exportAuthenticatedSession(): ByteArray = Core.exportAuthenticatedSession()
 
@@ -187,6 +189,7 @@ class GoCoreBridge {
             state = event.optString("state", "unknown"),
             code = event.optString("code", ""),
             message = event.optString("message", "Authentication response received"),
+            challengeKind = event.optString("challengeKind", ""),
             authMethods = event.optJSONArray("authMethods").toAuthMethods(),
             phoneNumbers = event.optJSONArray("phoneNumbers").toStrings(),
             captchaWidth = event.optInt("captchaWidth", 0),
@@ -383,6 +386,7 @@ data class GoAuthEvent(
     val state: String,
     val code: String,
     val message: String,
+    val challengeKind: String = "",
     val authMethods: List<GoAuthMethod> = emptyList(),
     val phoneNumbers: List<String> = emptyList(),
     val captchaWidth: Int = 0,

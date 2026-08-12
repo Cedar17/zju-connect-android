@@ -101,6 +101,37 @@ func TestStartAuthenticationValidatesEndpointWithoutNetworking(t *testing.T) {
 	}
 }
 
+func TestStartAuthenticationRequiresDeviceIdentityWithoutNetworking(t *testing.T) {
+	result := StartAuthentication(`{"server":"vpn.zju.edu.cn","port":443,"deviceId":"invalid"}`, &recordingListener{})
+	var response authInfoResponse
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "invalidRequest" {
+		t.Fatalf("code = %q, want invalidRequest", response.Code)
+	}
+}
+
+func TestAuthenticationPromptPreservesServerDrivenChallenge(t *testing.T) {
+	listener := &recordingListener{}
+	runAuthenticationPrompt(nil, listener, auth.InteractivePrompt{
+		State:         "awaitingToken",
+		Code:          "sessionExpired",
+		Message:       "token needed",
+		ChallengeKind: "auth/totp",
+	})
+	if len(listener.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(listener.events))
+	}
+	var event authenticationEvent
+	if err := json.Unmarshal([]byte(listener.events[0]), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "tokenRequired" || event.Code != "sessionExpired" || event.ChallengeKind != "auth/totp" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
 func TestAuthenticationFailureIsRedacted(t *testing.T) {
 	secret := "session-cookie-and-password"
 	event := authenticationFailure(fmt.Errorf("x509: certificate rejected: %s", secret))
@@ -145,7 +176,8 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 		}
 	}
 
-	decoded, err := decodeAuthenticationSnapshot(encoded)
+	const currentDeviceID = "11111111111111111111111111111111"
+	decoded, err := decodeAuthenticationSnapshot(encoded, currentDeviceID)
 	if err != nil {
 		t.Fatalf("decodeAuthenticationSnapshot: %v", err)
 	}
@@ -153,7 +185,7 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 	if err := json.Unmarshal(decoded, &roundTrip); err != nil {
 		t.Fatalf("Unmarshal round trip: %v", err)
 	}
-	if roundTrip.DeviceID != "ABCDEF0123456789ABCDEF0123456789" || len(roundTrip.Cookies) != 2 {
+	if roundTrip.DeviceID != currentDeviceID || len(roundTrip.Cookies) != 2 {
 		t.Fatalf("round-trip authentication data = %#v", roundTrip)
 	}
 }
@@ -187,7 +219,7 @@ func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) 
 }
 
 func TestResumeAuthenticationRejectsMalformedSnapshotWithoutNetworking(t *testing.T) {
-	result := ResumeAuthentication([]byte(`{"schemaVersion":1}`), &recordingListener{})
+	result := ResumeAuthentication([]byte(`{"schemaVersion":1}`), "0123456789abcdef0123456789abcdef", &recordingListener{})
 	var response authInfoResponse
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
 		t.Fatalf("ResumeAuthentication returned invalid JSON: %v", err)

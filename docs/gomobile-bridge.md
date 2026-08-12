@@ -11,8 +11,8 @@ The authoritative machine-readable record is
 
 | Input | Pinned value |
 | --- | --- |
-| zju-connect upstream base | **7776cdcfa33e3df56ba8da438c17b2274e316128** |
-| Android real-VPN fork | **Cedar17/zju-connect** at **758838e90cdf65c2543845f6d12cae27f0f9ec80** |
+| zju-connect upstream base | **1b6ad138737547782dcfc09def2a950738a67188** |
+| Android real-VPN fork | **Cedar17/zju-connect** at **1a736c5355b8a2bcafee7827ccf147ea38ab0a32** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -82,7 +82,7 @@ The original upstream's mobile/mobile_android.go exposes EasyConnect Login,
 Logout, and StartStack; it is not an aTrust bridge. The maintained Android fork
 adds a small in-memory aTrust state machine that preserves certificate and host
 validation and replaces its synchronous CLI interactions. The Android façade
-provides password, server-triggered SMS, and CAPTCHA state transitions as
+provides password, server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
 structured events; `StartAuthentication`, `SubmitAuthentication`,
 `GetPendingCaptchaImage`, `CancelAuthentication`, and
 `ClearAuthenticatedResult`; `ExportAuthenticatedSession` and
@@ -98,8 +98,17 @@ those bytes with Android Keystore AES-GCM and atomically stores the envelope in
 `noBackupFilesDir`. After a process restart, the user's Connect action asks Go
 to validate the restored cookies with the server and refetch username and
 resources before recreating the in-memory result. App startup itself does not
-read or validate the snapshot. An explicit `sessionInvalid` clears the
-snapshot; transport and TLS failures retain it for retry.
+read or validate the snapshot. An explicit session expiry clears only the
+cookie snapshot and continues with the same device identity; transport and TLS
+failures retain cookies and saved credentials for retry.
+
+Android derives a stable 32-character aTrust device ID from its app-scoped
+`ANDROID_ID` and supplies it to both start and resume calls. A restored legacy
+snapshot cannot replace that identity. When cookies expire, the same flow
+returns to the server-advertised authentication method instead of discarding
+the device identity. Password credentials are encrypted separately with a
+dedicated Android Keystore AES-GCM key, are written only after successful
+authentication, and are removed when the server explicitly rejects them.
 
 The bridge exposes `PrepareRealVpn()`, which prepares an
 `atrust.Client` and returns a versioned event containing only the assigned IPv4

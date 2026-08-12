@@ -29,6 +29,7 @@ enum class ConnectionPhase {
     AWAITING_CREDENTIALS,
     AWAITING_PHONE,
     AWAITING_SMS,
+    AWAITING_TOKEN,
     AWAITING_CAPTCHA,
     PREPARING_VPN_PERMISSION,
     ESTABLISHING_VPN,
@@ -52,6 +53,8 @@ data class ConnectionUiState(
     val password: String = "",
     val phone: String = "",
     val smsCode: String = "",
+    val token: String = "",
+    val challengeKind: String = "",
     val phoneNumbers: List<String> = emptyList(),
     val captchaImage: ByteArray? = null,
     val captchaWidth: Int = 0,
@@ -121,6 +124,11 @@ internal fun storedSessionFailureAction(eventType: String, code: String): Stored
         StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR
     }
 
+internal fun shouldClearSavedCredential(code: String): Boolean = code == "credentialsRejected"
+
+internal fun savedCredentialMatchesAccount(credential: StoredCredential, rememberedUsername: String): Boolean =
+    rememberedUsername.isBlank() || credential.username == rememberedUsername
+
 internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMethod? {
     methods.firstOrNull {
         it.authType == "auth/psw" && it.loginDomain == "Radius"
@@ -136,6 +144,8 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "unsupportedAuthMethod" -> "学校当前要求的登录方式暂不受支持。"
     "invalidInput", "authenticationFailed" -> "登录未完成，请检查账号、密码或验证码后重试。"
     "sessionStoreUnavailable" -> "无法读取本机保存的登录状态，请稍后重试。"
+    "credentialStoreUnavailable" -> "无法更新本机保存的登录凭据，请稍后重试。"
+    "deviceIdentityUnavailable" -> "无法读取本机设备身份，请重启设备后重试。"
     "accountSwitchClearFailed" -> "无法清除本机登录状态，请稍后重试。"
     "sessionRestoreUnavailable" -> "暂时无法验证已保存的登录状态，请检查网络后重试。"
     "authInfoUnavailable", "initializationFailed" -> "暂时无法连接学校 VPN 服务，请检查网络后重试。"
@@ -191,7 +201,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val appContext = application.applicationContext
     private val bridge = GoCoreBridge()
     private val sessionStore = AuthSessionStore(application)
+    private val credentialStore = SavedCredentialStore(application)
     private val accountStore = AccountStore(application)
+    private val deviceIdentityProvider = DeviceIdentityProvider(application)
     private val rememberedUsername = accountStore.readUsername()
     private val attempts = ConnectionAttemptTracker()
     private val _state = MutableStateFlow(
@@ -206,7 +218,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     val effects: Flow<ConnectionEffect> = effectChannel.receiveAsFlow()
 
     private var restoringStoredSession = false
-    private var hasAuthenticatedResult = false
+    private var activeDeviceID = ""
+    private var pendingCredential: StoredCredential? = null
+    private var savedCredentialAttempted = false
     private var pendingPermissionAttemptId: Long? = null
 
     init {
@@ -238,6 +252,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ConnectionPhase.AWAITING_CREDENTIALS -> submitCredentials()
             ConnectionPhase.AWAITING_PHONE -> submitPhone()
             ConnectionPhase.AWAITING_SMS -> submitSmsCode()
+            ConnectionPhase.AWAITING_TOKEN -> submitToken()
             ConnectionPhase.AWAITING_CAPTCHA -> submitCaptcha()
             ConnectionPhase.CONNECTED -> cancelConnection()
             else -> Unit
@@ -251,6 +266,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     fun updatePhone(phone: String) = _state.update { it.copy(phone = phone) }
 
     fun updateSmsCode(code: String) = _state.update { it.copy(smsCode = code) }
+
+    fun updateToken(token: String) = _state.update { it.copy(token = token) }
 
     fun addCaptchaTap(tapX: Float, tapY: Float, displayedWidth: Float, displayedHeight: Float) {
         val current = _state.value
@@ -284,7 +301,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val attemptId = attempts.invalidate()
         pendingPermissionAttemptId = null
         restoringStoredSession = false
-        hasAuthenticatedResult = false
+        pendingCredential = null
+        savedCredentialAttempted = true
+        activeDeviceID = deviceIdentityProvider.read().orEmpty()
         bridge.cancelAuthentication()
         bridge.clearAuthenticatedResult()
         _state.update(::accountSwitchPendingState)
@@ -293,8 +312,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             val cleared = try {
                 withContext(Dispatchers.IO) {
                     val sessionCleared = sessionStore.clear()
+                    val credentialCleared = credentialStore.clear()
                     val accountCleared = accountStore.clear()
-                    sessionCleared && accountCleared
+                    sessionCleared && credentialCleared && accountCleared
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -303,6 +323,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             if (!attempts.accepts(attemptId)) return@launch
             if (!cleared) {
                 showError("accountSwitchClearFailed")
+                return@launch
+            }
+            if (activeDeviceID.isEmpty()) {
+                showError("deviceIdentityUnavailable")
                 return@launch
             }
             startFreshAuthentication(attemptId)
@@ -319,6 +343,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val stopAttemptId = attempts.invalidate()
         pendingPermissionAttemptId = null
         restoringStoredSession = false
+        pendingCredential = null
 
         if (currentPhase in AUTHENTICATION_PHASES) {
             bridge.cancelAuthentication()
@@ -393,21 +418,22 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val attemptId = attempts.begin()
         pendingPermissionAttemptId = null
         restoringStoredSession = false
-        if (!hasAuthenticatedResult) {
-            bridge.cancelAuthentication()
+        pendingCredential = null
+        savedCredentialAttempted = false
+        bridge.cancelAuthentication()
+        activeDeviceID = deviceIdentityProvider.read().orEmpty()
+        if (activeDeviceID.isEmpty()) {
+            showError("deviceIdentityUnavailable")
+            return
         }
         RealVpnStateStore.reset()
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.RESTORING_SESSION,
-                statusMessage = if (hasAuthenticatedResult) "正在继续已认证会话…" else "正在检查已保存的登录状态…",
+                statusMessage = "正在检查已保存的登录状态…",
                 internalCode = "",
                 notice = "",
             )
-        }
-        if (hasAuthenticatedResult) {
-            requestVpnPermission(attemptId)
-            return
         }
         restoreStoredSessionOrAuthenticate(attemptId)
     }
@@ -445,7 +471,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 consumeAuthEvent(
                     attemptId,
-                    bridge.resumeAuthentication(snapshot) { event -> consumeAuthEvent(attemptId, event) },
+                    bridge.resumeAuthentication(snapshot, activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
                 )
             } finally {
                 snapshot.fill(0)
@@ -466,14 +492,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         consumeAuthEvent(
             attemptId,
-            bridge.startAuthentication { event -> consumeAuthEvent(attemptId, event) },
+            bridge.startAuthentication(activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
         )
     }
 
     private fun submitCredentials() {
         val current = _state.value
         if (current.username.isBlank() || current.password.isBlank()) return
-        val attemptId = attempts.activeAttemptId
+        val credential = StoredCredential(current.username, current.password)
+        pendingCredential = credential
+        submitCredential(attempts.activeAttemptId, credential)
+    }
+
+    private fun submitCredential(attemptId: Long, credential: StoredCredential) {
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
@@ -486,8 +517,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             attemptId,
             JSONObject()
                 .put("action", "submitCredentials")
-                .put("username", current.username)
-                .put("password", current.password),
+                .put("username", credential.username)
+                .put("password", credential.password),
         )
     }
 
@@ -519,6 +550,21 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
         submit(attemptId, JSONObject().put("action", "submitSmsCode").put("smsCode", code))
+    }
+
+    private fun submitToken() {
+        val token = _state.value.token
+        if (token.isBlank()) return
+        val attemptId = attempts.activeAttemptId
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.AUTHENTICATING,
+                statusMessage = "正在验证服务端要求的认证码…",
+                internalCode = "",
+                token = "",
+            )
+        }
+        submit(attemptId, JSONObject().put("action", "submitToken").put("token", token))
     }
 
     private fun submitCaptcha() {
@@ -565,15 +611,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             if (!attempts.accepts(attemptId)) return@launch
             when (event.type) {
-                "authMethodsReady" -> handleAuthMethods(attemptId, event.authMethods)
-                "credentialsRequired" -> _state.update {
-                    it.copy(
-                        phase = ConnectionPhase.AWAITING_CREDENTIALS,
-                        statusMessage = "请输入浙大上网账号和密码",
-                        internalCode = "",
-                        password = "",
-                    )
+                "authMethodsReady" -> {
+                    if (event.code == "sessionExpired") {
+                        val cleared = withContext(Dispatchers.IO) { sessionStore.clear() }
+                        if (!cleared) {
+                            showError("sessionStoreUnavailable")
+                            return@launch
+                        }
+                        _state.update { it.copy(notice = "登录状态已过期，正在重新验证。") }
+                    }
+                    restoringStoredSession = false
+                    handleAuthMethods(attemptId, event.authMethods)
                 }
+                "credentialsRequired" -> handleCredentialsRequired(attemptId, event)
                 "phoneRequired" -> _state.update {
                     it.copy(
                         phase = ConnectionPhase.AWAITING_PHONE,
@@ -588,6 +638,15 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         internalCode = "",
                         phoneNumbers = event.phoneNumbers.ifEmpty { it.phoneNumbers },
                         smsCode = "",
+                    )
+                }
+                "tokenRequired" -> _state.update {
+                    it.copy(
+                        phase = ConnectionPhase.AWAITING_TOKEN,
+                        statusMessage = tokenChallengeMessage(event.challengeKind),
+                        internalCode = "",
+                        token = "",
+                        challengeKind = event.challengeKind,
                     )
                 }
                 "captchaRequired" -> _state.update {
@@ -654,6 +713,63 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    private suspend fun handleCredentialsRequired(attemptId: Long, event: GoAuthEvent) {
+        if (!attempts.accepts(attemptId)) return
+        if (shouldClearSavedCredential(event.code)) {
+            val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
+            if (!cleared) {
+                showError("credentialStoreUnavailable")
+                return
+            }
+            pendingCredential = null
+            savedCredentialAttempted = true
+            _state.update {
+                it.copy(
+                    phase = ConnectionPhase.AWAITING_CREDENTIALS,
+                    statusMessage = "保存的密码已失效，请重新输入",
+                    internalCode = "",
+                    password = "",
+                )
+            }
+            return
+        }
+
+        if (!savedCredentialAttempted) {
+            savedCredentialAttempted = true
+            val credential = try {
+                withContext(Dispatchers.IO) { credentialStore.read() }
+            } catch (_: InvalidStoredCredential) {
+                null
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                null
+            }
+            val remembered = _state.value.rememberedUsername
+            if (credential != null && savedCredentialMatchesAccount(credential, remembered)) {
+                pendingCredential = credential
+                _state.update {
+                    it.copy(
+                        username = credential.username,
+                        phase = ConnectionPhase.AUTHENTICATING,
+                        statusMessage = "正在使用已保存的凭据重新验证…",
+                        internalCode = "",
+                    )
+                }
+                submitCredential(attemptId, credential)
+                return
+            }
+        }
+
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.AWAITING_CREDENTIALS,
+                statusMessage = "请输入浙大上网账号和密码",
+                internalCode = "",
+                password = "",
+            )
+        }
+    }
+
     private fun handleAuthMethods(attemptId: Long, methods: List<GoAuthMethod>) {
         val method = selectAutomaticAuthMethod(methods)
         if (method == null) {
@@ -683,6 +799,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE -> {
                 withContext(Dispatchers.IO) { sessionStore.clear() }
                 restoringStoredSession = false
+                savedCredentialAttempted = false
                 startFreshAuthentication(attemptId, "登录状态已过期，请重新登录。")
             }
             StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR -> {
@@ -694,6 +811,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private suspend fun persistAuthenticatedSession(attemptId: Long, event: GoAuthEvent) {
         if (!attempts.accepts(attemptId)) return
+        val credentialToSave = pendingCredential
         val snapshot = bridge.exportAuthenticatedSession()
         val sessionSaved = if (snapshot.isEmpty()) {
             false
@@ -715,11 +833,22 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             if (error is CancellationException) throw error
             false
         }
+        val credentialSaved = if (credentialToSave == null) {
+            true
+        } else {
+            try {
+                withContext(Dispatchers.IO) { credentialStore.write(credentialToSave) }
+                true
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                false
+            }
+        }
         if (!attempts.accepts(attemptId)) return
 
         restoringStoredSession = false
-        hasAuthenticatedResult = true
-        val continuation = authenticatedContinuation(sessionSaved, usernameSaved)
+        pendingCredential = null
+        val continuation = authenticatedContinuation(sessionSaved, usernameSaved && credentialSaved)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 rememberedUsername = authenticatedUsername,
@@ -816,6 +945,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun showError(code: String) {
         pendingPermissionAttemptId = null
+        pendingCredential = null
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.ERROR,
@@ -830,6 +960,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingPermissionAttemptId = null
         bridge.cancelAuthentication()
         bridge.clearAuthenticatedResult()
+        pendingCredential = null
         super.onCleared()
     }
 }
@@ -838,6 +969,8 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
     password = "",
     phone = "",
     smsCode = "",
+    token = "",
+    challengeKind = "",
     phoneNumbers = emptyList(),
     captchaImage = null,
     captchaWidth = 0,
@@ -863,10 +996,18 @@ internal fun shouldRetryAccountSwitchClear(state: ConnectionUiState): Boolean =
 
 internal fun usesScrollableHomeLayout(phase: ConnectionPhase): Boolean = phase in AUTH_INPUT_PHASES
 
+internal fun tokenChallengeMessage(challengeKind: String): String = when (challengeKind) {
+    "auth/totp" -> "请输入动态认证码"
+    "auth/radius" -> "请输入 RADIUS 认证码"
+    "auth/challenge" -> "请输入服务端挑战码"
+    else -> "请输入服务端要求的认证码"
+}
+
 private val AUTH_INPUT_PHASES = setOf(
     ConnectionPhase.AWAITING_CREDENTIALS,
     ConnectionPhase.AWAITING_PHONE,
     ConnectionPhase.AWAITING_SMS,
+    ConnectionPhase.AWAITING_TOKEN,
     ConnectionPhase.AWAITING_CAPTCHA,
 )
 

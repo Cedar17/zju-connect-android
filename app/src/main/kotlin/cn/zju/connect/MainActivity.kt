@@ -363,11 +363,6 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                     },
                     singleLine = true,
                 )
-                Text(
-                    text = "密码仅用于本次登录，不会长期保存。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
         ConnectionPhase.AWAITING_PHONE -> OutlinedTextField(
@@ -397,6 +392,13 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                 )
             }
         }
+        ConnectionPhase.AWAITING_TOKEN -> OutlinedTextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = state.token,
+            onValueChange = viewModel::updateToken,
+            label = { Text(tokenChallengeMessage(state.challengeKind)) },
+            singleLine = true,
+        )
         ConnectionPhase.AWAITING_CAPTCHA -> {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -490,6 +492,7 @@ private fun primaryActionLabel(phase: ConnectionPhase): String = when (phase) {
     ConnectionPhase.AWAITING_CREDENTIALS -> "登录并连接"
     ConnectionPhase.AWAITING_PHONE -> "发送验证码"
     ConnectionPhase.AWAITING_SMS -> "验证并连接"
+    ConnectionPhase.AWAITING_TOKEN -> "验证并连接"
     ConnectionPhase.AWAITING_CAPTCHA -> "提交并继续"
     ConnectionPhase.CONNECTED -> "断开"
     else -> "正在连接"
@@ -500,6 +503,7 @@ private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (st
     ConnectionPhase.AWAITING_CREDENTIALS -> state.username.isNotBlank() && state.password.isNotBlank()
     ConnectionPhase.AWAITING_PHONE -> state.phone.isNotBlank()
     ConnectionPhase.AWAITING_SMS -> state.smsCode.isNotBlank()
+    ConnectionPhase.AWAITING_TOKEN -> state.token.isNotBlank()
     ConnectionPhase.AWAITING_CAPTCHA -> state.captchaPoints.isNotEmpty()
     else -> false
 }
@@ -520,6 +524,7 @@ private fun canCancelConnection(phase: ConnectionPhase): Boolean = phase in setO
     ConnectionPhase.AWAITING_CREDENTIALS,
     ConnectionPhase.AWAITING_PHONE,
     ConnectionPhase.AWAITING_SMS,
+    ConnectionPhase.AWAITING_TOKEN,
     ConnectionPhase.AWAITING_CAPTCHA,
     ConnectionPhase.PREPARING_VPN_PERMISSION,
     ConnectionPhase.ESTABLISHING_VPN,
