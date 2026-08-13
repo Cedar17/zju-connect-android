@@ -130,6 +130,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshBackgroundProtection()
+        if (backgroundProtectionState.value.notificationsEnabled) {
+            RealVpnService.refreshNotificationIfRunning()
+        }
     }
 
     private fun requestBackgroundProtection() {

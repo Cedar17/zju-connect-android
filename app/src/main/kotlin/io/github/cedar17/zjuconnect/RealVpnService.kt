@@ -38,6 +38,13 @@ class RealVpnService : VpnService() {
     companion object {
         const val ACTION_START = "io.github.cedar17.zjuconnect.action.START_REAL_VPN"
         const val ACTION_STOP = "io.github.cedar17.zjuconnect.action.STOP_REAL_VPN"
+
+        @Volatile
+        private var runningInstance: RealVpnService? = null
+
+        fun refreshNotificationIfRunning() {
+            runningInstance?.refreshCurrentNotification()
+        }
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -51,6 +58,8 @@ class RealVpnService : VpnService() {
     private val recoveryCoordinator = RealVpnRecoveryCoordinator()
     private lateinit var underlayNetworkMonitor: UnderlayNetworkMonitor
     private var underlayMonitorFailure: Throwable? = null
+    @Volatile
+    private var currentNotificationKind = RealVpnNotificationKind.CONNECTING
     private var recoveryDebounce: ScheduledFuture<*>? = null
     private var l3RecoveryActive = false
     private var publishedRecoveryPresentation = RealVpnRecoveryPresentation.NONE
@@ -124,6 +133,7 @@ class RealVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        runningInstance = this
         createNotificationChannel()
         underlayNetworkMonitor = UnderlayNetworkMonitor(applicationContext, ::onUnderlayNetworkChanged)
         runCatching { underlayNetworkMonitor.start() }
@@ -149,6 +159,9 @@ class RealVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        if (runningInstance === this) {
+            runningInstance = null
+        }
         val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
         terminateRecovery()
         if (::underlayNetworkMonitor.isInitialized) {
@@ -550,6 +563,7 @@ class RealVpnService : VpnService() {
     }
 
     private fun startForegroundCompat(kind: RealVpnNotificationKind) {
+        currentNotificationKind = kind
         val notification = buildVpnNotification(kind)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -605,6 +619,12 @@ class RealVpnService : VpnService() {
 
     private fun updateForegroundNotification(kind: RealVpnNotificationKind) {
         startForegroundCompat(kind)
+    }
+
+    private fun refreshCurrentNotification() {
+        if (synchronized(stateLock) { lifecycle.acceptsProgress() }) {
+            updateForegroundNotification(currentNotificationKind)
+        }
     }
 
     private fun publishTerminalFailureNotification(outcome: RealVpnTerminalOutcome) {
