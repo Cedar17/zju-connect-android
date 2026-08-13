@@ -1,9 +1,12 @@
 package io.github.cedar17.zjuconnect
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
@@ -11,6 +14,7 @@ import android.net.VpnService
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
 import java.net.Inet4Address
 import java.util.concurrent.ExecutorService
@@ -105,7 +109,7 @@ class RealVpnService : VpnService() {
             if (acceptsProgress) {
                 RealVpnStateStore.update(event)
                 if (event.state == "active") {
-                    updateForegroundNotification("ZJU aTrust VPN is active")
+                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
                     val commands = synchronized(recoveryLock) {
                         l3RecoveryActive = false
                         recoveryCoordinator.onSessionActive(underlaySnapshot())
@@ -221,7 +225,11 @@ class RealVpnService : VpnService() {
                 )
             }
             startForegroundCompat(
-                if (recovering) "Network changed; reconnecting VPN" else "ZJU aTrust VPN is active",
+                if (recovering) {
+                    RealVpnNotificationKind.RECOVERING
+                } else {
+                    RealVpnNotificationKind.CONNECTING
+                },
             )
             val config = goCoreBridge.prepareRealVpn()
             Log.i(
@@ -348,7 +356,10 @@ class RealVpnService : VpnService() {
         goCoreBridge.stopRealVpn()
         stopForegroundCompat()
         when (val outcome = synchronized(stateLock) { lifecycle.terminalOutcome() }) {
-            is RealVpnTerminalOutcome.Error -> publishFailure("stopInternal", outcome.failure)
+            is RealVpnTerminalOutcome.Error -> {
+                publishFailure("stopInternal", outcome.failure)
+                publishTerminalFailureNotification(outcome)
+            }
             RealVpnTerminalOutcome.Stopped -> setStatus("stopped", "Real aTrust VPN is stopped")
             null -> Unit
         }
@@ -462,16 +473,16 @@ class RealVpnService : VpnService() {
             RealVpnRecoveryPresentation.NONE -> {
                 if (previous != RealVpnRecoveryPresentation.NONE && acceptsStartProgress()) {
                     setStatus("active", "ZJU aTrust VPN is active")
-                    updateForegroundNotification("ZJU aTrust VPN is active")
+                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
                 }
             }
             RealVpnRecoveryPresentation.RECOVERING -> {
                 setStatus("recovering", "The VPN data connection is recovering")
-                updateForegroundNotification("The VPN data connection is recovering")
+                updateForegroundNotification(RealVpnNotificationKind.RECOVERING)
             }
             RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
                 setStatus("waitingForNetwork", "Waiting for an underlying network")
-                updateForegroundNotification("Waiting for an underlying network")
+                updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
             }
         }
     }
@@ -528,19 +539,18 @@ class RealVpnService : VpnService() {
                 REAL_VPN_CHANNEL,
                 "ZJU Connect VPN",
                 NotificationManager.IMPORTANCE_LOW,
-            )
+            ).apply {
+                description = "显示 VPN 连接状态和断开入口"
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun startForegroundCompat(contentText: String) {
-        val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle("ZJU Connect")
-            .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .build()
+    private fun startForegroundCompat(kind: RealVpnNotificationKind) {
+        val notification = buildVpnNotification(kind)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -553,11 +563,65 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun updateForegroundNotification(contentText: String) {
-        // Re-post through the already-running foreground service instead of
-        // NotificationManager.notify(), which would require POST_NOTIFICATIONS
-        // on Android 13+ and is not needed for the VPN lifecycle notification.
-        startForegroundCompat(contentText)
+    private fun buildVpnNotification(kind: RealVpnNotificationKind): Notification {
+        val content = realVpnNotificationContent(kind)
+        val builder = Notification.Builder(this, REAL_VPN_CHANNEL)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
+            .setSmallIcon(R.drawable.ic_stat_cedar)
+            .setContentIntent(openAppPendingIntent())
+            .setOngoing(content.ongoing)
+            .setAutoCancel(!content.ongoing)
+            .setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setCategory(Notification.CATEGORY_SERVICE)
+        if (content.ongoing) {
+            builder.addAction(
+                Notification.Action.Builder(
+                    null,
+                    "断开",
+                    disconnectPendingIntent(),
+                ).build(),
+            )
+        }
+        return builder.build()
+    }
+
+    private fun openAppPendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun disconnectPendingIntent(): PendingIntent = PendingIntent.getService(
+        this,
+        1,
+        Intent(this, RealVpnService::class.java).setAction(ACTION_STOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun updateForegroundNotification(kind: RealVpnNotificationKind) {
+        startForegroundCompat(kind)
+    }
+
+    private fun publishTerminalFailureNotification(outcome: RealVpnTerminalOutcome) {
+        val notificationsEnabled = notificationsEnabled()
+        if (!shouldPublishTerminalVpnNotification(outcome, notificationsEnabled)) return
+        getSystemService(NotificationManager::class.java).notify(
+            REAL_VPN_NOTIFICATION_ID,
+            buildVpnNotification(RealVpnNotificationKind.TERMINAL_FAILURE),
+        )
+    }
+
+    private fun notificationsEnabled(): Boolean {
+        val runtimePermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        return runtimePermissionGranted &&
+            getSystemService(NotificationManager::class.java).areNotificationsEnabled()
     }
 
     private fun stopForegroundCompat() {
