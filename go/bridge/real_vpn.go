@@ -319,9 +319,8 @@ func safeRunRealVpnStack(session *realVpnSession) (failure *realVpnFailure) {
 	return runRealVpnStack(session)
 }
 
-// runRealVpnStack is the Android TUN loop. aTrust's L3 writer returns
-// ErrResourceNotFound for packets outside the server-advertised resources;
-// those packets must be dropped, not treated as a fatal VPN failure.
+// runRealVpnStack is the Android TUN loop. Resource misses and packets rejected
+// while the L3 transport recovers are dropped without ending the Android VPN.
 func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	l3Conn, err := session.client.NewL3Conn()
 	if err != nil {
@@ -333,13 +332,47 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	}
 	session.l3Conn = l3Conn
 
-	failureCh := make(chan *realVpnFailure, 2)
+	failureCh := make(chan *realVpnFailure, 1)
+	var failureOnce sync.Once
+	reportFailure := func(failure *realVpnFailure) {
+		failureOnce.Do(func() { failureCh <- failure })
+	}
+	if eventSource, ok := l3Conn.(interface {
+		Events() <-chan atrust.L3TunnelEvent
+	}); ok {
+		go func() {
+			for event := range eventSource.Events() {
+				switch event.State {
+				case atrust.L3TunnelStateRecovering:
+					emitRealVpnState(
+						session.listener,
+						"recovering",
+						"l3Reconnecting",
+						"dataplane.l3.reconnect",
+						"The aTrust data connection is recovering",
+						session,
+					)
+				case atrust.L3TunnelStateActive:
+					emitRealVpnState(
+						session.listener,
+						"active",
+						"",
+						"dataplane.l3.recovered",
+						"The aTrust data connection recovered",
+						session,
+					)
+				case atrust.L3TunnelStateFailed:
+					reportFailure(realVpnFailureFromL3Event(event))
+				}
+			}
+		}()
+	}
 	go func() {
 		buf := make([]byte, realVpnMTU)
 		for {
 			n, readErr := session.tun.Read(buf)
 			if readErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnTunReadFailed", stage: "dataplane.tun.read", message: "Unable to read the Android VPN interface"}
+				reportFailure(&realVpnFailure{code: "vpnTunReadFailed", stage: "dataplane.tun.read", message: "Unable to read the Android VPN interface"})
 				return
 			}
 			if n == 0 {
@@ -358,17 +391,21 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 
 			session.diagnostics.l3WriteAttempts.Add(1)
 			if _, writeErr := l3Conn.Write(packet); writeErr != nil {
+				if errors.Is(writeErr, atrust.ErrL3TunnelRecovering) {
+					emitRealVpnObservation(session, "dataplane.l3.write", "l3Recovering", packet)
+					continue
+				}
 				if errors.Is(writeErr, client.ErrResourceNotFound) {
 					session.diagnostics.resourceDrops.Add(1)
 					emitRealVpnObservation(session, "dataplane.l3.write", "resourceNotFound", packet)
 					continue
 				}
-				failureCh <- &realVpnFailure{
+				reportFailure(&realVpnFailure{
 					code:    "vpnPacketForwardFailed",
 					stage:   "dataplane.l3.write",
 					cause:   classifyL3WriteError(writeErr),
 					message: "The aTrust data connection rejected a VPN packet",
-				}
+				})
 				return
 			}
 			session.diagnostics.l3WriteSuccesses.Add(1)
@@ -381,7 +418,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 		for {
 			n, readErr := l3Conn.Read(buf)
 			if readErr != nil {
-				failureCh <- &realVpnFailure{code: "vpnServerReadFailed", stage: "dataplane.l3.read", message: "The aTrust data connection closed unexpectedly"}
+				reportFailure(&realVpnFailure{code: "vpnServerReadFailed", stage: "dataplane.l3.read", message: "The aTrust data connection closed unexpectedly"})
 				return
 			}
 			if n == 0 {
@@ -404,12 +441,12 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 
 			session.diagnostics.tunWriteAttempts.Add(1)
 			if _, writeErr := session.tun.Write(packet); writeErr != nil {
-				failureCh <- &realVpnFailure{
+				reportFailure(&realVpnFailure{
 					code:    "vpnTunWriteFailed",
 					stage:   "dataplane.tun.write",
 					cause:   classifyTunWriteError(writeErr),
 					message: "Unable to write aTrust data to the Android VPN interface",
-				}
+				})
 				return
 			}
 			session.diagnostics.tunWriteSuccesses.Add(1)
@@ -419,6 +456,25 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	}()
 
 	return <-failureCh
+}
+
+func realVpnFailureFromL3Event(event atrust.L3TunnelEvent) *realVpnFailure {
+	switch event.Failure {
+	case atrust.L3TunnelFailureAuthentication:
+		return &realVpnFailure{
+			code:    "vpnSessionInvalid",
+			stage:   "dataplane.l3.reconnect",
+			cause:   "authentication",
+			message: "The authenticated VPN session is no longer valid",
+		}
+	default:
+		return &realVpnFailure{
+			code:    "vpnConfigurationUnavailable",
+			stage:   "dataplane.l3.reconnect",
+			cause:   "configuration",
+			message: "The aTrust data connection configuration is unavailable",
+		}
+	}
 }
 
 func clearActiveRealVpn(session *realVpnSession) {

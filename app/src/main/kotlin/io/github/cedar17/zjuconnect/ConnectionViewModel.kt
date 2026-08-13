@@ -33,6 +33,7 @@ enum class ConnectionPhase {
     AWAITING_CAPTCHA,
     PREPARING_VPN_PERMISSION,
     ESTABLISHING_VPN,
+    RECOVERING_VPN,
     CONNECTED,
     DISCONNECTING,
     ERROR,
@@ -140,6 +141,8 @@ internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMetho
 
 internal fun connectionErrorMessage(code: String): String = when (code) {
     "vpnPermissionDenied" -> "需要授予系统 VPN 权限才能连接。"
+    "vpnSessionInvalid" -> "登录状态已失效，请重新连接。"
+    "vpnConfigurationUnavailable" -> "学校 VPN 暂时没有提供可用配置，请稍后重试。"
     "certificateRejected" -> "无法验证学校 VPN 服务器，请检查系统时间和当前网络后重试。"
     "unsupportedAuthMethod" -> "学校当前要求的登录方式暂不受支持。"
     "invalidInput", "authenticationFailed" -> "登录未完成，请检查账号、密码或验证码后重试。"
@@ -153,7 +156,7 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "vpnStopDispatchFailed" -> "未能发送断开请求，请稍后重试。"
     "vpnStartDispatchFailed" -> "未能启动 VPN 服务，请稍后重试。"
     "networkMonitorUnavailable" -> "Android 无法监测当前网络，请重新连接。"
-    "vpnSetupFailed", "vpnConfigurationUnavailable", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
+    "vpnSetupFailed", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
         "学校 VPN 暂时无法完成连接，请稍后重试。"
     "tunEstablishFailed", "tunEstablishTimeout", "tunInitializationFailed" ->
         "Android 无法建立 VPN 接口，请稍后重试。"
@@ -240,7 +243,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun onPrimaryAction() {
-        when (_state.value.phase) {
+        val phase = _state.value.phase
+        if (isVpnDisconnectablePhase(phase)) {
+            cancelConnection()
+            return
+        }
+        when (phase) {
             ConnectionPhase.DISCONNECTED -> beginConnection()
             ConnectionPhase.ERROR -> {
                 if (_state.value.internalCode == "accountSwitchClearFailed") {
@@ -254,7 +262,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ConnectionPhase.AWAITING_SMS -> submitSmsCode()
             ConnectionPhase.AWAITING_TOKEN -> submitToken()
             ConnectionPhase.AWAITING_CAPTCHA -> submitCaptcha()
-            ConnectionPhase.CONNECTED -> cancelConnection()
             else -> Unit
         }
     }
@@ -337,6 +344,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val currentPhase = _state.value.phase
         val vpnMayBeRunning = currentPhase in setOf(
             ConnectionPhase.ESTABLISHING_VPN,
+            ConnectionPhase.RECOVERING_VPN,
             ConnectionPhase.CONNECTED,
             ConnectionPhase.DISCONNECTING,
         )
@@ -891,8 +899,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
                     _state.update {
                         it.copy(
-                            phase = ConnectionPhase.ESTABLISHING_VPN,
-                            statusMessage = "网络已切换，正在恢复 VPN…",
+                            phase = ConnectionPhase.RECOVERING_VPN,
+                            statusMessage = "正在恢复 VPN…",
                             internalCode = "",
                         )
                     }
@@ -902,7 +910,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
                     _state.update {
                         it.copy(
-                            phase = ConnectionPhase.ESTABLISHING_VPN,
+                            phase = ConnectionPhase.RECOVERING_VPN,
                             statusMessage = "正在等待可用网络…",
                             internalCode = "",
                         )
@@ -981,6 +989,9 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
 internal fun canSwitchAccount(state: ConnectionUiState): Boolean =
     state.phase == ConnectionPhase.DISCONNECTED && state.rememberedUsername.isNotBlank()
 
+internal fun isVpnDisconnectablePhase(phase: ConnectionPhase): Boolean =
+    phase == ConnectionPhase.RECOVERING_VPN || phase == ConnectionPhase.CONNECTED
+
 internal fun accountSwitchPendingState(state: ConnectionUiState): ConnectionUiState =
     state.withoutSensitiveInputs().copy(
         phase = ConnectionPhase.FETCHING_AUTH_METHODS,
@@ -1020,6 +1031,7 @@ private val AUTHENTICATION_PHASES = setOf(
 private val VPN_PHASES = setOf(
     ConnectionPhase.PREPARING_VPN_PERMISSION,
     ConnectionPhase.ESTABLISHING_VPN,
+    ConnectionPhase.RECOVERING_VPN,
     ConnectionPhase.CONNECTED,
     ConnectionPhase.DISCONNECTING,
 )

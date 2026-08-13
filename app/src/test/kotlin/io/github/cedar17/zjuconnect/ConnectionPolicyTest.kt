@@ -8,6 +8,13 @@ import org.junit.Test
 
 class ConnectionPolicyTest {
     @Test
+    fun recoveryAndConnectedPhasesUseTheDisconnectAction() {
+        assertTrue(isVpnDisconnectablePhase(ConnectionPhase.RECOVERING_VPN))
+        assertTrue(isVpnDisconnectablePhase(ConnectionPhase.CONNECTED))
+        assertFalse(isVpnDisconnectablePhase(ConnectionPhase.ESTABLISHING_VPN))
+    }
+
+    @Test
     fun initialStateIsDisconnectedWithoutStartingAConnection() {
         val state = ConnectionUiState(
             rememberedUsername = "student",

@@ -43,17 +43,26 @@ class RealVpnService : VpnService() {
     private val stateLock = Any()
     private val recoveryLock = Any()
     private val lifecycle = RealVpnLifecycle()
+    private val bridgeSessionTracker = RealVpnBridgeSessionTracker()
     private val recoveryCoordinator = RealVpnRecoveryCoordinator()
     private lateinit var underlayNetworkMonitor: UnderlayNetworkMonitor
     private var underlayMonitorFailure: Throwable? = null
     private var recoveryDebounce: ScheduledFuture<*>? = null
+    private var l3RecoveryActive = false
     private var publishedRecoveryPresentation = RealVpnRecoveryPresentation.NONE
 
     private val socketProtector = object : SocketProtector {
         override fun protect(socketFd: Long): Boolean = this@RealVpnService.protect(socketFd.toInt())
     }
 
-    private val goListener: (GoVpnEvent) -> Unit = { event ->
+    private fun goListener(generation: Long): (GoVpnEvent) -> Unit = listener@{ event ->
+        if (!synchronized(stateLock) { bridgeSessionTracker.accepts(generation) }) {
+            Log.i(
+                REAL_VPN_LOG_TAG,
+                "ignored stale bridge callback generation=$generation state=${event.state}",
+            )
+            return@listener
+        }
         RedactedDiagnostics.recordVpnEvent(applicationContext, event)
         Log.i(
             REAL_VPN_LOG_TAG,
@@ -61,11 +70,12 @@ class RealVpnService : VpnService() {
                 "stage=${event.stage.ifBlank { "none" }} cause=${event.cause.ifBlank { "none" }}",
         )
         realVpnDiagnosticLog(event)?.let { Log.i(REAL_VPN_LOG_TAG, it) }
-        if (event.state == "diagnostic") {
+        val eventKind = classifyRealVpnBridgeEvent(event)
+        if (eventKind == RealVpnBridgeEventKind.DIAGNOSTIC) {
             // Diagnostic observations must never replace the user-visible
             // lifecycle state (for example, active) in the Compose store.
             Unit
-        } else if (event.state == "error") {
+        } else if (eventKind == RealVpnBridgeEventKind.TERMINAL_ERROR) {
             val failure = synchronized(stateLock) {
                 lifecycle.recordFailure(event.code, realVpnErrorMessage(event))
             }
@@ -76,7 +86,19 @@ class RealVpnService : VpnService() {
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored bridge error after user stop")
             }
-        } else if (event.state != "active" && isRecoveryInProgress()) {
+        } else if (eventKind == RealVpnBridgeEventKind.L3_RECOVERING) {
+            val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
+            if (acceptsProgress) {
+                synchronized(recoveryLock) { l3RecoveryActive = true }
+                publishRecoveryPresentation()
+            }
+        } else if (eventKind == RealVpnBridgeEventKind.L3_RECOVERED) {
+            val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
+            if (acceptsProgress) {
+                synchronized(recoveryLock) { l3RecoveryActive = false }
+                publishRecoveryPresentation()
+            }
+        } else if (event.state != "active" && isUnderlayRecoveryInProgress()) {
             Log.i(REAL_VPN_LOG_TAG, "ignored intentional recovery ${event.state} callback")
         } else {
             val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
@@ -85,6 +107,7 @@ class RealVpnService : VpnService() {
                 if (event.state == "active") {
                     updateForegroundNotification("ZJU aTrust VPN is active")
                     val commands = synchronized(recoveryLock) {
+                        l3RecoveryActive = false
                         recoveryCoordinator.onSessionActive(underlaySnapshot())
                     }
                     handleRecoveryCommands(commands)
@@ -122,11 +145,11 @@ class RealVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
         terminateRecovery()
         if (::underlayNetworkMonitor.isInitialized) {
             underlayNetworkMonitor.stop()
         }
-        val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
         if (failure != null) {
             publishFailure("onDestroy", failure)
         }
@@ -144,12 +167,12 @@ class RealVpnService : VpnService() {
     }
 
     private fun requestStop(userInitiated: Boolean = false) {
-        terminateRecovery()
         synchronized(stateLock) {
             if (userInitiated) {
                 lifecycle.requestUserStop()
             }
         }
+        terminateRecovery()
         if (!cleanupExecutor.isShutdown) {
             cleanupExecutor.execute { stopInternal() }
         } else {
@@ -158,13 +181,16 @@ class RealVpnService : VpnService() {
     }
 
     private fun startInternal() {
-        val started = synchronized(stateLock) { lifecycle.beginSession() }
-        if (!started) {
+        val generation = synchronized(stateLock) {
+            if (lifecycle.beginSession()) bridgeSessionTracker.beginSession() else null
+        }
+        if (generation == null) {
             Log.i(REAL_VPN_LOG_TAG, "ignored duplicate start request")
             return
         }
 
         val canStart = synchronized(recoveryLock) {
+            l3RecoveryActive = false
             recoveryCoordinator.beginSession(underlaySnapshot())
         }
         if (!canStart) {
@@ -268,7 +294,7 @@ class RealVpnService : VpnService() {
                 return
             }
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.begin")
-            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener)
+            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener(generation))
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.complete")
             detachedTunFd = null
         } catch (error: Throwable) {
@@ -400,7 +426,10 @@ class RealVpnService : VpnService() {
     }
 
     private fun terminateRecovery() {
-        val commands = synchronized(recoveryLock) { recoveryCoordinator.terminate() }
+        val commands = synchronized(recoveryLock) {
+            l3RecoveryActive = false
+            recoveryCoordinator.terminate()
+        }
         handleRecoveryCommands(commands)
     }
 
@@ -408,7 +437,7 @@ class RealVpnService : VpnService() {
         recoveryCoordinator.isStoppingForRecovery
     }
 
-    private fun isRecoveryInProgress(): Boolean = synchronized(recoveryLock) {
+    private fun isUnderlayRecoveryInProgress(): Boolean = synchronized(recoveryLock) {
         recoveryCoordinator.presentation != RealVpnRecoveryPresentation.NONE
     }
 
@@ -420,14 +449,25 @@ class RealVpnService : VpnService() {
         }
 
     private fun publishRecoveryPresentation() {
-        val presentation = synchronized(recoveryLock) { recoveryCoordinator.presentation }
+        val presentation = synchronized(recoveryLock) {
+            combinedRealVpnRecoveryPresentation(
+                underlay = recoveryCoordinator.presentation,
+                l3Recovering = l3RecoveryActive,
+            )
+        }
         if (presentation == publishedRecoveryPresentation) return
+        val previous = publishedRecoveryPresentation
         publishedRecoveryPresentation = presentation
         when (presentation) {
-            RealVpnRecoveryPresentation.NONE -> Unit
+            RealVpnRecoveryPresentation.NONE -> {
+                if (previous != RealVpnRecoveryPresentation.NONE && acceptsStartProgress()) {
+                    setStatus("active", "ZJU aTrust VPN is active")
+                    updateForegroundNotification("ZJU aTrust VPN is active")
+                }
+            }
             RealVpnRecoveryPresentation.RECOVERING -> {
-                setStatus("recovering", "Network changed; reconnecting VPN")
-                updateForegroundNotification("Network changed; reconnecting VPN")
+                setStatus("recovering", "The VPN data connection is recovering")
+                updateForegroundNotification("The VPN data connection is recovering")
             }
             RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
                 setStatus("waitingForNetwork", "Waiting for an underlying network")

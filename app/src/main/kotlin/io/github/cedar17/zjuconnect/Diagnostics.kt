@@ -44,6 +44,7 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "invalidEvent",
     "invalidInput",
     "invalidSession",
+    "l3Reconnecting",
     "networkMonitorUnavailable",
     "sessionInvalid",
     "sessionRestoreUnavailable",
@@ -57,6 +58,8 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "vpnAddressUnavailable",
     "vpnConfigurationUnavailable",
     "vpnPermissionDenied",
+    "vpnSessionInvalid",
+    "vpnPacketForwardFailed",
     "vpnRevoked",
     "vpnRoutesUnavailable",
     "vpnServerReadFailed",
@@ -69,10 +72,13 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "vpnTunWriteFailed",
 )
 private val SAFE_DIAGNOSTIC_CAUSES = setOf(
+    "authentication",
+    "configuration",
     "connectionClosed",
     "fdClosed",
     "invalidPacket",
     "io",
+    "l3Recovering",
     "packetTooLarge",
     "timeout",
     "tunUnavailable",
@@ -237,6 +243,7 @@ internal fun diagnosticStateLabel(event: RedactedDiagnosticEvent): String = when
         "awaiting_captcha" -> "等待图形验证码"
         "preparing_vpn_permission" -> "准备 VPN 权限"
         "establishing_vpn" -> "建立 VPN"
+        "recovering_vpn" -> "恢复 VPN"
         "connected" -> "已连接"
         "disconnecting" -> "断开中"
         "error" -> "连接错误"

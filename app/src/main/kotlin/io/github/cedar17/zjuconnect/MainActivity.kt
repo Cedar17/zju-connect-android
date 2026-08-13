@@ -469,6 +469,7 @@ private fun CaptchaChallenge(state: ConnectionUiState, viewModel: ConnectionView
 
 private fun connectionTitle(phase: ConnectionPhase): String = when (phase) {
     ConnectionPhase.CONNECTED -> "已连接"
+    ConnectionPhase.RECOVERING_VPN -> "正在恢复"
     ConnectionPhase.ERROR -> "连接遇到问题"
     ConnectionPhase.DISCONNECTED -> "未连接"
     ConnectionPhase.DISCONNECTING -> "正在断开"
@@ -494,12 +495,16 @@ private fun primaryActionLabel(phase: ConnectionPhase): String = when (phase) {
     ConnectionPhase.AWAITING_SMS -> "验证并连接"
     ConnectionPhase.AWAITING_TOKEN -> "验证并连接"
     ConnectionPhase.AWAITING_CAPTCHA -> "提交并继续"
+    ConnectionPhase.RECOVERING_VPN,
     ConnectionPhase.CONNECTED -> "断开"
     else -> "正在连接"
 }
 
 private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (state.phase) {
-    ConnectionPhase.DISCONNECTED, ConnectionPhase.ERROR, ConnectionPhase.CONNECTED -> true
+    ConnectionPhase.DISCONNECTED,
+    ConnectionPhase.ERROR,
+    ConnectionPhase.RECOVERING_VPN,
+    ConnectionPhase.CONNECTED -> true
     ConnectionPhase.AWAITING_CREDENTIALS -> state.username.isNotBlank() && state.password.isNotBlank()
     ConnectionPhase.AWAITING_PHONE -> state.phone.isNotBlank()
     ConnectionPhase.AWAITING_SMS -> state.smsCode.isNotBlank()

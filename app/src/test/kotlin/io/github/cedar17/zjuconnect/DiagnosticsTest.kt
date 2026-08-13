@@ -222,4 +222,30 @@ class DiagnosticsTest {
         assertEquals("服务恢复中", diagnosticStateLabel(recovering))
         assertEquals("服务等待网络", diagnosticStateLabel(waiting))
     }
+
+    @Test
+    fun l3RecoveryCodesAndFailureCategoriesRemainSafeAndVisible() {
+        val recovering = RedactedDiagnosticEvent(
+            timestampMillis = 1,
+            category = "vpn",
+            state = "recovering",
+            code = "l3Reconnecting",
+            stage = "dataplane.l3.reconnect",
+            cause = "l3Recovering",
+        ).redacted()
+        val failed = RedactedDiagnosticEvent(
+            timestampMillis = 2,
+            category = "vpn",
+            state = "error",
+            code = "vpnSessionInvalid",
+            stage = "dataplane.l3.reconnect",
+            cause = "authentication",
+        ).redacted()
+
+        assertEquals("l3Reconnecting", recovering.code)
+        assertEquals("l3Recovering", recovering.cause)
+        assertEquals("vpnSessionInvalid", failed.code)
+        assertEquals("authentication", failed.cause)
+        assertEquals("dataplane", failed.stage)
+    }
 }
