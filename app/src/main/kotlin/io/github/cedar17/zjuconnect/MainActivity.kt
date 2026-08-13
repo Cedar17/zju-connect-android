@@ -2,16 +2,12 @@ package io.github.cedar17.zjuconnect
 
 import android.Manifest
 import android.app.Activity
-import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.VpnService
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -74,15 +70,15 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
-private const val BACKGROUND_PROTECTION_PREFERENCES = "background_protection"
+private const val NOTIFICATION_PREFERENCES = "notification_preferences"
 private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
-    private val backgroundProtectionState = mutableStateOf(BackgroundProtectionState())
-    private val backgroundProtectionPreferences by lazy {
-        getSharedPreferences(BACKGROUND_PROTECTION_PREFERENCES, MODE_PRIVATE)
+    private val notificationPreferences by lazy {
+        getSharedPreferences(NOTIFICATION_PREFERENCES, MODE_PRIVATE)
     }
+    private var pendingVpnStart: ConnectionEffect.StartVpnService? = null
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -91,28 +87,16 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            refreshBackgroundProtection()
-            requestBatteryProtectionIfNeeded()
-        }
-
-    private val notificationSettingsLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            refreshBackgroundProtection()
-            requestBatteryProtectionIfNeeded()
-        }
-
-    private val batterySettingsLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            refreshBackgroundProtection()
+            val pendingStart = pendingVpnStart
+            pendingVpnStart = null
+            pendingStart?.let(::startVpnService)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        refreshBackgroundProtection()
         enableEdgeToEdge()
         setContent {
             val state by connectionViewModel.state.collectAsState()
-            val protection by backgroundProtectionState
             LaunchedEffect(connectionViewModel) {
                 connectionViewModel.effects.collect(::handleConnectionEffect)
             }
@@ -120,8 +104,6 @@ class MainActivity : ComponentActivity() {
                 ZjuConnectApp(
                     state = state,
                     viewModel = connectionViewModel,
-                    backgroundProtection = protection,
-                    onEnableBackgroundProtection = ::requestBackgroundProtection,
                 )
             }
         }
@@ -129,75 +111,40 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshBackgroundProtection()
-        if (backgroundProtectionState.value.notificationsEnabled) {
-            RealVpnService.refreshNotificationIfRunning()
-        }
+        RealVpnService.refreshNotificationIfRunning()
     }
 
-    private fun requestBackgroundProtection() {
-        refreshBackgroundProtection()
-        if (!backgroundProtectionState.value.notificationsEnabled) {
-            requestNotificationProtection()
+    private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        if (shouldRequestNotificationPermission()) {
+            pendingVpnStart = effect
+            notificationPreferences.edit()
+                .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
+                .apply()
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            requestBatteryProtectionIfNeeded()
+            startVpnService(effect)
         }
     }
 
-    private fun requestNotificationProtection() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+    private fun shouldRequestNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            val previouslyRequested = backgroundProtectionPreferences.getBoolean(
-                NOTIFICATION_PERMISSION_REQUESTED,
-                false,
+            PackageManager.PERMISSION_GRANTED &&
+            !notificationPreferences.getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)
+
+    private fun startVpnService(effect: ConnectionEffect.StartVpnService) {
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        runCatching {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, RealVpnService::class.java)
+                    .setAction(RealVpnService.ACTION_START),
             )
-            if (!previouslyRequested || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
-                backgroundProtectionPreferences.edit()
-                    .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
-                    .apply()
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                notificationSettingsLauncher.launch(appNotificationSettingsIntent())
-            }
-            return
+        }.onFailure { error ->
+            Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
+            connectionViewModel.onVpnServiceDispatchFailed(effect)
         }
-        notificationSettingsLauncher.launch(appNotificationSettingsIntent())
-    }
-
-    private fun requestBatteryProtectionIfNeeded() {
-        refreshBackgroundProtection()
-        if (backgroundProtectionState.value.batteryOptimizationIgnored) return
-
-        val packageUri = Uri.parse("package:$packageName")
-        val intent = listOf(
-            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri),
-            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri),
-        ).firstOrNull { candidate -> candidate.resolveActivity(packageManager) != null }
-        if (intent == null) {
-            Log.w(MAIN_ACTIVITY_LOG_TAG, "No battery optimization settings activity is available")
-            return
-        }
-        runCatching { batterySettingsLauncher.launch(intent) }
-            .onFailure { Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to open battery optimization settings", it) }
-    }
-
-    private fun appNotificationSettingsIntent(): Intent =
-        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-
-    private fun refreshBackgroundProtection() {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        val runtimeNotificationGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        val powerManager = getSystemService(PowerManager::class.java)
-        backgroundProtectionState.value = BackgroundProtectionState(
-            notificationsEnabled = runtimeNotificationGranted && notificationManager.areNotificationsEnabled(),
-            batteryOptimizationIgnored = powerManager.isIgnoringBatteryOptimizations(packageName),
-        )
     }
 
     private fun handleConnectionEffect(effect: ConnectionEffect) {
@@ -217,16 +164,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             is ConnectionEffect.StartVpnService -> {
-                runCatching {
-                    ContextCompat.startForegroundService(
-                        this,
-                        Intent(this, RealVpnService::class.java)
-                            .setAction(RealVpnService.ACTION_START),
-                    )
-                }.onFailure { error ->
-                    Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
-                    connectionViewModel.onVpnServiceDispatchFailed(effect)
-                }
+                dispatchStartVpnService(effect)
             }
             is ConnectionEffect.StopVpnService -> {
                 runCatching {
@@ -262,8 +200,6 @@ internal fun ZjuConnectTheme(content: @Composable () -> Unit) {
 private fun ZjuConnectApp(
     state: ConnectionUiState,
     viewModel: ConnectionViewModel,
-    backgroundProtection: BackgroundProtectionState,
-    onEnableBackgroundProtection: () -> Unit,
 ) {
     val context = LocalContext.current
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -276,15 +212,10 @@ private fun ZjuConnectApp(
                 val contentModifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 24.dp, vertical = 28.dp)
-                if (
-                    usesScrollableHomeLayout(state.phase) ||
-                    shouldShowBackgroundProtection(state.phase, backgroundProtection)
-                ) {
+                if (usesScrollableHomeLayout(state.phase)) {
                     ConnectionHomeContent(
                         state = state,
                         viewModel = viewModel,
-                        backgroundProtection = backgroundProtection,
-                        onEnableBackgroundProtection = onEnableBackgroundProtection,
                         modifier = contentModifier
                             .imePadding()
                             .verticalScroll(rememberScrollState())
@@ -295,8 +226,6 @@ private fun ZjuConnectApp(
                     ConnectionHomeContent(
                         state = state,
                         viewModel = viewModel,
-                        backgroundProtection = backgroundProtection,
-                        onEnableBackgroundProtection = onEnableBackgroundProtection,
                         modifier = contentModifier,
                         centered = true,
                     )
@@ -321,8 +250,6 @@ private fun ZjuConnectApp(
 private fun ConnectionHomeContent(
     state: ConnectionUiState,
     viewModel: ConnectionViewModel,
-    backgroundProtection: BackgroundProtectionState,
-    onEnableBackgroundProtection: () -> Unit,
     modifier: Modifier,
     centered: Boolean,
 ) {
@@ -387,10 +314,6 @@ private fun ConnectionHomeContent(
             )
         }
 
-        if (shouldShowBackgroundProtection(state.phase, backgroundProtection)) {
-            BackgroundProtectionCard(onEnableBackgroundProtection)
-        }
-
         AuthenticationStep(state, viewModel)
 
         Button(
@@ -421,39 +344,6 @@ private fun ConnectionHomeContent(
         if (canCancelConnection(state.phase)) {
             TextButton(onClick = viewModel::cancelConnection) {
                 Text("取消连接")
-            }
-        }
-    }
-}
-
-@Composable
-private fun BackgroundProtectionCard(onEnable: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "开启后台保护",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = "允许通知并解除电池限制，锁屏时连接更稳定，也能从通知栏断开。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-            Button(
-                onClick = onEnable,
-                modifier = Modifier.align(Alignment.End),
-            ) {
-                Text("开启")
             }
         }
     }

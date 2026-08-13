@@ -16,6 +16,7 @@ internal const val MAX_REDACTED_DIAGNOSTIC_EVENTS = 100
 internal const val MAX_DIAGNOSTIC_PREVIEW_GROUPS = 6
 
 private const val MAX_REDACTED_DIAGNOSTIC_BYTES = 64 * 1024
+private const val MAX_REDACTED_DIAGNOSTIC_DURATION_MILLIS = 5 * 60 * 1000L
 private const val DIAGNOSTIC_FILE_NAME = "redacted-diagnostics.json"
 private const val DIAGNOSTIC_FILE_VERSION = 1
 
@@ -36,6 +37,11 @@ private val SAFE_VPN_STATES = setOf(
 )
 private val SAFE_DIAGNOSTIC_CODES = setOf(
     "authenticationFailed",
+    "authDnsFailure",
+    "authNetworkFailure",
+    "authNetworkTimeout",
+    "authProtocolFailure",
+    "authServerFailure",
     "authInfoUnavailable",
     "certificateRejected",
     "credentialStoreUnavailable",
@@ -75,11 +81,16 @@ private val SAFE_DIAGNOSTIC_CAUSES = setOf(
     "authentication",
     "configuration",
     "connectionClosed",
+    "dns",
     "fdClosed",
     "invalidPacket",
     "io",
     "l3Recovering",
+    "network",
     "packetTooLarge",
+    "protocol",
+    "server",
+    "tls",
     "timeout",
     "tunUnavailable",
     "wouldBlock",
@@ -131,6 +142,7 @@ internal data class RedactedDiagnosticEvent(
     val stage: String = "",
     val cause: String = "",
     val counters: RedactedDiagnosticCounters? = null,
+    val durationMillis: Long = 0,
 ) {
     fun redacted(): RedactedDiagnosticEvent {
         val safeCategory = category.takeIf { it in SAFE_DIAGNOSTIC_CATEGORIES } ?: "connection"
@@ -141,6 +153,7 @@ internal data class RedactedDiagnosticEvent(
             code = redactCode(code),
             stage = redactStage(stage),
             cause = cause.takeIf { it in SAFE_DIAGNOSTIC_CAUSES }.orEmpty(),
+            durationMillis = durationMillis.coerceIn(0, MAX_REDACTED_DIAGNOSTIC_DURATION_MILLIS),
             counters = counters?.redacted(),
         )
     }
@@ -208,8 +221,9 @@ internal fun diagnosticSummary(events: List<RedactedDiagnosticEvent>): Diagnosti
 
 /**
  * Collapses only adjacent equivalent display events; timestamps and data-plane
- * counter snapshots are intentionally ignored. The copied report still keeps
- * every counter snapshot.
+ * counter snapshots are intentionally ignored, while durations remain visible
+ * because they distinguish a fast failure from a timeout. The copied report
+ * still keeps every counter snapshot.
  */
 internal fun collapseConsecutiveDiagnosticEvents(
     events: List<RedactedDiagnosticEvent>,
@@ -306,6 +320,10 @@ internal fun formatDiagnosticPreviewLine(group: DiagnosticEventGroup): String = 
         append("  cause=")
         append(it)
     }
+    event.durationMillis.takeIf { it > 0 }?.let {
+        append("  durationMs=")
+        append(it)
+    }
     if (group.occurrences > 1) {
         append("  ×")
         append(group.occurrences)
@@ -331,7 +349,8 @@ private fun sameDiagnosticOccurrence(
     first.state == second.state &&
     first.code == second.code &&
     first.stage == second.stage &&
-    first.cause == second.cause
+    first.cause == second.cause &&
+    first.durationMillis == second.durationMillis
 
 /**
  * Formats the only text copied by the diagnostics Activity. It formats already
@@ -353,7 +372,7 @@ internal fun formatRedactedDiagnosticReport(
         )
         appendLine("设备：${publicDeviceValue(environment.manufacturer)} ${publicDeviceValue(environment.model)}")
         appendLine("记录：${reportEvents.size} 条")
-        appendLine("说明：仅包含白名单状态、稳定错误码和数据面计数器；不含认证、网络端点或 Logcat。")
+        appendLine("说明：仅包含白名单状态、认证阶段、稳定原因码、耗时和数据面计数器；不含认证数据、网络端点或 Logcat。")
         appendLine()
 
         if (reportEvents.isEmpty()) {
@@ -366,6 +385,7 @@ internal fun formatRedactedDiagnosticReport(
                 event.code.takeIf(String::isNotBlank)?.let { append(" code=$it") }
                 event.stage.takeIf(String::isNotBlank)?.let { append(" stage=$it") }
                 event.cause.takeIf(String::isNotBlank)?.let { append(" cause=$it") }
+                event.durationMillis.takeIf { it > 0 }?.let { append(" durationMs=$it") }
                 event.counters?.let { counters ->
                     append(
                         " counters=" +
@@ -400,13 +420,23 @@ internal object RedactedDiagnostics {
         storeFor(context).clear()
     }
 
-    fun recordConnectionState(context: Context, phase: ConnectionPhase, code: String) {
+    fun recordConnectionState(
+        context: Context,
+        phase: ConnectionPhase,
+        code: String,
+        stage: String = "",
+        cause: String = "",
+        durationMillis: Long = 0,
+    ) {
         storeFor(context).record(
             RedactedDiagnosticEvent(
                 timestampMillis = System.currentTimeMillis(),
                 category = "connection",
                 state = phase.name.lowercase(),
                 code = code,
+                stage = stage,
+                cause = cause,
+                durationMillis = durationMillis,
             ),
         )
     }
@@ -564,6 +594,7 @@ private fun eventFromJson(value: JSONObject): RedactedDiagnosticEvent? {
         code = value.optString("code"),
         stage = value.optString("stage"),
         cause = value.optString("cause"),
+        durationMillis = value.optLong("durationMs", 0),
         counters = value.optJSONObject("counters")?.toCounters(),
     ).redacted()
 }
@@ -575,6 +606,7 @@ private fun RedactedDiagnosticEvent.toJson(): JSONObject = JSONObject().apply {
     put("code", code)
     put("stage", stage)
     put("cause", cause)
+    put("durationMs", durationMillis)
     counters?.let { put("counters", it.toJson()) }
 }
 
@@ -632,6 +664,17 @@ private fun redactCode(value: String): String = when {
 
 private fun redactStage(value: String): String = when {
     value.isBlank() -> ""
+    value in setOf(
+        "auth",
+        "auth.config",
+        "auth.session_restore",
+        "auth.select_method",
+        "auth.credentials",
+        "auth.phone",
+        "auth.sms",
+        "auth.captcha",
+        "auth.token",
+    ) -> value
     value.startsWith("auth") -> "auth"
     value.startsWith("prepare") -> "prepare"
     value.startsWith("tun") -> "tun"

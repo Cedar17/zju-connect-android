@@ -76,6 +76,11 @@ All event payloads contain schemaVersion and type. Future callback events must
 preserve this versioned JSON boundary and must not contain passwords, cookies,
 SIDs, device IDs, sign keys, CAPTCHA bytes, or raw authentication responses.
 
+Authentication failure events may additionally carry the allowlisted `stage`,
+`cause`, and bounded `durationMs` fields. These fields describe where the
+operation stopped (for example `auth.config`) and classify transport, DNS,
+TLS, protocol, or server failures without exposing the underlying error text.
+
 ## Interactive authentication control plane
 
 The original upstream's mobile/mobile_android.go exposes EasyConnect Login,

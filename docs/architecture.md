@@ -133,8 +133,9 @@ Required security properties:
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
 - The user-facing diagnostics report is an application-owned, bounded redacted
   event buffer rather than a Logcat viewer. It records only allowlisted state,
-  stable codes, and data-plane counters; it excludes credentials, account
-  identity, endpoints, packet metadata, routes, raw messages, and Logcat.
+  authentication stage, stable cause/code, bounded operation duration, and
+  data-plane counters; it excludes credentials, account identity, endpoints,
+  packet metadata, routes, raw messages, and Logcat.
 - The diagnostics Activity separates the user-facing summary from the copied
   report: the default screen shows the latest state and a short, de-duplicated
   monospaced history suitable for a screenshot, while copying retains the complete
@@ -261,6 +262,16 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
 - The Connect action owns one closed Android state machine that restores a
   session, requests only required authentication input, obtains Android VPN
   permission, and starts the real VPN.
+- `RealVpnService` owns one low-importance, silent, ongoing notification for
+  the lifetime of the connection. It starts as `正在连接`, updates through
+  recovery states and `已连接`, opens `MainActivity` when tapped, and is
+  removed when the service stops or fails. Android 13+ notification permission
+  is requested only when the user first reaches the real VPN start step; a
+  denial does not block the VPN attempt.
+- The main activity does not detect, configure, or claim success for Android
+  battery optimization, OEM autostart, or recent-task locking. Those policies
+  remain device-specific user settings; diagnostics may describe a failure but
+  do not turn them into a connection prerequisite or a home-screen prompt.
 - `auth/psw` with the `Radius` login domain is selected automatically when
   advertised. Another method is selected only when it is the sole method the
   mobile bridge supports.

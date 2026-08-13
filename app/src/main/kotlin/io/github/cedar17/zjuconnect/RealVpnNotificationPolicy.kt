@@ -5,7 +5,6 @@ internal enum class RealVpnNotificationKind {
     CONNECTED,
     RECOVERING,
     WAITING_FOR_NETWORK,
-    TERMINAL_FAILURE,
 }
 
 internal data class RealVpnNotificationContent(
@@ -35,14 +34,4 @@ internal fun realVpnNotificationContent(kind: RealVpnNotificationKind): RealVpnN
         text = "正在等待可用网络",
         ongoing = true,
     )
-    RealVpnNotificationKind.TERMINAL_FAILURE -> RealVpnNotificationContent(
-        title = "VPN 已断开",
-        text = "点按打开 ZJU Connect",
-        ongoing = false,
-    )
 }
-
-internal fun shouldPublishTerminalVpnNotification(
-    outcome: RealVpnTerminalOutcome?,
-    notificationsEnabled: Boolean,
-): Boolean = notificationsEnabled && outcome is RealVpnTerminalOutcome.Error

@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -49,6 +48,9 @@ data class ConnectionUiState(
     val statusMessage: String = "尚未连接",
     val internalCode: String = "",
     val notice: String = "",
+    val diagnosticStage: String = "",
+    val diagnosticCause: String = "",
+    val diagnosticDurationMillis: Long = 0,
     val rememberedUsername: String = "",
     val username: String = "",
     val password: String = "",
@@ -141,6 +143,11 @@ internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMetho
 
 internal fun connectionErrorMessage(code: String): String = when (code) {
     "vpnPermissionDenied" -> "需要授予系统 VPN 权限才能连接。"
+    "authDnsFailure" -> "无法解析学校 VPN 服务地址，请检查当前网络后重试。"
+    "authNetworkFailure" -> "无法连接学校 VPN 服务，请切换网络后重试。"
+    "authNetworkTimeout" -> "连接学校 VPN 服务超时，请切换网络后重试。"
+    "authProtocolFailure" -> "学校 VPN 服务返回了无法识别的响应，请稍后重试。"
+    "authServerFailure" -> "学校 VPN 服务暂时不可用，请稍后重试。"
     "vpnSessionInvalid" -> "登录状态已失效，请重新连接。"
     "vpnConfigurationUnavailable" -> "学校 VPN 暂时没有提供可用配置，请稍后重试。"
     "certificateRejected" -> "无法验证学校 VPN 服务器，请检查系统时间和当前网络后重试。"
@@ -234,10 +241,22 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         viewModelScope.launch {
             state
-                .map { it.phase to it.internalCode }
-                .distinctUntilChanged()
-                .collect { (phase, code) ->
-                    RedactedDiagnostics.recordConnectionState(appContext, phase, code)
+                .distinctUntilChanged { previous, current ->
+                    previous.phase == current.phase &&
+                        previous.internalCode == current.internalCode &&
+                        previous.diagnosticStage == current.diagnosticStage &&
+                        previous.diagnosticCause == current.diagnosticCause &&
+                        previous.diagnosticDurationMillis == current.diagnosticDurationMillis
+                }
+                .collect { current ->
+                    RedactedDiagnostics.recordConnectionState(
+                        context = appContext,
+                        phase = current.phase,
+                        code = current.internalCode,
+                        stage = current.diagnosticStage,
+                        cause = current.diagnosticCause,
+                        durationMillis = current.diagnosticDurationMillis,
+                    )
                 }
         }
     }
@@ -669,7 +688,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
                 "authenticated" -> persistAuthenticatedSession(attemptId, event)
-                "sessionInvalid" -> handleStoredSessionFailure(attemptId, event)
+                "sessionInvalid" -> {
+                    recordAuthenticationDiagnostic(event)
+                    handleStoredSessionFailure(attemptId, event)
+                }
                 "error" -> {
                     if (restoringStoredSession &&
                         storedSessionFailureAction(event.type, event.code) ==
@@ -678,7 +700,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         handleStoredSessionFailure(attemptId, event)
                     } else {
                         restoringStoredSession = false
-                        showError(event.code)
+                        showError(
+                            code = event.code,
+                            diagnosticStage = event.stage,
+                            diagnosticCause = event.cause,
+                            diagnosticDurationMillis = event.durationMillis,
+                        )
                     }
                 }
                 "cancelled" -> {
@@ -951,7 +978,23 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun showError(code: String) {
+    private fun recordAuthenticationDiagnostic(event: GoAuthEvent) {
+        RedactedDiagnostics.recordConnectionState(
+            context = appContext,
+            phase = ConnectionPhase.ERROR,
+            code = event.code,
+            stage = event.stage,
+            cause = event.cause,
+            durationMillis = event.durationMillis,
+        )
+    }
+
+    private fun showError(
+        code: String,
+        diagnosticStage: String = "",
+        diagnosticCause: String = "",
+        diagnosticDurationMillis: Long = 0,
+    ) {
         pendingPermissionAttemptId = null
         pendingCredential = null
         _state.update {
@@ -959,6 +1002,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 phase = ConnectionPhase.ERROR,
                 statusMessage = connectionErrorMessage(code),
                 internalCode = code,
+                diagnosticStage = diagnosticStage,
+                diagnosticCause = diagnosticCause,
+                diagnosticDurationMillis = diagnosticDurationMillis,
             )
         }
     }
@@ -984,6 +1030,9 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
     captchaWidth = 0,
     captchaHeight = 0,
     captchaPoints = emptyList(),
+    diagnosticStage = "",
+    diagnosticCause = "",
+    diagnosticDurationMillis = 0,
 )
 
 internal fun canSwitchAccount(state: ConnectionUiState): Boolean =

@@ -273,8 +273,14 @@ private fun diagnosticEventDetails(event: RedactedDiagnosticEvent): String? {
         event.code.takeIf(String::isNotBlank)?.let { add("错误码 $it") }
         event.stage.takeIf(String::isNotBlank)?.let { add("阶段 $it") }
         event.cause.takeIf(String::isNotBlank)?.let { add("原因 $it") }
+        event.durationMillis.takeIf { it > 0 }?.let { add("耗时 ${formatDiagnosticDuration(it)}") }
     }
     return details.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+private fun formatDiagnosticDuration(durationMillis: Long): String = when {
+    durationMillis < 1_000 -> "$durationMillis 毫秒"
+    else -> "${"%.1f".format(java.util.Locale.ROOT, durationMillis / 1_000.0)} 秒"
 }
 
 @Suppress("DEPRECATION")

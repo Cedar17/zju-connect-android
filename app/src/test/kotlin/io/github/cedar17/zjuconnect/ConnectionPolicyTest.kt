@@ -259,6 +259,11 @@ class ConnectionPolicyTest {
     fun userFacingErrorsNeverExposeInternalCodes() {
         val internalCodes = listOf(
             "vpnPermissionDenied",
+            "authDnsFailure",
+            "authNetworkFailure",
+            "authNetworkTimeout",
+            "authProtocolFailure",
+            "authServerFailure",
             "certificateRejected",
             "unsupportedAuthMethod",
             "sessionRestoreUnavailable",

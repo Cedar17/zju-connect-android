@@ -6,13 +6,17 @@
 package core
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
@@ -80,6 +84,9 @@ type authenticationEvent struct {
 	State         string          `json:"state"`
 	Code          string          `json:"code,omitempty"`
 	Message       string          `json:"message"`
+	Stage         string          `json:"stage,omitempty"`
+	Cause         string          `json:"cause,omitempty"`
+	DurationMs    int64           `json:"durationMs,omitempty"`
 	ChallengeKind string          `json:"challengeKind,omitempty"`
 	AuthMethods   []auth.AuthInfo `json:"authMethods,omitempty"`
 	PhoneNumbers  []string        `json:"phoneNumbers,omitempty"`
@@ -192,7 +199,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	currentAuthentication.busy = true
 	currentAuthentication.mu.Unlock()
 
-	go runAuthenticationOperation(flow, listener, func() (auth.InteractivePrompt, error) {
+	go runAuthenticationOperation(flow, listener, "auth.config", func() (auth.InteractivePrompt, error) {
 		return flow.Begin()
 	})
 	return marshal(authenticationEvent{
@@ -218,7 +225,10 @@ func SubmitAuthentication(responseJSON string) string {
 	if !ok {
 		return authError("invalidState", "Authentication is not ready for another response")
 	}
-	var operation func() (auth.InteractivePrompt, error)
+	var (
+		operation func() (auth.InteractivePrompt, error)
+		stage     = authenticationStage(response.Action)
+	)
 	switch response.Action {
 	case "selectMethod":
 		operation = func() (auth.InteractivePrompt, error) {
@@ -249,7 +259,7 @@ func SubmitAuthentication(responseJSON string) string {
 		return authError("invalidRequest", "Unknown authentication response")
 	}
 
-	go runAuthenticationOperation(flow, listener, operation)
+	go runAuthenticationOperation(flow, listener, stage, operation)
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "responseAccepted",
@@ -478,41 +488,54 @@ func isCurrentAuthenticationFlow(flow *auth.InteractiveFlow, listener BridgeList
 func runAuthenticationOperation(
 	flow *auth.InteractiveFlow,
 	listener BridgeListener,
+	stage string,
 	operation func() (auth.InteractivePrompt, error),
 ) {
+	started := time.Now()
 	prompt, err := operation()
+	duration := time.Since(started)
 	releaseAuthenticationOperation(flow)
 	if !isCurrentAuthenticationFlow(flow, listener) {
 		return
 	}
 	if err != nil {
-		emitAuthenticationEvent(listener, authenticationFailure(err))
+		emitAuthenticationEvent(listener, authenticationFailure(stage, duration, err))
 		return
 	}
-	runAuthenticationPrompt(flow, listener, prompt)
+	runAuthenticationPrompt(flow, listener, prompt, stage, duration)
 }
 
 func runSessionRestore(flow *auth.InteractiveFlow, listener BridgeListener, authData []byte) {
 	defer clear(authData)
+	started := time.Now()
 	prompt, err := flow.Resume(authData)
+	duration := time.Since(started)
 	releaseAuthenticationOperation(flow)
 	if !isCurrentAuthenticationFlow(flow, listener) {
 		return
 	}
 	if err != nil {
 		discardAuthenticationFlow(flow)
-		emitAuthenticationEvent(listener, sessionRestoreFailure(err))
+		emitAuthenticationEvent(listener, sessionRestoreFailure(duration, err))
 		return
 	}
-	runAuthenticationPrompt(flow, listener, prompt)
+	runAuthenticationPrompt(flow, listener, prompt, "auth.session_restore", duration)
 }
 
-func runAuthenticationPrompt(flow *auth.InteractiveFlow, listener BridgeListener, prompt auth.InteractivePrompt) {
+func runAuthenticationPrompt(
+	flow *auth.InteractiveFlow,
+	listener BridgeListener,
+	prompt auth.InteractivePrompt,
+	stage string,
+	duration time.Duration,
+) {
 	event := authenticationEvent{
 		SchemaVersion: schemaVersion,
 		State:         prompt.State,
 		Code:          prompt.Code,
 		Message:       prompt.Message,
+		Stage:         stage,
+		DurationMs:    boundedDurationMillis(duration),
 		ChallengeKind: prompt.ChallengeKind,
 		AuthMethods:   prompt.AuthMethods,
 		PhoneNumbers:  prompt.PhoneNumbers,
@@ -557,7 +580,7 @@ func discardAuthenticationFlow(flow *auth.InteractiveFlow) {
 	flow.Cancel()
 }
 
-func sessionRestoreFailure(err error) authenticationEvent {
+func sessionRestoreFailure(duration time.Duration, err error) authenticationEvent {
 	if errors.Is(err, auth.ErrSessionInvalid) {
 		return authenticationEvent{
 			SchemaVersion: schemaVersion,
@@ -565,18 +588,24 @@ func sessionRestoreFailure(err error) authenticationEvent {
 			State:         "idle",
 			Code:          "sessionInvalid",
 			Message:       "Saved authentication session has expired",
+			Stage:         "auth.session_restore",
+			Cause:         "authentication",
+			DurationMs:    boundedDurationMillis(duration),
 		}
 	}
-	code := "sessionRestoreUnavailable"
-	if strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "tls:") {
-		code = "certificateRejected"
+	failure := classifyAuthenticationFailure("auth.session_restore", duration, err)
+	if failure.code == "authenticationFailed" {
+		failure.code = "sessionRestoreUnavailable"
 	}
 	return authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "error",
 		State:         "error",
-		Code:          code,
+		Code:          failure.code,
 		Message:       "Saved authentication session could not be validated",
+		Stage:         failure.stage,
+		Cause:         failure.cause,
+		DurationMs:    failure.durationMs,
 	}
 }
 
@@ -599,7 +628,7 @@ func retryAuthentication() string {
 	if oldFlow != nil {
 		oldFlow.Cancel()
 	}
-	go runAuthenticationOperation(flow, listener, func() (auth.InteractivePrompt, error) {
+	go runAuthenticationOperation(flow, listener, "auth.config", func() (auth.InteractivePrompt, error) {
 		return flow.Begin()
 	})
 	return marshal(authenticationEvent{
@@ -610,22 +639,102 @@ func retryAuthentication() string {
 	})
 }
 
-func authenticationFailure(err error) authenticationEvent {
-	code := "authenticationFailed"
-	if strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "tls:") {
-		code = "certificateRejected"
-	} else if strings.Contains(err.Error(), "unsupported") {
-		code = "unsupportedAuthMethod"
-	} else if strings.Contains(err.Error(), "expected") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "advertised") {
-		code = "invalidInput"
-	}
+func authenticationFailure(stage string, duration time.Duration, err error) authenticationEvent {
+	failure := classifyAuthenticationFailure(stage, duration, err)
 	return authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "error",
 		State:         "error",
-		Code:          code,
+		Code:          failure.code,
 		Message:       "Authentication could not be completed",
+		Stage:         failure.stage,
+		Cause:         failure.cause,
+		DurationMs:    failure.durationMs,
 	}
+}
+
+type authenticationFailureInfo struct {
+	code       string
+	stage      string
+	cause      string
+	durationMs int64
+}
+
+func classifyAuthenticationFailure(stage string, duration time.Duration, err error) authenticationFailureInfo {
+	info := authenticationFailureInfo{
+		code:       "authenticationFailed",
+		stage:      stage,
+		cause:      "authentication",
+		durationMs: boundedDurationMillis(duration),
+	}
+	if err == nil {
+		return info
+	}
+
+	var dnsError *net.DNSError
+	var networkError net.Error
+	message := strings.ToLower(err.Error())
+	switch {
+	case errors.As(err, &dnsError) || strings.Contains(message, "no such host"):
+		info.code = "authDnsFailure"
+		info.cause = "dns"
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()):
+		info.code = "authNetworkTimeout"
+		info.cause = "timeout"
+	case strings.Contains(message, "x509:") || strings.Contains(message, "tls:") ||
+		strings.Contains(message, "certificate") || strings.Contains(message, "handshake failure"):
+		info.code = "certificateRejected"
+		info.cause = "tls"
+	case errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) ||
+		strings.Contains(message, "connection refused") || strings.Contains(message, "network is unreachable") ||
+		strings.Contains(message, "no route to host") || strings.Contains(message, "connection reset by peer"):
+		info.code = "authNetworkFailure"
+		info.cause = "network"
+	case errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(message, "invalid status code") ||
+		strings.Contains(message, "invalid character") || strings.Contains(message, "unexpected eof") ||
+		strings.Contains(message, "unexpected end of json"):
+		info.code = "authProtocolFailure"
+		info.cause = "protocol"
+	case strings.Contains(message, "http status") || strings.Contains(message, "failed with code"):
+		info.code = "authServerFailure"
+		info.cause = "server"
+	case strings.Contains(message, "unsupported"):
+		info.code = "unsupportedAuthMethod"
+	case strings.Contains(message, "expected") || strings.Contains(message, "required") || strings.Contains(message, "advertised"):
+		info.code = "invalidInput"
+	}
+	return info
+}
+
+func authenticationStage(action string) string {
+	switch action {
+	case "selectMethod":
+		return "auth.select_method"
+	case "submitCredentials":
+		return "auth.credentials"
+	case "submitPhone":
+		return "auth.phone"
+	case "submitSmsCode":
+		return "auth.sms"
+	case "submitCaptcha":
+		return "auth.captcha"
+	case "submitToken":
+		return "auth.token"
+	default:
+		return "auth"
+	}
+}
+
+func boundedDurationMillis(duration time.Duration) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	const maxDiagnosticDuration = 5 * time.Minute
+	if duration > maxDiagnosticDuration {
+		return maxDiagnosticDuration.Milliseconds()
+	}
+	return duration.Milliseconds()
 }
 
 func emitAuthenticationEvent(listener BridgeListener, event authenticationEvent) {

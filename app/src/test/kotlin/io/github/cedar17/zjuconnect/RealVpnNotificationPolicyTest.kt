@@ -1,7 +1,6 @@
 package io.github.cedar17.zjuconnect
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,32 +20,5 @@ class RealVpnNotificationPolicyTest {
             assertEquals(text, content.text)
             assertTrue(content.ongoing)
         }
-    }
-
-    @Test
-    fun terminalFailureIsClearableAndUserStopNeverPublishesIt() {
-        val terminal = realVpnNotificationContent(RealVpnNotificationKind.TERMINAL_FAILURE)
-        assertEquals("VPN 已断开", terminal.title)
-        assertEquals("点按打开 ZJU Connect", terminal.text)
-        assertFalse(terminal.ongoing)
-
-        assertTrue(
-            shouldPublishTerminalVpnNotification(
-                RealVpnTerminalOutcome.Error(RealVpnFailure("failed", "failed")),
-                notificationsEnabled = true,
-            ),
-        )
-        assertFalse(
-            shouldPublishTerminalVpnNotification(
-                RealVpnTerminalOutcome.Stopped,
-                notificationsEnabled = true,
-            ),
-        )
-        assertFalse(
-            shouldPublishTerminalVpnNotification(
-                RealVpnTerminalOutcome.Error(RealVpnFailure("failed", "failed")),
-                notificationsEnabled = false,
-            ),
-        )
     }
 }
