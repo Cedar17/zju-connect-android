@@ -71,7 +71,7 @@ try {
         "bind",
         "-target", "android/arm64,android/amd64",
         "-androidapi", $lock.android.androidApi,
-        "-javapkg", "cn.zju.connect.gocore",
+        "-javapkg", "io.github.cedar17.zjuconnect.gocore",
         "-trimpath",
         "-o", $aarPath,
         "."

@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 import android.content.Context
 import android.net.ConnectivityManager

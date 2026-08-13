@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
@@ -170,9 +170,10 @@ internal class AuthSessionStore(context: Context) {
     private companion object {
         const val FILE_NAME = "atrust_auth_session.bin"
         const val KEYSTORE_PROVIDER = "AndroidKeyStore"
-        const val KEY_ALIAS = "cn.zju.connect.atrust-auth-session.v1"
+        const val KEY_ALIAS = "io.github.cedar17.zjuconnect.atrust-auth-session.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
-        val AAD: ByteArray = "cn.zju.connect/atrust-auth-session/v1".toByteArray(Charsets.UTF_8)
+        val AAD: ByteArray =
+            "io.github.cedar17.zjuconnect/atrust-auth-session/v1".toByteArray(Charsets.UTF_8)
     }
 }

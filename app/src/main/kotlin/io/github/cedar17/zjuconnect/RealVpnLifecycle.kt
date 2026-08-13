@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 /**
  * Small, Android-free policy object for the real VPN service's terminal state.

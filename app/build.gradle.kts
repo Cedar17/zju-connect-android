@@ -6,14 +6,14 @@ plugins {
 }
 
 android {
-    namespace = "cn.zju.connect"
+    namespace = "io.github.cedar17.zjuconnect"
     compileSdk = 36
     compileSdkMinor = 1
     compileSdkExtension = 20
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "cn.zju.connect"
+        applicationId = "io.github.cedar17.zjuconnect"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

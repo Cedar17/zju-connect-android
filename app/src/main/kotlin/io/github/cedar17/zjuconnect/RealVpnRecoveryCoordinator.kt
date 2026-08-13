@@ -1,4 +1,4 @@
-package cn.zju.connect
+package io.github.cedar17.zjuconnect
 
 internal data class UnderlayNetworkFingerprint(
     val networkHandle: Long,
