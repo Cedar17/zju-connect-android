@@ -12,12 +12,12 @@
   },
   "zjuConnect": {
     "module": "github.com/mythologyli/zju-connect",
-    "upstreamVersion": "v1.2.2-0.20260717055316-7776cdcfa33e",
-    "upstreamCommit": "7776cdcfa33e3df56ba8da438c17b2274e316128",
+    "upstreamVersion": "v1.3.1-0.20260812122842-1b6ad1387375",
+    "upstreamCommit": "1b6ad138737547782dcfc09def2a950738a67188",
     "upstreamRepository": "https://github.com/Mythologyli/zju-connect",
     "forkModule": "github.com/Cedar17/zju-connect",
-    "forkVersion": "v1.2.2-0.20260810060822-758838e90cdf",
-    "forkCommit": "758838e90cdf65c2543845f6d12cae27f0f9ec80",
+    "forkVersion": "v1.2.3-0.20260812142959-1a736c5355b8",
+    "forkCommit": "1a736c5355b8a2bcafee7827ccf147ea38ab0a32",
     "forkBranch": "dev/android",
     "forkRepository": "https://github.com/Cedar17/zju-connect",
     "license": "AGPL-3.0-only"

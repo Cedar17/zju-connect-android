@@ -2,11 +2,12 @@ module github.com/Cedar17/zju-connect-android/go/bridge
 
 go 1.25.6
 
-require github.com/mythologyli/zju-connect v1.2.2-0.20260717055316-7776cdcfa33e
+require github.com/mythologyli/zju-connect v1.3.1-0.20260812122842-1b6ad1387375
 
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.2-0.20260810060822-758838e90cdf
+replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.3-0.20260812142959-1a736c5355b8
 
 require (
+	github.com/boombuler/barcode v1.1.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
@@ -16,6 +17,7 @@ require (
 	github.com/mythologyli/sing-tun v0.0.0-20260201144630-c04d9db95dc7 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/sagernet/go-tun2socks v1.16.12-0.20220818015926-16cb67876a61 // indirect
 	github.com/sagernet/netlink v0.0.0-20240916134442-83396419aa8b // indirect
 	github.com/sagernet/sing v0.7.18 // indirect

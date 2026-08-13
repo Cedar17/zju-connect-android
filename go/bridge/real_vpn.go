@@ -115,7 +115,7 @@ func PrepareRealVpn() string {
 	if _, err := vpnClient.Setup(
 		zjuAtrustServer,
 		zjuAtrustServerPort,
-		"", "", "", "", "", "", "", "",
+		"", "", "", "", "", "", "", "", "",
 		result.AuthData,
 		result.ResourceData,
 		0,

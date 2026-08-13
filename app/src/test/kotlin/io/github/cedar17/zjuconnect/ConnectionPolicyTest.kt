@@ -59,6 +59,8 @@ class ConnectionPolicyTest {
                 password = "secret",
                 phone = "13800000000",
                 smsCode = "123456",
+                token = "654321",
+                challengeKind = "auth/totp",
                 phoneNumbers = listOf("138****0000"),
                 captchaImage = byteArrayOf(1, 2, 3),
                 captchaWidth = 20,
@@ -73,6 +75,8 @@ class ConnectionPolicyTest {
         assertTrue(pending.password.isEmpty())
         assertTrue(pending.phone.isEmpty())
         assertTrue(pending.smsCode.isEmpty())
+        assertTrue(pending.token.isEmpty())
+        assertTrue(pending.challengeKind.isEmpty())
         assertTrue(pending.phoneNumbers.isEmpty())
         assertNull(pending.captchaImage)
         assertTrue(pending.captchaPoints.isEmpty())
@@ -105,6 +109,7 @@ class ConnectionPolicyTest {
             ConnectionPhase.AWAITING_CREDENTIALS,
             ConnectionPhase.AWAITING_PHONE,
             ConnectionPhase.AWAITING_SMS,
+            ConnectionPhase.AWAITING_TOKEN,
             ConnectionPhase.AWAITING_CAPTCHA,
         )
 
@@ -205,6 +210,23 @@ class ConnectionPolicyTest {
     }
 
     @Test
+    fun onlyExplicitCredentialRejectionClearsSavedPassword() {
+        assertTrue(shouldClearSavedCredential("credentialsRejected"))
+        assertFalse(shouldClearSavedCredential("sessionExpired"))
+        assertFalse(shouldClearSavedCredential("certificateRejected"))
+        assertFalse(shouldClearSavedCredential("sessionRestoreUnavailable"))
+    }
+
+    @Test
+    fun savedCredentialCannotCrossRememberedAccounts() {
+        val credential = StoredCredential("student-a", "secret")
+
+        assertTrue(savedCredentialMatchesAccount(credential, ""))
+        assertTrue(savedCredentialMatchesAccount(credential, "student-a"))
+        assertFalse(savedCredentialMatchesAccount(credential, "student-b"))
+    }
+
+    @Test
     fun cancellationInvalidatesLateCallbacks() {
         val attempts = ConnectionAttemptTracker()
         val first = attempts.begin()
@@ -233,6 +255,8 @@ class ConnectionPolicyTest {
             "certificateRejected",
             "unsupportedAuthMethod",
             "sessionRestoreUnavailable",
+            "deviceIdentityUnavailable",
+            "credentialStoreUnavailable",
             "vpnTunWriteFailed",
             "unexpectedInternalCode",
         )
@@ -242,6 +266,14 @@ class ConnectionPolicyTest {
             assertTrue(message.isNotBlank())
             assertFalse("message leaked internal code $code", message.contains(code))
         }
+    }
+
+    @Test
+    fun tokenChallengesUseServerSpecificPrompts() {
+        assertEquals("请输入动态认证码", tokenChallengeMessage("auth/totp"))
+        assertEquals("请输入 RADIUS 认证码", tokenChallengeMessage("auth/radius"))
+        assertEquals("请输入服务端挑战码", tokenChallengeMessage("auth/challenge"))
+        assertEquals("请输入服务端要求的认证码", tokenChallengeMessage("auth/unknown"))
     }
 
     @Test
