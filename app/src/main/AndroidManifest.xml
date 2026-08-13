@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -24,21 +25,6 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".TestVpnService"
-            android:exported="true"
-            android:foregroundServiceType="specialUse"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
-                android:value="false" />
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Issue #6 synthetic TUN data-plane validation" />
-        </service>
-        <service
             android:name=".RealVpnService"
             android:exported="false"
             android:foregroundServiceType="specialUse"
@@ -46,9 +32,6 @@
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
-            <meta-data
-                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
-                android:value="false" />
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Issue #11 real ZJU aTrust VPN validation" />

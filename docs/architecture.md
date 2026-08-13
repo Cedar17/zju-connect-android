@@ -26,8 +26,10 @@ The Go bridge remains deliberately small and does not become a mobility layer.
 
 The client targets the current Zhejiang University aTrust service only. It does
 not include the legacy EasyConnect protocol, WebVPN, multiple accounts, port
-forwarding, a local proxy, Always-on VPN, boot-time auto-connect, or complex
-advanced configuration.
+forwarding, a local proxy, or complex advanced configuration. The production
+`RealVpnService` supports both the normal explicit app start and optional
+Android Always-on VPN selected by the user in system settings. The app never
+enables Always-on or lockdown by itself.
 
 Keep the Android app as a single `app` module. Split out Go or API modules only
 when the binding build or ownership boundary creates a demonstrated need.
@@ -45,6 +47,8 @@ ConnectionViewModel / ConnectionUiState / StateFlow
        MainActivity
             ↓
        RealVpnService / RealVpnStateStore
+            ├── manual start (MainActivity)
+            └── Always-on start (Android system)
             ↓
        Android TUN + Go data plane
 ```
@@ -77,6 +81,12 @@ Error
 ```
 
 Every transition should have a defined success, cancellation, timeout, and failure path. A process restart or network change must leave the app in a consistent recoverable state.
+
+`RealVpnStateStore` additionally publishes service-owned
+`waitingForNetwork`, `waitingForAuthentication`, and
+`alwaysOnDisconnectBlocked` states. These are not a second UI state machine:
+the Activity maps them to the existing recovery, login/error, and connected
+presentations.
 
 ## Kotlin–Go boundary
 
@@ -124,6 +134,14 @@ last server-confirmed username in private preferences for display and login
 prefill; resources and username are refreshed after session validation, and
 connection-scoped identifiers are regenerated.
 
+The optional Always-on path performs this same validation from
+`RealVpnService`, without starting an Activity or reading saved passwords. A
+missing or invalid snapshot, or a server response that requires interactive
+authentication, leaves the service in a low-CPU foreground waiting state. Its
+notification opens the existing Activity login flow; a successful foreground
+authentication then wakes the waiting service through the existing explicit
+start effect.
+
 Required security properties:
 
 - Encrypt persisted state with an Android Keystore-backed non-exportable key, for example AES-GCM.
@@ -133,8 +151,9 @@ Required security properties:
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
 - The user-facing diagnostics report is an application-owned, bounded redacted
   event buffer rather than a Logcat viewer. It records only allowlisted state,
-  stable codes, and data-plane counters; it excludes credentials, account
-  identity, endpoints, packet metadata, routes, raw messages, and Logcat.
+  authentication stage, stable cause/code, bounded operation duration, and
+  data-plane counters; it excludes credentials, account identity, endpoints,
+  packet metadata, routes, raw messages, and Logcat.
 - The diagnostics Activity separates the user-facing summary from the copied
   report: the default screen shows the latest state and a short, de-duplicated
   monospaced history suitable for a screenshot, while copying retains the complete
@@ -150,7 +169,10 @@ Once Android creates a TUN, the Go core's control/data connection to the VPN ser
 `RealVpnService` installs this boundary after Android establishes the TUN. Its
 validation must cover Wi-Fi and mobile networks, network switching, failed
 connection cleanup, and release of the TUN file descriptor, sockets, goroutines,
-and foreground service.
+and foreground service. A manual start remains `START_NOT_STICKY`; an Android
+Always-on start is identified by the absence of the app's explicit start marker
+and uses `START_STICKY` only as a lifecycle aid. Android system VPN settings,
+not an app preference, remain the source of truth for Always-on.
 
 The service observes all non-VPN networks with Internet capability instead of
 the application's default network, which can be the VPN itself. An opaque,
@@ -159,8 +181,10 @@ and IPv4/default-route changes; addresses and network names never enter logs or
 diagnostics. A stable change is debounced for 1.5 seconds, then the service stops
 the old Go/TUN session and rebuilds it from the authenticated result already held
 in Go memory. If no usable underlay exists, the foreground service waits until a
-network returns. User stop, revoke, destruction, and the first terminal failure
-always cancel pending recovery.
+network returns. Cold Always-on session validation uses at most three attempts
+at 0, 5, and 30 seconds for one underlay-network revision, then waits for a new
+revision or a foreground retry. User stop, revoke, destruction, and the first
+terminal failure always cancel pending recovery.
 
 The protected Go sockets use the system-selected underlay and are not explicitly
 bound to an Android `Network`, so the service deliberately leaves
@@ -261,6 +285,25 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
 - The Connect action owns one closed Android state machine that restores a
   session, requests only required authentication input, obtains Android VPN
   permission, and starts the real VPN.
+- `RealVpnService` owns one low-importance, silent, ongoing notification for
+  the lifetime of the connection. It starts as `正在连接`, updates through
+  recovery states and `已连接`, opens `MainActivity` when tapped, and is
+  removed when the service stops or fails. Android 13+ notification permission
+  is requested only when the user first reaches the real VPN start step; a
+  denial does not block the VPN attempt.
+- In manual mode, `MainActivity` sends an explicit `manual` start marker and the
+  service is `START_NOT_STICKY`. In Always-on mode, Android sends an unmarked
+  VPN service start, the service restores the encrypted session itself, and a
+  `需要打开 App 完成登录` notification opens the same Activity only when
+  interactive authentication is required.
+- While Always-on owns the VPN, the existing disconnect action remains visible
+  but is guarded by `VpnService.isAlwaysOn()`. It leaves the connection running
+  and posts a one-shot notification that opens Android VPN settings; after the
+  user disables Always-on, the same disconnect action works normally.
+- The main activity does not detect, configure, or claim success for Android
+  battery optimization, OEM autostart, or recent-task locking. Those policies
+  remain device-specific user settings; diagnostics may describe a failure but
+  do not turn them into a connection prerequisite or a home-screen prompt.
 - `auth/psw` with the `Radius` login domain is selected automatically when
   advertised. Another method is selected only when it is the sole method the
   mobile bridge supports.

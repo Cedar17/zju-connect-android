@@ -3,12 +3,14 @@ package io.github.cedar17.zjuconnect
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
 import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.update
 
 private const val REAL_VPN_CHANNEL = "zju_connect_real_vpn"
 private const val REAL_VPN_NOTIFICATION_ID = 1002
+private const val ALWAYS_ON_GUIDANCE_NOTIFICATION_ID = 1003
 private const val REAL_VPN_LOG_TAG = "ZjuConnectRealVpn"
 private const val TUN_ESTABLISH_TIMEOUT_SECONDS = 20L
 private const val UNDERLAY_RECOVERY_DEBOUNCE_MILLIS = 1_500L
@@ -34,6 +37,18 @@ class RealVpnService : VpnService() {
     companion object {
         const val ACTION_START = "io.github.cedar17.zjuconnect.action.START_REAL_VPN"
         const val ACTION_STOP = "io.github.cedar17.zjuconnect.action.STOP_REAL_VPN"
+
+        @Volatile
+        private var runningInstance: RealVpnService? = null
+
+        fun refreshNotificationIfRunning() {
+            runningInstance?.refreshCurrentNotification()
+        }
+
+        /** Cancels only a background Always-on restore before UI auth begins. */
+        fun prepareForForegroundAuthentication() {
+            runningInstance?.handoffToForegroundAuthentication()
+        }
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -43,17 +58,37 @@ class RealVpnService : VpnService() {
     private val stateLock = Any()
     private val recoveryLock = Any()
     private val lifecycle = RealVpnLifecycle()
+    private val bridgeSessionTracker = RealVpnBridgeSessionTracker()
     private val recoveryCoordinator = RealVpnRecoveryCoordinator()
+    private val alwaysOnRetryPolicy = AlwaysOnRestoreRetryPolicy()
     private lateinit var underlayNetworkMonitor: UnderlayNetworkMonitor
     private var underlayMonitorFailure: Throwable? = null
+    @Volatile
+    private var currentNotificationKind = RealVpnNotificationKind.CONNECTING
     private var recoveryDebounce: ScheduledFuture<*>? = null
+    private var l3RecoveryActive = false
     private var publishedRecoveryPresentation = RealVpnRecoveryPresentation.NONE
+    private var activeStartMode = RealVpnStartMode.MANUAL
+    @Volatile
+    private var alwaysOnWaiting = false
+    private val alwaysOnRestoreLock = Any()
+    private var alwaysOnRestoreRevision = Long.MIN_VALUE
+    private var alwaysOnRestoreInFlight = false
+    private var alwaysOnRestoreFuture: ScheduledFuture<*>? = null
+    private var alwaysOnSessionRestorer: AlwaysOnSessionRestorer? = null
 
     private val socketProtector = object : SocketProtector {
         override fun protect(socketFd: Long): Boolean = this@RealVpnService.protect(socketFd.toInt())
     }
 
-    private val goListener: (GoVpnEvent) -> Unit = { event ->
+    private fun goListener(generation: Long): (GoVpnEvent) -> Unit = listener@{ event ->
+        if (!synchronized(stateLock) { bridgeSessionTracker.accepts(generation) }) {
+            Log.i(
+                REAL_VPN_LOG_TAG,
+                "ignored stale bridge callback generation=$generation state=${event.state}",
+            )
+            return@listener
+        }
         RedactedDiagnostics.recordVpnEvent(applicationContext, event)
         Log.i(
             REAL_VPN_LOG_TAG,
@@ -61,11 +96,12 @@ class RealVpnService : VpnService() {
                 "stage=${event.stage.ifBlank { "none" }} cause=${event.cause.ifBlank { "none" }}",
         )
         realVpnDiagnosticLog(event)?.let { Log.i(REAL_VPN_LOG_TAG, it) }
-        if (event.state == "diagnostic") {
+        val eventKind = classifyRealVpnBridgeEvent(event)
+        if (eventKind == RealVpnBridgeEventKind.DIAGNOSTIC) {
             // Diagnostic observations must never replace the user-visible
             // lifecycle state (for example, active) in the Compose store.
             Unit
-        } else if (event.state == "error") {
+        } else if (eventKind == RealVpnBridgeEventKind.TERMINAL_ERROR) {
             val failure = synchronized(stateLock) {
                 lifecycle.recordFailure(event.code, realVpnErrorMessage(event))
             }
@@ -76,15 +112,28 @@ class RealVpnService : VpnService() {
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored bridge error after user stop")
             }
-        } else if (event.state != "active" && isRecoveryInProgress()) {
+        } else if (eventKind == RealVpnBridgeEventKind.L3_RECOVERING) {
+            val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
+            if (acceptsProgress) {
+                synchronized(recoveryLock) { l3RecoveryActive = true }
+                publishRecoveryPresentation()
+            }
+        } else if (eventKind == RealVpnBridgeEventKind.L3_RECOVERED) {
+            val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
+            if (acceptsProgress) {
+                synchronized(recoveryLock) { l3RecoveryActive = false }
+                publishRecoveryPresentation()
+            }
+        } else if (event.state != "active" && isUnderlayRecoveryInProgress()) {
             Log.i(REAL_VPN_LOG_TAG, "ignored intentional recovery ${event.state} callback")
         } else {
             val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
             if (acceptsProgress) {
                 RealVpnStateStore.update(event)
                 if (event.state == "active") {
-                    updateForegroundNotification("ZJU aTrust VPN is active")
+                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
                     val commands = synchronized(recoveryLock) {
+                        l3RecoveryActive = false
                         recoveryCoordinator.onSessionActive(underlaySnapshot())
                     }
                     handleRecoveryCommands(commands)
@@ -97,6 +146,7 @@ class RealVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        runningInstance = this
         createNotificationChannel()
         underlayNetworkMonitor = UnderlayNetworkMonitor(applicationContext, ::onUnderlayNetworkChanged)
         runCatching { underlayNetworkMonitor.start() }
@@ -107,11 +157,20 @@ class RealVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> requestStart()
-            ACTION_STOP -> requestStop(userInitiated = true)
+        if (intent?.action == ACTION_STOP) {
+            requestStop(userInitiated = true)
+            return if (systemAlwaysOnEnabled()) START_STICKY else START_NOT_STICKY
         }
-        return START_NOT_STICKY
+        val mode = classifyRealVpnStart(
+            action = intent?.action,
+            manualStartAction = ACTION_START,
+            startSource = intent?.getStringExtra(REAL_VPN_EXTRA_START_SOURCE),
+        )
+        requestStart(mode)
+        return when (realVpnRestartPolicy(mode)) {
+            RealVpnRestartPolicy.START_STICKY -> START_STICKY
+            RealVpnRestartPolicy.START_NOT_STICKY -> START_NOT_STICKY
+        }
     }
 
     override fun onRevoke() {
@@ -122,11 +181,15 @@ class RealVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        if (runningInstance === this) {
+            runningInstance = null
+        }
+        val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
+        cancelAlwaysOnRestore(forceBridgeCancellation = true)
         terminateRecovery()
         if (::underlayNetworkMonitor.isInitialized) {
             underlayNetworkMonitor.stop()
         }
-        val failure = synchronized(stateLock) { lifecycle.recordUnexpectedDestruction() }
         if (failure != null) {
             publishFailure("onDestroy", failure)
         }
@@ -137,19 +200,35 @@ class RealVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun requestStart() {
+    private fun requestStart(mode: RealVpnStartMode) {
         if (!executor.isShutdown) {
-            executor.execute { startInternal() }
+            executor.execute {
+                when (mode) {
+                    RealVpnStartMode.MANUAL -> {
+                        if (alwaysOnWaiting) {
+                            cancelAlwaysOnRestore(forceBridgeCancellation = false)
+                            alwaysOnWaiting = false
+                        }
+                        startPreparedInternal(RealVpnStartMode.MANUAL)
+                    }
+                    RealVpnStartMode.ALWAYS_ON -> beginAlwaysOnInternal()
+                }
+            }
         }
     }
 
     private fun requestStop(userInitiated: Boolean = false) {
-        terminateRecovery()
+        if (shouldBlockAlwaysOnDisconnect(userInitiated, systemAlwaysOnEnabled())) {
+            publishAlwaysOnDisconnectBlocked()
+            return
+        }
         synchronized(stateLock) {
             if (userInitiated) {
                 lifecycle.requestUserStop()
             }
         }
+        cancelAlwaysOnRestore(forceBridgeCancellation = true)
+        terminateRecovery()
         if (!cleanupExecutor.isShutdown) {
             cleanupExecutor.execute { stopInternal() }
         } else {
@@ -157,14 +236,218 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun startInternal() {
-        val started = synchronized(stateLock) { lifecycle.beginSession() }
-        if (!started) {
+    private fun beginAlwaysOnInternal() {
+        if (alwaysOnWaiting) {
+            Log.i(REAL_VPN_LOG_TAG, "ignored duplicate Always-on start while restore is pending")
+            return
+        }
+        if (synchronized(stateLock) { lifecycle.acceptsProgress() }) {
+            Log.i(REAL_VPN_LOG_TAG, "ignored Always-on start while VPN session is active")
+            return
+        }
+        alwaysOnWaiting = true
+        startForegroundCompat(RealVpnNotificationKind.CONNECTING)
+        setStatus("preparing", "正在恢复已保存的登录状态")
+        scheduleAlwaysOnRestoreForNetwork(
+            snapshot = underlaySnapshot(),
+            resetRevision = true,
+        )
+    }
+
+    private fun scheduleAlwaysOnRestoreForNetwork(
+        snapshot: UnderlayNetworkSnapshot,
+        resetRevision: Boolean,
+    ) {
+        if (!alwaysOnWaiting) return
+
+        var cancelBridge = false
+        if (underlayMonitorFailure != null || !snapshot.hasUsableNetwork) {
+            synchronized(alwaysOnRestoreLock) {
+                alwaysOnRestoreFuture?.cancel(false)
+                alwaysOnRestoreFuture = null
+                cancelBridge = alwaysOnRestoreInFlight
+                alwaysOnRestoreInFlight = false
+                alwaysOnRestoreRevision = snapshot.revision
+                alwaysOnRetryPolicy.resetForRevision(snapshot.revision)
+            }
+            if (cancelBridge) {
+                alwaysOnSessionRestorer?.cancel()
+            } else {
+                alwaysOnSessionRestorer?.invalidate()
+            }
+            enterAlwaysOnWaitingForNetwork(
+                if (underlayMonitorFailure != null) {
+                    "Android 正在等待可用网络监测"
+                } else {
+                    "正在等待可用网络"
+                },
+            )
+            return
+        }
+
+        var delayMillis: Long? = null
+        var exhausted = false
+        synchronized(alwaysOnRestoreLock) {
+            if (resetRevision || alwaysOnRestoreRevision != snapshot.revision) {
+                alwaysOnRestoreFuture?.cancel(false)
+                alwaysOnRestoreFuture = null
+                cancelBridge = alwaysOnRestoreInFlight
+                alwaysOnRestoreInFlight = false
+                alwaysOnRestoreRevision = snapshot.revision
+                alwaysOnRetryPolicy.resetForRevision(snapshot.revision)
+            }
+            if (!alwaysOnRestoreInFlight && alwaysOnRestoreFuture == null) {
+                delayMillis = alwaysOnRetryPolicy.nextDelayFor(snapshot.revision)
+                exhausted = delayMillis == null
+                delayMillis?.let { delay ->
+                    alwaysOnRestoreFuture = watchdogExecutor.schedule(
+                        {
+                            synchronized(alwaysOnRestoreLock) {
+                                alwaysOnRestoreFuture = null
+                                alwaysOnRestoreInFlight = true
+                            }
+                            if (!executor.isShutdown) {
+                                executor.execute {
+                                    runAlwaysOnSessionRestore(snapshot.revision)
+                                }
+                            }
+                        },
+                        delay,
+                        TimeUnit.MILLISECONDS,
+                    )
+                }
+            }
+        }
+        if (cancelBridge) {
+            alwaysOnSessionRestorer?.cancel()
+        } else if (delayMillis != null) {
+            alwaysOnSessionRestorer?.invalidate()
+        }
+        if (exhausted) {
+            enterAlwaysOnWaitingForNetwork("当前网络暂时无法恢复登录状态，等待网络变化后重试")
+        }
+    }
+
+    private fun runAlwaysOnSessionRestore(revision: Long) {
+        if (!alwaysOnWaiting) return
+        val snapshot = underlaySnapshot()
+        if (snapshot.revision != revision) {
+            scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = true)
+            return
+        }
+        if (underlayMonitorFailure != null || !snapshot.hasUsableNetwork) {
+            scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = false)
+            return
+        }
+        val restorer = getAlwaysOnSessionRestorer()
+        restorer.start { result ->
+            if (!executor.isShutdown) {
+                executor.execute {
+                    handleAlwaysOnSessionRestoreResult(revision, result)
+                }
+            }
+        }
+    }
+
+    private fun handleAlwaysOnSessionRestoreResult(
+        revision: Long,
+        result: AlwaysOnSessionRestoreResult,
+    ) {
+        if (result.code.isNotBlank()) {
+            RedactedDiagnostics.recordVpnServiceState(
+                applicationContext,
+                state = "sessionRestore",
+                code = result.code,
+            )
+        }
+        synchronized(alwaysOnRestoreLock) {
+            alwaysOnRestoreInFlight = false
+        }
+        if (!alwaysOnWaiting) return
+        val snapshot = underlaySnapshot()
+        if (snapshot.revision != revision) {
+            scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = true)
+            return
+        }
+        when (result.outcome) {
+            AlwaysOnSessionRestoreOutcome.Authenticated -> {
+                alwaysOnWaiting = false
+                synchronized(alwaysOnRestoreLock) {
+                    alwaysOnRestoreFuture?.cancel(false)
+                    alwaysOnRestoreFuture = null
+                }
+                startPreparedInternal(RealVpnStartMode.ALWAYS_ON)
+            }
+            AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication,
+            AlwaysOnSessionRestoreOutcome.InvalidSession,
+            -> enterAlwaysOnWaitingForAuthentication()
+            AlwaysOnSessionRestoreOutcome.TransientFailure -> {
+                if (!snapshot.hasUsableNetwork) {
+                    enterAlwaysOnWaitingForNetwork("正在等待可用网络")
+                } else {
+                    scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = false)
+                }
+            }
+        }
+    }
+
+    private fun enterAlwaysOnWaitingForNetwork(message: String) {
+        alwaysOnWaiting = true
+        setStatus("waitingForNetwork", message)
+        updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
+    }
+
+    private fun enterAlwaysOnWaitingForAuthentication() {
+        alwaysOnWaiting = true
+        setStatus("waitingForAuthentication", "需要打开 App 完成登录")
+        updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION)
+    }
+
+    private fun getAlwaysOnSessionRestorer(): AlwaysOnSessionRestorer =
+        synchronized(alwaysOnRestoreLock) {
+            alwaysOnSessionRestorer ?: AlwaysOnSessionRestorer(
+                sessionStore = AuthSessionStore(applicationContext),
+                deviceIdentityProvider = DeviceIdentityProvider(applicationContext),
+                bridge = goCoreBridge,
+            ).also { alwaysOnSessionRestorer = it }
+        }
+
+    private fun cancelAlwaysOnRestore(forceBridgeCancellation: Boolean) {
+        val cancelBridge = synchronized(alwaysOnRestoreLock) {
+            val shouldCancel = forceBridgeCancellation || alwaysOnRestoreInFlight
+            alwaysOnRestoreFuture?.cancel(false)
+            alwaysOnRestoreFuture = null
+            alwaysOnRestoreInFlight = false
+            alwaysOnRestoreRevision = Long.MIN_VALUE
+            alwaysOnRetryPolicy.resetForRevision(Long.MIN_VALUE)
+            shouldCancel
+        }
+        alwaysOnSessionRestorer?.let { restorer ->
+            if (cancelBridge) restorer.cancel() else restorer.invalidate()
+        }
+    }
+
+    private fun handoffToForegroundAuthentication() {
+        if (!alwaysOnWaiting) return
+        cancelAlwaysOnRestore(forceBridgeCancellation = true)
+        alwaysOnWaiting = false
+    }
+
+    private fun systemAlwaysOnEnabled(): Boolean = runCatching { isAlwaysOn }
+        .getOrDefault(false)
+
+    private fun startPreparedInternal(mode: RealVpnStartMode) {
+        activeStartMode = mode
+        val generation = synchronized(stateLock) {
+            if (lifecycle.beginSession()) bridgeSessionTracker.beginSession() else null
+        }
+        if (generation == null) {
             Log.i(REAL_VPN_LOG_TAG, "ignored duplicate start request")
             return
         }
 
         val canStart = synchronized(recoveryLock) {
+            l3RecoveryActive = false
             recoveryCoordinator.beginSession(underlaySnapshot())
         }
         if (!canStart) {
@@ -195,7 +478,11 @@ class RealVpnService : VpnService() {
                 )
             }
             startForegroundCompat(
-                if (recovering) "Network changed; reconnecting VPN" else "ZJU aTrust VPN is active",
+                if (recovering) {
+                    RealVpnNotificationKind.RECOVERING
+                } else {
+                    RealVpnNotificationKind.CONNECTING
+                },
             )
             val config = goCoreBridge.prepareRealVpn()
             Log.i(
@@ -268,7 +555,7 @@ class RealVpnService : VpnService() {
                 return
             }
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.begin")
-            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener)
+            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener(generation))
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.complete")
             detachedTunFd = null
         } catch (error: Throwable) {
@@ -286,7 +573,7 @@ class RealVpnService : VpnService() {
             }
             if (retainedFailure != null) {
                 terminateRecovery()
-                publishFailure("startInternal", retainedFailure)
+                publishFailure("startPreparedInternal", retainedFailure)
             } else {
                 Log.i(REAL_VPN_LOG_TAG, "ignored startup failure after user stop")
             }
@@ -322,7 +609,9 @@ class RealVpnService : VpnService() {
         goCoreBridge.stopRealVpn()
         stopForegroundCompat()
         when (val outcome = synchronized(stateLock) { lifecycle.terminalOutcome() }) {
-            is RealVpnTerminalOutcome.Error -> publishFailure("stopInternal", outcome.failure)
+            is RealVpnTerminalOutcome.Error -> {
+                publishFailure("stopInternal", outcome.failure)
+            }
             RealVpnTerminalOutcome.Stopped -> setStatus("stopped", "Real aTrust VPN is stopped")
             null -> Unit
         }
@@ -334,6 +623,13 @@ class RealVpnService : VpnService() {
             recoveryCoordinator.onNetworkChanged(snapshot)
         }
         handleRecoveryCommands(commands)
+        if (alwaysOnWaiting && RealVpnStateStore.state.value.state != "waitingForAuthentication") {
+            if (!executor.isShutdown) {
+                executor.execute {
+                    scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = false)
+                }
+            }
+        }
     }
 
     private fun handleRecoveryCommands(commands: List<RealVpnRecoveryCommand>) {
@@ -395,12 +691,15 @@ class RealVpnService : VpnService() {
 
     private fun requestRecoveryStart() {
         if (!executor.isShutdown) {
-            executor.execute(::startInternal)
+            executor.execute { startPreparedInternal(activeStartMode) }
         }
     }
 
     private fun terminateRecovery() {
-        val commands = synchronized(recoveryLock) { recoveryCoordinator.terminate() }
+        val commands = synchronized(recoveryLock) {
+            l3RecoveryActive = false
+            recoveryCoordinator.terminate()
+        }
         handleRecoveryCommands(commands)
     }
 
@@ -408,7 +707,7 @@ class RealVpnService : VpnService() {
         recoveryCoordinator.isStoppingForRecovery
     }
 
-    private fun isRecoveryInProgress(): Boolean = synchronized(recoveryLock) {
+    private fun isUnderlayRecoveryInProgress(): Boolean = synchronized(recoveryLock) {
         recoveryCoordinator.presentation != RealVpnRecoveryPresentation.NONE
     }
 
@@ -420,18 +719,29 @@ class RealVpnService : VpnService() {
         }
 
     private fun publishRecoveryPresentation() {
-        val presentation = synchronized(recoveryLock) { recoveryCoordinator.presentation }
+        val presentation = synchronized(recoveryLock) {
+            combinedRealVpnRecoveryPresentation(
+                underlay = recoveryCoordinator.presentation,
+                l3Recovering = l3RecoveryActive,
+            )
+        }
         if (presentation == publishedRecoveryPresentation) return
+        val previous = publishedRecoveryPresentation
         publishedRecoveryPresentation = presentation
         when (presentation) {
-            RealVpnRecoveryPresentation.NONE -> Unit
+            RealVpnRecoveryPresentation.NONE -> {
+                if (previous != RealVpnRecoveryPresentation.NONE && acceptsStartProgress()) {
+                    setStatus("active", "ZJU aTrust VPN is active")
+                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
+                }
+            }
             RealVpnRecoveryPresentation.RECOVERING -> {
-                setStatus("recovering", "Network changed; reconnecting VPN")
-                updateForegroundNotification("Network changed; reconnecting VPN")
+                setStatus("recovering", "The VPN data connection is recovering")
+                updateForegroundNotification(RealVpnNotificationKind.RECOVERING)
             }
             RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
                 setStatus("waitingForNetwork", "Waiting for an underlying network")
-                updateForegroundNotification("Waiting for an underlying network")
+                updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
             }
         }
     }
@@ -476,6 +786,31 @@ class RealVpnService : VpnService() {
         RealVpnStateStore.setError(failure.code, failure.message)
     }
 
+    private fun publishAlwaysOnDisconnectBlocked() {
+        setStatus(
+            "alwaysOnDisconnectBlocked",
+            "请先在系统 VPN 设置中关闭 Always-on",
+        )
+        val content = realVpnAlwaysOnDisconnectGuidanceContent()
+        val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
+            .setSmallIcon(R.drawable.ic_stat_cedar)
+            .setContentIntent(openVpnSettingsPendingIntent())
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setCategory(Notification.CATEGORY_SYSTEM)
+            .build()
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                .notify(ALWAYS_ON_GUIDANCE_NOTIFICATION_ID, notification)
+        }.onFailure { error ->
+            Log.w(REAL_VPN_LOG_TAG, "Unable to publish Always-on guidance", error)
+        }
+    }
+
     private class RealVpnStartFailure(
         val code: String,
         val stage: String,
@@ -488,19 +823,19 @@ class RealVpnService : VpnService() {
                 REAL_VPN_CHANNEL,
                 "ZJU Connect VPN",
                 NotificationManager.IMPORTANCE_LOW,
-            )
+            ).apply {
+                description = "显示 VPN 连接状态"
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun startForegroundCompat(contentText: String) {
-        val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle("ZJU Connect")
-            .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .build()
+    private fun startForegroundCompat(kind: RealVpnNotificationKind) {
+        currentNotificationKind = kind
+        val notification = buildVpnNotification(kind)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -513,14 +848,52 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun updateForegroundNotification(contentText: String) {
-        // Re-post through the already-running foreground service instead of
-        // NotificationManager.notify(), which would require POST_NOTIFICATIONS
-        // on Android 13+ and is not needed for the VPN lifecycle notification.
-        startForegroundCompat(contentText)
+    private fun buildVpnNotification(kind: RealVpnNotificationKind): Notification {
+        val content = realVpnNotificationContent(kind)
+        val builder = Notification.Builder(this, REAL_VPN_CHANNEL)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
+            .setSmallIcon(R.drawable.ic_stat_cedar)
+            .setContentIntent(openAppPendingIntent())
+            .setOngoing(content.ongoing)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setCategory(Notification.CATEGORY_SERVICE)
+        return builder.build()
+    }
+
+    private fun openAppPendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun openVpnSettingsPendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        ALWAYS_ON_GUIDANCE_NOTIFICATION_ID,
+        Intent(Settings.ACTION_VPN_SETTINGS),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun updateForegroundNotification(kind: RealVpnNotificationKind) {
+        startForegroundCompat(kind)
+    }
+
+    private fun refreshCurrentNotification() {
+        if (synchronized(stateLock) { lifecycle.acceptsProgress() }) {
+            updateForegroundNotification(currentNotificationKind)
+        }
     }
 
     private fun stopForegroundCompat() {
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                .cancel(ALWAYS_ON_GUIDANCE_NOTIFICATION_ID)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {

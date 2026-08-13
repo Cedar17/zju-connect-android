@@ -36,6 +36,7 @@ class DiagnosticsTest {
             code = "cookie=abc",
             stage = "dataplane.tun.read/192.168.1.10",
             cause = "10.0.0.1:443",
+            durationMillis = -1,
             counters = RedactedDiagnosticCounters(
                 tunReadPackets = -1,
                 tunReadBytes = 60,
@@ -47,6 +48,7 @@ class DiagnosticsTest {
         assertEquals("unknown", event.code)
         assertEquals("dataplane", event.stage)
         assertTrue(event.cause.isEmpty())
+        assertEquals(0L, event.durationMillis)
         assertEquals(0L, event.counters?.tunReadPackets)
         assertEquals(60L, event.counters?.tunReadBytes)
     }
@@ -69,6 +71,7 @@ class DiagnosticsTest {
                     code = "password=secret",
                     stage = "dataplane.l3.write",
                     cause = "fdClosed",
+                    durationMillis = 1_234,
                     counters = RedactedDiagnosticCounters(
                         tunReadPackets = 3,
                         tunReadBytes = 180,
@@ -83,6 +86,7 @@ class DiagnosticsTest {
         assertTrue(report.contains("code=unknown"))
         assertTrue(report.contains("stage=dataplane"))
         assertTrue(report.contains("cause=fdClosed"))
+        assertTrue(report.contains("durationMs=1234"))
         assertTrue(report.contains("tunRead=3/180"))
         for (forbidden in listOf("password=secret", "192.168", "cookie", "sid", "payload")) {
             assertFalse("report contained forbidden value $forbidden: $report", report.contains(forbidden))
@@ -165,6 +169,36 @@ class DiagnosticsTest {
     }
 
     @Test
+    fun displayGroupingKeepsDifferentDurationsVisible() {
+        val events = listOf(
+            RedactedDiagnosticEvent(
+                timestampMillis = 1,
+                category = "connection",
+                state = "error",
+                code = "authNetworkTimeout",
+                stage = "auth.config",
+                cause = "timeout",
+                durationMillis = 8_000,
+            ),
+            RedactedDiagnosticEvent(
+                timestampMillis = 2,
+                category = "connection",
+                state = "error",
+                code = "authNetworkTimeout",
+                stage = "auth.config",
+                cause = "timeout",
+                durationMillis = 20_000,
+            ),
+        )
+
+        val groups = collapseConsecutiveDiagnosticEvents(events)
+
+        assertEquals(2, groups.size)
+        assertEquals(8_000L, groups.first().event.durationMillis)
+        assertEquals(20_000L, groups.last().event.durationMillis)
+    }
+
+    @Test
     fun previewLineUsesCompactAllowlistedFieldsAndRepeatCount() {
         val line = formatDiagnosticPreviewLine(
             DiagnosticEventGroup(
@@ -174,6 +208,7 @@ class DiagnosticsTest {
                     state = "diagnostic",
                     stage = "dataplane",
                     cause = "wouldBlock",
+                    durationMillis = 42,
                 ),
                 occurrences = 5,
             ),
@@ -182,6 +217,7 @@ class DiagnosticsTest {
         assertTrue(line.contains("vpn/diagnostic"))
         assertTrue(line.contains("stage=dataplane"))
         assertTrue(line.contains("cause=wouldBlock"))
+        assertTrue(line.contains("durationMs=42"))
         assertTrue(line.endsWith("×5"))
         assertFalse(line.contains("tunReadPackets"))
     }
@@ -221,5 +257,49 @@ class DiagnosticsTest {
         assertEquals("waitingForNetwork", waiting.state)
         assertEquals("服务恢复中", diagnosticStateLabel(recovering))
         assertEquals("服务等待网络", diagnosticStateLabel(waiting))
+    }
+
+    @Test
+    fun l3RecoveryCodesAndFailureCategoriesRemainSafeAndVisible() {
+        val recovering = RedactedDiagnosticEvent(
+            timestampMillis = 1,
+            category = "vpn",
+            state = "recovering",
+            code = "l3Reconnecting",
+            stage = "dataplane.l3.reconnect",
+            cause = "l3Recovering",
+        ).redacted()
+        val failed = RedactedDiagnosticEvent(
+            timestampMillis = 2,
+            category = "vpn",
+            state = "error",
+            code = "vpnSessionInvalid",
+            stage = "dataplane.l3.reconnect",
+            cause = "authentication",
+        ).redacted()
+
+        assertEquals("l3Reconnecting", recovering.code)
+        assertEquals("l3Recovering", recovering.cause)
+        assertEquals("vpnSessionInvalid", failed.code)
+        assertEquals("authentication", failed.cause)
+        assertEquals("dataplane", failed.stage)
+    }
+
+    @Test
+    fun authenticationFailureDetailsRemainVisibleWithoutRawErrorText() {
+        val event = RedactedDiagnosticEvent(
+            timestampMillis = 1,
+            category = "connection",
+            state = "error",
+            code = "authNetworkTimeout",
+            stage = "auth.config",
+            cause = "timeout",
+            durationMillis = 20_000,
+        ).redacted()
+
+        assertEquals("authNetworkTimeout", event.code)
+        assertEquals("auth.config", event.stage)
+        assertEquals("timeout", event.cause)
+        assertEquals(20_000L, event.durationMillis)
     }
 }

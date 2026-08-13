@@ -4,7 +4,7 @@ go 1.25.6
 
 require github.com/mythologyli/zju-connect v1.3.1-0.20260812122842-1b6ad1387375
 
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.3-0.20260812142959-1a736c5355b8
+replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.3-0.20260813033047-ebe7fbe093fc
 
 require (
 	github.com/boombuler/barcode v1.1.0 // indirect

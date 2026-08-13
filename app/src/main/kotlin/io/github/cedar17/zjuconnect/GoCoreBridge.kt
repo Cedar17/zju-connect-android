@@ -189,6 +189,9 @@ class GoCoreBridge {
             state = event.optString("state", "unknown"),
             code = event.optString("code", ""),
             message = event.optString("message", "Authentication response received"),
+            stage = event.optString("stage", ""),
+            cause = event.optString("cause", ""),
+            durationMillis = event.optLong("durationMs", 0),
             challengeKind = event.optString("challengeKind", ""),
             authMethods = event.optJSONArray("authMethods").toAuthMethods(),
             phoneNumbers = event.optJSONArray("phoneNumbers").toStrings(),
@@ -392,4 +395,7 @@ data class GoAuthEvent(
     val captchaWidth: Int = 0,
     val captchaHeight: Int = 0,
     val username: String = "",
+    val stage: String = "",
+    val cause: String = "",
+    val durationMillis: Long = 0,
 )

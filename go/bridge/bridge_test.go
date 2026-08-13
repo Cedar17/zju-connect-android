@@ -1,15 +1,18 @@
 package core
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 )
@@ -119,7 +122,7 @@ func TestAuthenticationPromptPreservesServerDrivenChallenge(t *testing.T) {
 		Code:          "sessionExpired",
 		Message:       "token needed",
 		ChallengeKind: "auth/totp",
-	})
+	}, "auth.config", 0)
 	if len(listener.events) != 1 {
 		t.Fatalf("events = %d, want 1", len(listener.events))
 	}
@@ -134,13 +137,33 @@ func TestAuthenticationPromptPreservesServerDrivenChallenge(t *testing.T) {
 
 func TestAuthenticationFailureIsRedacted(t *testing.T) {
 	secret := "session-cookie-and-password"
-	event := authenticationFailure(fmt.Errorf("x509: certificate rejected: %s", secret))
+	event := authenticationFailure("auth.config", 0, fmt.Errorf("x509: certificate rejected: %s", secret))
 	encoded := marshal(event)
 	if event.Code != "certificateRejected" {
 		t.Errorf("code = %q, want certificateRejected", event.Code)
 	}
 	if strings.Contains(encoded, secret) {
 		t.Fatalf("authentication event leaked a secret: %s", encoded)
+	}
+}
+
+func TestAuthenticationFailureClassifiesSafeTransportDetails(t *testing.T) {
+	timeout := authenticationFailure("auth.config", 20*time.Second, context.DeadlineExceeded)
+	if timeout.Code != "authNetworkTimeout" || timeout.Stage != "auth.config" || timeout.Cause != "timeout" {
+		t.Fatalf("timeout event = %#v", timeout)
+	}
+	if timeout.DurationMs != 20_000 {
+		t.Fatalf("timeout duration = %d, want 20000", timeout.DurationMs)
+	}
+
+	dns := authenticationFailure("auth.config", time.Second, &net.DNSError{Err: "lookup failed", Name: "vpn.zju.edu.cn"})
+	if dns.Code != "authDnsFailure" || dns.Cause != "dns" {
+		t.Fatalf("DNS event = %#v", dns)
+	}
+
+	protocol := authenticationFailure("auth.config", 2*time.Second, fmt.Errorf("invalid character '<' looking for beginning of value"))
+	if protocol.Code != "authProtocolFailure" || protocol.Cause != "protocol" {
+		t.Fatalf("protocol event = %#v", protocol)
 	}
 }
 
@@ -205,13 +228,13 @@ func TestAuthenticationSnapshotRejectsInvalidScopeAndVersion(t *testing.T) {
 }
 
 func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) {
-	invalid := sessionRestoreFailure(auth.ErrSessionInvalid)
+	invalid := sessionRestoreFailure(0, auth.ErrSessionInvalid)
 	if invalid.Type != "sessionInvalid" || invalid.Code != "sessionInvalid" || invalid.State != "idle" {
 		t.Fatalf("invalid-session event = %#v", invalid)
 	}
 
 	secret := "cookie-value-that-must-not-leak"
-	unavailable := sessionRestoreFailure(errors.New("network failure: " + secret))
+	unavailable := sessionRestoreFailure(0, errors.New("network failure: "+secret))
 	encoded := marshal(unavailable)
 	if unavailable.Code != "sessionRestoreUnavailable" || strings.Contains(encoded, secret) {
 		t.Fatalf("restore failure leaked or misclassified: %s", encoded)

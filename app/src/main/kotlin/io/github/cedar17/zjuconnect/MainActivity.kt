@@ -1,7 +1,9 @@
 package io.github.cedar17.zjuconnect
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.VpnService
 import android.os.Build
@@ -68,13 +70,26 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
+private const val NOTIFICATION_PREFERENCES = "notification_preferences"
+private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
+    private val notificationPreferences by lazy {
+        getSharedPreferences(NOTIFICATION_PREFERENCES, MODE_PRIVATE)
+    }
+    private var pendingVpnStart: ConnectionEffect.StartVpnService? = null
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             connectionViewModel.onVpnPermissionResult(result.resultCode == Activity.RESULT_OK)
+        }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            val pendingStart = pendingVpnStart
+            pendingVpnStart = null
+            pendingStart?.let(::startVpnService)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,6 +106,48 @@ class MainActivity : ComponentActivity() {
                     viewModel = connectionViewModel,
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        RealVpnService.refreshNotificationIfRunning()
+    }
+
+    private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        if (shouldRequestNotificationPermission()) {
+            pendingVpnStart = effect
+            notificationPreferences.edit()
+                .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
+                .apply()
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startVpnService(effect)
+        }
+    }
+
+    private fun shouldRequestNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED &&
+            !notificationPreferences.getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)
+
+    private fun startVpnService(effect: ConnectionEffect.StartVpnService) {
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        runCatching {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, RealVpnService::class.java)
+                    .setAction(RealVpnService.ACTION_START)
+                    .putExtra(
+                        REAL_VPN_EXTRA_START_SOURCE,
+                        REAL_VPN_START_SOURCE_MANUAL,
+                    ),
+            )
+        }.onFailure { error ->
+            Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
+            connectionViewModel.onVpnServiceDispatchFailed(effect)
         }
     }
 
@@ -111,16 +168,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             is ConnectionEffect.StartVpnService -> {
-                runCatching {
-                    ContextCompat.startForegroundService(
-                        this,
-                        Intent(this, RealVpnService::class.java)
-                            .setAction(RealVpnService.ACTION_START),
-                    )
-                }.onFailure { error ->
-                    Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
-                    connectionViewModel.onVpnServiceDispatchFailed(effect)
-                }
+                dispatchStartVpnService(effect)
             }
             is ConnectionEffect.StopVpnService -> {
                 runCatching {
@@ -469,6 +517,7 @@ private fun CaptchaChallenge(state: ConnectionUiState, viewModel: ConnectionView
 
 private fun connectionTitle(phase: ConnectionPhase): String = when (phase) {
     ConnectionPhase.CONNECTED -> "已连接"
+    ConnectionPhase.RECOVERING_VPN -> "正在恢复"
     ConnectionPhase.ERROR -> "连接遇到问题"
     ConnectionPhase.DISCONNECTED -> "未连接"
     ConnectionPhase.DISCONNECTING -> "正在断开"
@@ -494,12 +543,16 @@ private fun primaryActionLabel(phase: ConnectionPhase): String = when (phase) {
     ConnectionPhase.AWAITING_SMS -> "验证并连接"
     ConnectionPhase.AWAITING_TOKEN -> "验证并连接"
     ConnectionPhase.AWAITING_CAPTCHA -> "提交并继续"
+    ConnectionPhase.RECOVERING_VPN,
     ConnectionPhase.CONNECTED -> "断开"
     else -> "正在连接"
 }
 
 private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (state.phase) {
-    ConnectionPhase.DISCONNECTED, ConnectionPhase.ERROR, ConnectionPhase.CONNECTED -> true
+    ConnectionPhase.DISCONNECTED,
+    ConnectionPhase.ERROR,
+    ConnectionPhase.RECOVERING_VPN,
+    ConnectionPhase.CONNECTED -> true
     ConnectionPhase.AWAITING_CREDENTIALS -> state.username.isNotBlank() && state.password.isNotBlank()
     ConnectionPhase.AWAITING_PHONE -> state.phone.isNotBlank()
     ConnectionPhase.AWAITING_SMS -> state.smsCode.isNotBlank()

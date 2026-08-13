@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -33,6 +32,7 @@ enum class ConnectionPhase {
     AWAITING_CAPTCHA,
     PREPARING_VPN_PERMISSION,
     ESTABLISHING_VPN,
+    RECOVERING_VPN,
     CONNECTED,
     DISCONNECTING,
     ERROR,
@@ -48,6 +48,9 @@ data class ConnectionUiState(
     val statusMessage: String = "尚未连接",
     val internalCode: String = "",
     val notice: String = "",
+    val diagnosticStage: String = "",
+    val diagnosticCause: String = "",
+    val diagnosticDurationMillis: Long = 0,
     val rememberedUsername: String = "",
     val username: String = "",
     val password: String = "",
@@ -140,6 +143,13 @@ internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMetho
 
 internal fun connectionErrorMessage(code: String): String = when (code) {
     "vpnPermissionDenied" -> "需要授予系统 VPN 权限才能连接。"
+    "authDnsFailure" -> "无法解析学校 VPN 服务地址，请检查当前网络后重试。"
+    "authNetworkFailure" -> "无法连接学校 VPN 服务，请切换网络后重试。"
+    "authNetworkTimeout" -> "连接学校 VPN 服务超时，请切换网络后重试。"
+    "authProtocolFailure" -> "学校 VPN 服务返回了无法识别的响应，请稍后重试。"
+    "authServerFailure" -> "学校 VPN 服务暂时不可用，请稍后重试。"
+    "vpnSessionInvalid" -> "登录状态已失效，请重新连接。"
+    "vpnConfigurationUnavailable" -> "学校 VPN 暂时没有提供可用配置，请稍后重试。"
     "certificateRejected" -> "无法验证学校 VPN 服务器，请检查系统时间和当前网络后重试。"
     "unsupportedAuthMethod" -> "学校当前要求的登录方式暂不受支持。"
     "invalidInput", "authenticationFailed" -> "登录未完成，请检查账号、密码或验证码后重试。"
@@ -148,12 +158,14 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "deviceIdentityUnavailable" -> "无法读取本机设备身份，请重启设备后重试。"
     "accountSwitchClearFailed" -> "无法清除本机登录状态，请稍后重试。"
     "sessionRestoreUnavailable" -> "暂时无法验证已保存的登录状态，请检查网络后重试。"
+    "alwaysOnAuthenticationRequired" -> "请打开应用完成登录后重试。"
+    "alwaysOnDisconnectBlocked" -> "Always-on 由系统管理，请先在系统 VPN 设置中关闭。"
     "authInfoUnavailable", "initializationFailed" -> "暂时无法连接学校 VPN 服务，请检查网络后重试。"
     "vpnRevoked" -> "系统已撤销 VPN 权限，请重新连接。"
     "vpnStopDispatchFailed" -> "未能发送断开请求，请稍后重试。"
     "vpnStartDispatchFailed" -> "未能启动 VPN 服务，请稍后重试。"
     "networkMonitorUnavailable" -> "Android 无法监测当前网络，请重新连接。"
-    "vpnSetupFailed", "vpnConfigurationUnavailable", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
+    "vpnSetupFailed", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
         "学校 VPN 暂时无法完成连接，请稍后重试。"
     "tunEstablishFailed", "tunEstablishTimeout", "tunInitializationFailed" ->
         "Android 无法建立 VPN 接口，请稍后重试。"
@@ -231,16 +243,33 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         viewModelScope.launch {
             state
-                .map { it.phase to it.internalCode }
-                .distinctUntilChanged()
-                .collect { (phase, code) ->
-                    RedactedDiagnostics.recordConnectionState(appContext, phase, code)
+                .distinctUntilChanged { previous, current ->
+                    previous.phase == current.phase &&
+                        previous.internalCode == current.internalCode &&
+                        previous.diagnosticStage == current.diagnosticStage &&
+                        previous.diagnosticCause == current.diagnosticCause &&
+                        previous.diagnosticDurationMillis == current.diagnosticDurationMillis
+                }
+                .collect { current ->
+                    RedactedDiagnostics.recordConnectionState(
+                        context = appContext,
+                        phase = current.phase,
+                        code = current.internalCode,
+                        stage = current.diagnosticStage,
+                        cause = current.diagnosticCause,
+                        durationMillis = current.diagnosticDurationMillis,
+                    )
                 }
         }
     }
 
     fun onPrimaryAction() {
-        when (_state.value.phase) {
+        val phase = _state.value.phase
+        if (isVpnDisconnectablePhase(phase)) {
+            cancelConnection()
+            return
+        }
+        when (phase) {
             ConnectionPhase.DISCONNECTED -> beginConnection()
             ConnectionPhase.ERROR -> {
                 if (_state.value.internalCode == "accountSwitchClearFailed") {
@@ -254,7 +283,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ConnectionPhase.AWAITING_SMS -> submitSmsCode()
             ConnectionPhase.AWAITING_TOKEN -> submitToken()
             ConnectionPhase.AWAITING_CAPTCHA -> submitCaptcha()
-            ConnectionPhase.CONNECTED -> cancelConnection()
             else -> Unit
         }
     }
@@ -337,6 +365,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val currentPhase = _state.value.phase
         val vpnMayBeRunning = currentPhase in setOf(
             ConnectionPhase.ESTABLISHING_VPN,
+            ConnectionPhase.RECOVERING_VPN,
             ConnectionPhase.CONNECTED,
             ConnectionPhase.DISCONNECTING,
         )
@@ -420,6 +449,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
+        RealVpnService.prepareForForegroundAuthentication()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
         if (activeDeviceID.isEmpty()) {
@@ -661,7 +691,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
                 "authenticated" -> persistAuthenticatedSession(attemptId, event)
-                "sessionInvalid" -> handleStoredSessionFailure(attemptId, event)
+                "sessionInvalid" -> {
+                    recordAuthenticationDiagnostic(event)
+                    handleStoredSessionFailure(attemptId, event)
+                }
                 "error" -> {
                     if (restoringStoredSession &&
                         storedSessionFailureAction(event.type, event.code) ==
@@ -670,7 +703,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         handleStoredSessionFailure(attemptId, event)
                     } else {
                         restoringStoredSession = false
-                        showError(event.code)
+                        showError(
+                            code = event.code,
+                            diagnosticStage = event.stage,
+                            diagnosticCause = event.cause,
+                            diagnosticDurationMillis = event.durationMillis,
+                        )
                     }
                 }
                 "cancelled" -> {
@@ -891,8 +929,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
                     _state.update {
                         it.copy(
-                            phase = ConnectionPhase.ESTABLISHING_VPN,
-                            statusMessage = "网络已切换，正在恢复 VPN…",
+                            phase = ConnectionPhase.RECOVERING_VPN,
+                            statusMessage = "正在恢复 VPN…",
                             internalCode = "",
                         )
                     }
@@ -902,11 +940,25 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
                     _state.update {
                         it.copy(
-                            phase = ConnectionPhase.ESTABLISHING_VPN,
+                            phase = ConnectionPhase.RECOVERING_VPN,
                             statusMessage = "正在等待可用网络…",
                             internalCode = "",
                         )
                     }
+                }
+            }
+            "waitingForAuthentication" -> {
+                if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
+                    showError("alwaysOnAuthenticationRequired")
+                }
+            }
+            "alwaysOnDisconnectBlocked" -> {
+                _state.update {
+                    it.withoutSensitiveInputs().copy(
+                        phase = ConnectionPhase.CONNECTED,
+                        statusMessage = vpnState.message.ifBlank { "已连接到浙江大学 VPN" },
+                        internalCode = "",
+                    )
                 }
             }
             "active" -> _state.update {
@@ -943,7 +995,23 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun showError(code: String) {
+    private fun recordAuthenticationDiagnostic(event: GoAuthEvent) {
+        RedactedDiagnostics.recordConnectionState(
+            context = appContext,
+            phase = ConnectionPhase.ERROR,
+            code = event.code,
+            stage = event.stage,
+            cause = event.cause,
+            durationMillis = event.durationMillis,
+        )
+    }
+
+    private fun showError(
+        code: String,
+        diagnosticStage: String = "",
+        diagnosticCause: String = "",
+        diagnosticDurationMillis: Long = 0,
+    ) {
         pendingPermissionAttemptId = null
         pendingCredential = null
         _state.update {
@@ -951,6 +1019,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 phase = ConnectionPhase.ERROR,
                 statusMessage = connectionErrorMessage(code),
                 internalCode = code,
+                diagnosticStage = diagnosticStage,
+                diagnosticCause = diagnosticCause,
+                diagnosticDurationMillis = diagnosticDurationMillis,
             )
         }
     }
@@ -976,10 +1047,16 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
     captchaWidth = 0,
     captchaHeight = 0,
     captchaPoints = emptyList(),
+    diagnosticStage = "",
+    diagnosticCause = "",
+    diagnosticDurationMillis = 0,
 )
 
 internal fun canSwitchAccount(state: ConnectionUiState): Boolean =
     state.phase == ConnectionPhase.DISCONNECTED && state.rememberedUsername.isNotBlank()
+
+internal fun isVpnDisconnectablePhase(phase: ConnectionPhase): Boolean =
+    phase == ConnectionPhase.RECOVERING_VPN || phase == ConnectionPhase.CONNECTED
 
 internal fun accountSwitchPendingState(state: ConnectionUiState): ConnectionUiState =
     state.withoutSensitiveInputs().copy(
@@ -1020,6 +1097,7 @@ private val AUTHENTICATION_PHASES = setOf(
 private val VPN_PHASES = setOf(
     ConnectionPhase.PREPARING_VPN_PERMISSION,
     ConnectionPhase.ESTABLISHING_VPN,
+    ConnectionPhase.RECOVERING_VPN,
     ConnectionPhase.CONNECTED,
     ConnectionPhase.DISCONNECTING,
 )

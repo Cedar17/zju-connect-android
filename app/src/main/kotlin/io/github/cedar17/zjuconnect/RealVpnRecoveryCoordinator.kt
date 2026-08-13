@@ -21,6 +21,17 @@ internal enum class RealVpnRecoveryPresentation {
     WAITING_FOR_NETWORK,
 }
 
+internal fun combinedRealVpnRecoveryPresentation(
+    underlay: RealVpnRecoveryPresentation,
+    l3Recovering: Boolean,
+): RealVpnRecoveryPresentation = when {
+    underlay == RealVpnRecoveryPresentation.WAITING_FOR_NETWORK ->
+        RealVpnRecoveryPresentation.WAITING_FOR_NETWORK
+    underlay == RealVpnRecoveryPresentation.RECOVERING || l3Recovering ->
+        RealVpnRecoveryPresentation.RECOVERING
+    else -> RealVpnRecoveryPresentation.NONE
+}
+
 internal sealed interface RealVpnRecoveryCommand {
     data object CancelDebounce : RealVpnRecoveryCommand
 
