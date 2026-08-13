@@ -5,6 +5,7 @@ internal enum class RealVpnNotificationKind {
     CONNECTED,
     RECOVERING,
     WAITING_FOR_NETWORK,
+    WAITING_FOR_AUTHENTICATION,
 }
 
 internal data class RealVpnNotificationContent(
@@ -34,4 +35,20 @@ internal fun realVpnNotificationContent(kind: RealVpnNotificationKind): RealVpnN
         text = "正在等待可用网络",
         ongoing = true,
     )
+    RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION -> RealVpnNotificationContent(
+        title = "ZJU Connect",
+        text = "需要打开 App 完成登录",
+        ongoing = true,
+    )
 }
+
+internal data class RealVpnGuidanceNotificationContent(
+    val title: String,
+    val text: String,
+)
+
+internal fun realVpnAlwaysOnDisconnectGuidanceContent(): RealVpnGuidanceNotificationContent =
+    RealVpnGuidanceNotificationContent(
+        title = "ZJU Connect 由系统管理",
+        text = "请先在系统 VPN 设置中关闭 Always-on",
+    )

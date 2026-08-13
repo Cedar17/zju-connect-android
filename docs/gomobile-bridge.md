@@ -107,6 +107,15 @@ read or validate the snapshot. An explicit session expiry clears only the
 cookie snapshot and continues with the same device identity; transport and TLS
 failures retain cookies and saved credentials for retry.
 
+`ResumeAuthentication()` is also callable by `RealVpnService` when Android
+starts the app in Always-on mode without an Activity. The service reads only the
+Keystore-protected snapshot and the current device identity, zeroes the
+decrypted bytes after the bridge call, and never supplies `SavedCredentialStore`
+data. If the restored session reaches a password, phone, SMS, token, or CAPTCHA
+prompt, the service cancels that background flow and stays in a low-CPU
+foreground waiting state until the user opens the existing Activity and
+completes authentication.
+
 Android derives a stable 32-character aTrust device ID from its app-scoped
 `ANDROID_ID` and supplies it to both start and resume calls. A restored legacy
 snapshot cannot replace that identity. When cookies expire, the same flow

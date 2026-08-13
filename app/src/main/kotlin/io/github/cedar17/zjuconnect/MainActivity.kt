@@ -139,7 +139,11 @@ class MainActivity : ComponentActivity() {
             ContextCompat.startForegroundService(
                 this,
                 Intent(this, RealVpnService::class.java)
-                    .setAction(RealVpnService.ACTION_START),
+                    .setAction(RealVpnService.ACTION_START)
+                    .putExtra(
+                        REAL_VPN_EXTRA_START_SOURCE,
+                        REAL_VPN_START_SOURCE_MANUAL,
+                    ),
             )
         }.onFailure { error ->
             Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)

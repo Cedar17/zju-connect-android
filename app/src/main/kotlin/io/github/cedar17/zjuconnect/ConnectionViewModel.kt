@@ -158,6 +158,8 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     "deviceIdentityUnavailable" -> "无法读取本机设备身份，请重启设备后重试。"
     "accountSwitchClearFailed" -> "无法清除本机登录状态，请稍后重试。"
     "sessionRestoreUnavailable" -> "暂时无法验证已保存的登录状态，请检查网络后重试。"
+    "alwaysOnAuthenticationRequired" -> "请打开应用完成登录后重试。"
+    "alwaysOnDisconnectBlocked" -> "Always-on 由系统管理，请先在系统 VPN 设置中关闭。"
     "authInfoUnavailable", "initializationFailed" -> "暂时无法连接学校 VPN 服务，请检查网络后重试。"
     "vpnRevoked" -> "系统已撤销 VPN 权限，请重新连接。"
     "vpnStopDispatchFailed" -> "未能发送断开请求，请稍后重试。"
@@ -447,6 +449,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
+        RealVpnService.prepareForForegroundAuthentication()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
         if (activeDeviceID.isEmpty()) {
@@ -942,6 +945,20 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             internalCode = "",
                         )
                     }
+                }
+            }
+            "waitingForAuthentication" -> {
+                if (_state.value.phase != ConnectionPhase.DISCONNECTING) {
+                    showError("alwaysOnAuthenticationRequired")
+                }
+            }
+            "alwaysOnDisconnectBlocked" -> {
+                _state.update {
+                    it.withoutSensitiveInputs().copy(
+                        phase = ConnectionPhase.CONNECTED,
+                        statusMessage = vpnState.message.ifBlank { "已连接到浙江大学 VPN" },
+                        internalCode = "",
+                    )
                 }
             }
             "active" -> _state.update {
