@@ -115,6 +115,74 @@ func TestStartAuthenticationRequiresDeviceIdentityWithoutNetworking(t *testing.T
 	}
 }
 
+func TestReusableAuthenticatedResultSurvivesCancellation(t *testing.T) {
+	CancelAuthentication()
+	ClearAuthenticatedResult()
+	defer func() {
+		CancelAuthentication()
+		ClearAuthenticatedResult()
+	}()
+
+	authData, err := json.Marshal(auth.ClientAuthData{
+		DeviceID: "0123456789abcdef0123456789abcdef",
+		Cookies: []auth.Cookie{
+			{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "session-cookie"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal auth data: %v", err)
+	}
+
+	result := auth.InteractiveResult{
+		Username:     "student",
+		SID:          "session-id",
+		AuthData:     authData,
+		ResourceData: []byte(`{"resource":"opaque"}`),
+	}
+	cacheAuthenticatedResult(result)
+	clearInteractiveResult(&result)
+
+	if !HasReusableAuthenticatedResult() {
+		t.Fatal("authenticated result was not cached")
+	}
+
+	CancelAuthentication()
+	if !HasReusableAuthenticatedResult() {
+		t.Fatal("cancelling the interactive flow cleared the reusable result")
+	}
+
+	reusable, ok := currentAuthenticatedResult()
+	if !ok || reusable.Username != "student" || reusable.SID != "session-id" {
+		t.Fatalf("cached result = %#v, ok=%v", reusable, ok)
+	}
+	clearInteractiveResult(&reusable)
+
+	snapshot := ExportAuthenticatedSession()
+	if len(snapshot) == 0 {
+		t.Fatal("cached result could not export the encrypted-session input")
+	}
+	if !strings.Contains(string(snapshot), "session-cookie") {
+		t.Fatalf("exported snapshot omitted the expected cookie: %s", snapshot)
+	}
+	clear(snapshot)
+
+	ClearAuthenticatedResult()
+	if HasReusableAuthenticatedResult() {
+		t.Fatal("explicit result clear left a reusable result")
+	}
+}
+
+func TestIncompleteAuthenticatedResultIsNotReusable(t *testing.T) {
+	CancelAuthentication()
+	ClearAuthenticatedResult()
+	defer ClearAuthenticatedResult()
+
+	cacheAuthenticatedResult(auth.InteractiveResult{SID: "session-id"})
+	if HasReusableAuthenticatedResult() {
+		t.Fatal("incomplete authenticated result was marked reusable")
+	}
+}
+
 func TestAuthenticationPromptPreservesServerDrivenChallenge(t *testing.T) {
 	listener := &recordingListener{}
 	runAuthenticationPrompt(nil, listener, auth.InteractivePrompt{

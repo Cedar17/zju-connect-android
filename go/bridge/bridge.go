@@ -105,16 +105,94 @@ type authenticationSnapshot struct {
 }
 
 type authenticationSession struct {
-	mu       sync.Mutex
-	flow     *auth.InteractiveFlow
-	listener BridgeListener
-	server   string
-	port     int
-	deviceID string
-	busy     bool
+	mu                  sync.Mutex
+	flow                *auth.InteractiveFlow
+	listener            BridgeListener
+	server              string
+	port                int
+	deviceID            string
+	busy                bool
+	authenticatedResult *auth.InteractiveResult
 }
 
 var currentAuthentication authenticationSession
+
+func cloneInteractiveResult(result auth.InteractiveResult) auth.InteractiveResult {
+	return auth.InteractiveResult{
+		Username:     result.Username,
+		SID:          result.SID,
+		AuthData:     append([]byte(nil), result.AuthData...),
+		ResourceData: append([]byte(nil), result.ResourceData...),
+	}
+}
+
+func clearInteractiveResult(result *auth.InteractiveResult) {
+	if result == nil {
+		return
+	}
+	clear(result.AuthData)
+	clear(result.ResourceData)
+	result.Username = ""
+	result.SID = ""
+	result.AuthData = nil
+	result.ResourceData = nil
+}
+
+func isReusableInteractiveResult(result auth.InteractiveResult) bool {
+	return result.SID != "" && len(result.AuthData) > 0 && len(result.ResourceData) > 0
+}
+
+func cacheAuthenticatedResult(result auth.InteractiveResult) {
+	cacheAuthenticatedResultForFlow(nil, nil, result)
+}
+
+func cacheAuthenticatedResultForFlow(
+	flow *auth.InteractiveFlow,
+	listener BridgeListener,
+	result auth.InteractiveResult,
+) bool {
+	if !isReusableInteractiveResult(result) {
+		return false
+	}
+	cached := cloneInteractiveResult(result)
+	currentAuthentication.mu.Lock()
+	if flow != nil && (currentAuthentication.flow != flow || currentAuthentication.listener != listener) {
+		currentAuthentication.mu.Unlock()
+		clearInteractiveResult(&cached)
+		return false
+	}
+	previous := currentAuthentication.authenticatedResult
+	currentAuthentication.authenticatedResult = &cached
+	currentAuthentication.mu.Unlock()
+	clearInteractiveResult(previous)
+	return true
+}
+
+func reusableAuthenticatedResult() (auth.InteractiveResult, bool) {
+	currentAuthentication.mu.Lock()
+	cached := currentAuthentication.authenticatedResult
+	if cached == nil || !isReusableInteractiveResult(*cached) {
+		currentAuthentication.mu.Unlock()
+		return auth.InteractiveResult{}, false
+	}
+	result := cloneInteractiveResult(*cached)
+	currentAuthentication.mu.Unlock()
+	return result, true
+}
+
+func currentAuthenticatedResult() (auth.InteractiveResult, bool) {
+	if result, ok := reusableAuthenticatedResult(); ok {
+		return result, true
+	}
+
+	currentAuthentication.mu.Lock()
+	flow := currentAuthentication.flow
+	currentAuthentication.mu.Unlock()
+	if flow == nil {
+		return auth.InteractiveResult{}, false
+	}
+	return flow.Result()
+}
 
 // GetBuildInfo returns a deterministic structured result. It is the smoke-test
 // API: calling it proves that Kotlin entered Go code linked with the pinned
@@ -285,7 +363,9 @@ func GetPendingCaptchaImage() []byte {
 }
 
 // CancelAuthentication clears passwords, verification input, captcha bytes,
-// and the in-memory authentication result. Repeating it is harmless.
+// and the active interactive flow. A completed authenticated result remains
+// reusable until ClearAuthenticatedResult is called or the process exits.
+// Repeating it is harmless.
 func CancelAuthentication() {
 	currentAuthentication.mu.Lock()
 	flow := currentAuthentication.flow
@@ -311,12 +391,26 @@ func CancelAuthentication() {
 	}
 }
 
-// ClearAuthenticatedResult discards the in-memory success result while
-// leaving an otherwise completed session observable to the UI.
+// HasReusableAuthenticatedResult reports whether the process holds a complete
+// authenticated result suitable for direct VPN preparation. It intentionally
+// exposes no session fields across the bridge.
+func HasReusableAuthenticatedResult() bool {
+	currentAuthentication.mu.Lock()
+	result := currentAuthentication.authenticatedResult
+	ok := result != nil && isReusableInteractiveResult(*result)
+	currentAuthentication.mu.Unlock()
+	return ok
+}
+
+// ClearAuthenticatedResult discards both the reusable result and any result
+// still held by the active interactive flow.
 func ClearAuthenticatedResult() {
 	currentAuthentication.mu.Lock()
 	flow := currentAuthentication.flow
+	result := currentAuthentication.authenticatedResult
+	currentAuthentication.authenticatedResult = nil
 	currentAuthentication.mu.Unlock()
+	clearInteractiveResult(result)
 	if flow != nil {
 		flow.ClearResult()
 	}
@@ -326,16 +420,11 @@ func ClearAuthenticatedResult() {
 // validate this authentication again. The returned JSON bytes are sensitive:
 // callers must encrypt them immediately and must never log them.
 func ExportAuthenticatedSession() []byte {
-	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
-	currentAuthentication.mu.Unlock()
-	if flow == nil {
-		return nil
-	}
-	result, ok := flow.Result()
+	result, ok := currentAuthenticatedResult()
 	if !ok {
 		return nil
 	}
+	defer clearInteractiveResult(&result)
 	encoded, err := encodeAuthenticationSnapshot(result.AuthData)
 	if err != nil {
 		return nil
@@ -558,7 +647,12 @@ func runAuthenticationPrompt(
 	case "authenticated":
 		event.Type = "authenticated"
 		if result, ok := flow.Result(); ok {
+			if !cacheAuthenticatedResultForFlow(flow, listener, result) {
+				clearInteractiveResult(&result)
+				return
+			}
 			event.Username = result.Username
+			clearInteractiveResult(&result)
 		}
 	default:
 		event.Type = "stateChanged"

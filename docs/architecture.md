@@ -106,6 +106,7 @@ ResumeAuthentication(snapshotBytes, listener)
 ExportAuthenticatedSession()
 GetPendingCaptchaImage()
 CancelAuthentication()
+HasReusableAuthenticatedResult()
 ClearAuthenticatedResult()
 ```
 
@@ -117,7 +118,8 @@ CAPTCHA image bytes pass only through `GetPendingCaptchaImage`, not callback
 JSON, shared files, or temporary files. Callback events contain no passwords,
 cookies, SID, device identifiers, sign keys, CAPTCHA bytes, or raw responses.
 
-The real VPN bridge adds `PrepareRealVpn`, `StartRealVpn`, and `StopRealVpn`.
+The real VPN bridge adds `PrepareRealVpn`, `DiscardPreparedRealVpn`,
+`StartRealVpn`, and `StopRealVpn`.
 Preparation consumes the authenticated result already held in Go memory and
 returns only the assigned IPv4 address plus IPv4 resource prefixes. Android
 creates the TUN from those routes, then attaches it with a `SocketProtector` so

@@ -74,8 +74,8 @@ var realVpnState struct {
 	active   *realVpnSession
 }
 
-// PrepareRealVpn consumes the authenticated result held by the current
-// in-memory authentication flow. It performs the non-TUN client setup and
+// PrepareRealVpn consumes the reusable authenticated result held in process
+// memory. It performs the non-TUN client setup and
 // returns only the Android address and routes required to establish VpnService.
 // Passwords, cookies, SIDs, device IDs, sign keys, and raw resource data never
 // cross this bridge event boundary.
@@ -104,6 +104,7 @@ func PrepareRealVpn() string {
 	if err != nil {
 		return realVpnErrorAt("notAuthenticated", "prepare.authentication", "Complete aTrust authentication before connecting")
 	}
+	defer clearInteractiveResult(&result)
 
 	var clientAuthData auth.ClientAuthData
 	if err := json.Unmarshal(result.AuthData, &clientAuthData); err != nil || clientAuthData.DeviceID == "" {
@@ -243,6 +244,19 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 
 	emitRealVpnState(listener, "starting", "", "dataplane.start", "Starting the real aTrust VPN data plane", session)
 	go session.run()
+}
+
+// DiscardPreparedRealVpn releases only a prepared, not-yet-attached client.
+// It intentionally leaves an active VPN session untouched.
+func DiscardPreparedRealVpn() {
+	realVpnState.Lock()
+	prepared := realVpnState.prepared
+	realVpnState.prepared = nil
+	realVpnState.Unlock()
+
+	if prepared != nil {
+		prepared.client.Close()
+	}
 }
 
 // StopRealVpn is idempotent and releases the prepared client, TUN, underlay
@@ -492,13 +506,7 @@ func closeTunFile(tunFile *os.File) {
 }
 
 func currentInteractiveResult() (auth.InteractiveResult, error) {
-	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
-	currentAuthentication.mu.Unlock()
-	if flow == nil {
-		return auth.InteractiveResult{}, fmt.Errorf("authentication is not available")
-	}
-	result, ok := flow.Result()
+	result, ok := currentAuthenticatedResult()
 	if !ok || result.SID == "" || len(result.AuthData) == 0 || len(result.ResourceData) == 0 {
 		return auth.InteractiveResult{}, fmt.Errorf("authentication has not completed")
 	}
