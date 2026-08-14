@@ -36,6 +36,8 @@ func StartRealVpn(_ int, _ SocketProtector, listener BridgeListener) {
 	}
 }
 
+func DiscardPreparedRealVpn() {}
+
 func StopRealVpn() {}
 
 func realVpnError(code, message string) string {

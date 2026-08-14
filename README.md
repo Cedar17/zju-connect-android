@@ -28,8 +28,9 @@ An open-source Android client for ZJU aTrust remote access, powered by [zju-conn
 点击连接
    ↓
 恢复已有会话
-   ├─ 有效 → 建立 VPN
-   └─ 失效 → 完成必要认证
+   ├─ 进程内认证结果仍可复用 → 直接建立 VPN
+   ├─ 持久化会话有效 → 建立 VPN
+   └─ 需要重新认证 → 完成必要认证
                     ↓
                 建立 VPN
                     ↓

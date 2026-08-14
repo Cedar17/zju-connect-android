@@ -89,8 +89,9 @@ adds a small in-memory aTrust state machine that preserves certificate and host
 validation and replaces its synchronous CLI interactions. The Android façade
 provides password, server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
 structured events; `StartAuthentication`, `SubmitAuthentication`,
-`GetPendingCaptchaImage`, `CancelAuthentication`, and
-`ClearAuthenticatedResult`; `ExportAuthenticatedSession` and
+`GetPendingCaptchaImage`, `CancelAuthentication`,
+`HasReusableAuthenticatedResult`, and `ClearAuthenticatedResult`;
+`ExportAuthenticatedSession` and
 `ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
 single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
@@ -106,6 +107,13 @@ resources before recreating the in-memory result. App startup itself does not
 read or validate the snapshot. An explicit session expiry clears only the
 cookie snapshot and continues with the same device identity; transport and TLS
 failures retain cookies and saved credentials for retry.
+
+The bridge keeps a separate copy of a complete authenticated result while the
+process remains alive. `CancelAuthentication()` cancels only the active
+interactive flow and preserves that reusable result;
+`HasReusableAuthenticatedResult()` reports availability without exposing its
+fields. `ClearAuthenticatedResult()` clears both the reusable copy and any
+result still held by the active flow.
 
 `ResumeAuthentication()` is also callable by `RealVpnService` when Android
 starts the app in Always-on mode without an Activity. The service reads only the
@@ -128,8 +136,10 @@ The bridge exposes `PrepareRealVpn()`, which prepares an
 `atrust.Client` and returns a versioned event containing only the assigned IPv4
 address and IPv4 resource prefixes. `StartRealVpn(tunFD, protector, listener)`
 attaches the Android TUN and installs the `VpnService.protect()` boundary for
-future underlay connections. `StopRealVpn()` is idempotent and closes the
-client, TUN, underlay sockets, and L3 readers. Cancelling returns without
+future underlay connections. `DiscardPreparedRealVpn()` releases only a
+prepared client that has not yet been attached to a TUN, leaving an active VPN
+untouched. `StopRealVpn()` is idempotent and closes the client, TUN, underlay
+sockets, and L3 readers. Cancelling returns without
 waiting for an in-flight request: it cancels the request context, closes that
 session's active HTTP connections, and clears its sensitive state before any
 stale event can reach the UI. QR/CAS/OAuth login and bridge-owned reconnect

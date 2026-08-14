@@ -217,6 +217,42 @@ class ConnectionPolicyTest {
     }
 
     @Test
+    fun reusableSessionFallsBackOnlyForAuthenticationRejection() {
+        assertEquals(
+            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
+            reusableAuthenticationFailureAction("vpnSessionInvalid", "authentication"),
+        )
+        assertEquals(
+            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
+            reusableAuthenticationFailureAction("vpnSetupFailed", "serverRejected"),
+        )
+        assertEquals(
+            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
+            reusableAuthenticationFailureAction("vpnSetupFailed", "timeout"),
+        )
+        assertEquals(
+            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
+            reusableAuthenticationFailureAction("vpnSetupFailed", "networkUnavailable"),
+        )
+        assertEquals(
+            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
+            reusableAuthenticationFailureAction("vpnSetupFailed", "tlsValidation"),
+        )
+    }
+
+    @Test
+    fun inProcessAuthenticationIsPreferredBeforePersistedSessionRestore() {
+        assertEquals(
+            AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT,
+            authenticationRecoveryPath(hasReusableAuthenticatedResult = true),
+        )
+        assertEquals(
+            AuthenticationRecoveryPath.RESTORE_STORED_SESSION,
+            authenticationRecoveryPath(hasReusableAuthenticatedResult = false),
+        )
+    }
+
+    @Test
     fun onlyExplicitCredentialRejectionClearsSavedPassword() {
         assertTrue(shouldClearSavedCredential("credentialsRejected"))
         assertFalse(shouldClearSavedCredential("sessionExpired"))

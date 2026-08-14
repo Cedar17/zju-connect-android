@@ -67,6 +67,10 @@ class GoCoreBridge {
         Core.stopRealVpn()
     }
 
+    fun discardPreparedRealVpn() {
+        Core.discardPreparedRealVpn()
+    }
+
     fun startAuthentication(deviceID: String, onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
@@ -86,6 +90,8 @@ class GoCoreBridge {
     ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, deviceID, authListener(onEvent)))
 
     fun exportAuthenticatedSession(): ByteArray = Core.exportAuthenticatedSession()
+
+    fun hasReusableAuthenticatedResult(): Boolean = Core.hasReusableAuthenticatedResult()
 
     fun submitAuthentication(
         response: JSONObject,

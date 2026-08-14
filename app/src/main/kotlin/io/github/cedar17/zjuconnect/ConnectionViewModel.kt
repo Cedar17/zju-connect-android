@@ -120,11 +120,38 @@ internal enum class StoredSessionFailureAction {
     RETAIN_AND_SHOW_ERROR,
 }
 
+internal enum class ReusableAuthenticationFailureAction {
+    FALLBACK_TO_STORED_SESSION,
+    RETAIN_AND_SHOW_ERROR,
+}
+
+internal enum class AuthenticationRecoveryPath {
+    REUSE_IN_PROCESS_RESULT,
+    RESTORE_STORED_SESSION,
+}
+
+internal fun authenticationRecoveryPath(hasReusableAuthenticatedResult: Boolean): AuthenticationRecoveryPath =
+    if (hasReusableAuthenticatedResult) {
+        AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT
+    } else {
+        AuthenticationRecoveryPath.RESTORE_STORED_SESSION
+    }
+
 internal fun storedSessionFailureAction(eventType: String, code: String): StoredSessionFailureAction =
     if (eventType == "sessionInvalid" || code in setOf("invalidSession", "sessionInvalid")) {
         StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE
     } else {
         StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR
+    }
+
+internal fun reusableAuthenticationFailureAction(
+    code: String,
+    cause: String,
+): ReusableAuthenticationFailureAction =
+    if (code == "vpnSessionInvalid" || cause in setOf("authentication", "serverRejected")) {
+        ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION
+    } else {
+        ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR
     }
 
 internal fun shouldClearSavedCredential(code: String): Boolean = code == "credentialsRejected"
@@ -234,6 +261,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private var pendingCredential: StoredCredential? = null
     private var savedCredentialAttempted = false
     private var pendingPermissionAttemptId: Long? = null
+    private var reusableVpnPreparationPending = false
 
     init {
         // Observing an in-process service state is local-only. Session files and
@@ -332,6 +360,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingCredential = null
         savedCredentialAttempted = true
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
+        reusableVpnPreparationPending = false
+        bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         bridge.clearAuthenticatedResult()
         _state.update(::accountSwitchPendingState)
@@ -373,7 +403,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingPermissionAttemptId = null
         restoringStoredSession = false
         pendingCredential = null
+        reusableVpnPreparationPending = false
+        bridge.discardPreparedRealVpn()
 
+        // A normal disconnect is the boundary for the next one-tap reconnect,
+        // not an account logout. Account switching and ViewModel cleanup clear
+        // the reusable result explicitly below.
         if (currentPhase in AUTHENTICATION_PHASES) {
             bridge.cancelAuthentication()
         }
@@ -407,7 +442,20 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         if (!granted) {
+            reusableVpnPreparationPending = false
             showError("vpnPermissionDenied")
+            return
+        }
+        if (reusableVpnPreparationPending) {
+            reusableVpnPreparationPending = false
+            _state.update {
+                it.copy(
+                    phase = ConnectionPhase.ESTABLISHING_VPN,
+                    statusMessage = "正在复用上次认证状态…",
+                    internalCode = "",
+                )
+            }
+            prepareReusableVpn(attemptId)
             return
         }
         _state.update {
@@ -434,6 +482,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     fun onVpnServiceDispatchFailed(effect: ConnectionEffect) {
         if (!canHandleEffect(effect)) return
+        if (effect is ConnectionEffect.StartVpnService) {
+            bridge.discardPreparedRealVpn()
+        }
         showError(
             if (effect is ConnectionEffect.StopVpnService) {
                 "vpnStopDispatchFailed"
@@ -449,7 +500,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
+        reusableVpnPreparationPending = false
         RealVpnService.prepareForForegroundAuthentication()
+        bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
         if (activeDeviceID.isEmpty()) {
@@ -465,7 +518,74 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 notice = "",
             )
         }
-        restoreStoredSessionOrAuthenticate(attemptId)
+        when (authenticationRecoveryPath(bridge.hasReusableAuthenticatedResult())) {
+            AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT -> {
+                reusableVpnPreparationPending = true
+                requestVpnPermission(attemptId)
+            }
+            AuthenticationRecoveryPath.RESTORE_STORED_SESSION -> restoreStoredSessionOrAuthenticate(attemptId)
+        }
+    }
+
+    private fun prepareReusableVpn(attemptId: Long) {
+        viewModelScope.launch {
+            val config = try {
+                withContext(Dispatchers.IO) { bridge.prepareRealVpn() }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                GoVpnPrepared(
+                    state = "error",
+                    code = "vpnSetupFailed",
+                    message = "Unable to prepare the reusable authenticated VPN",
+                    stage = "prepare.reusable",
+                    cause = "unexpected",
+                )
+            }
+
+            if (!attempts.accepts(attemptId)) {
+                bridge.discardPreparedRealVpn()
+                return@launch
+            }
+
+            if (config.state == "prepared" && config.address.isNotBlank() && config.routes.isNotEmpty()) {
+                _state.update {
+                    it.copy(
+                        phase = ConnectionPhase.ESTABLISHING_VPN,
+                        statusMessage = "正在建立 VPN…",
+                        internalCode = "",
+                    )
+                }
+                effectChannel.trySend(ConnectionEffect.StartVpnService(attemptId))
+                return@launch
+            }
+
+            val code = config.code.ifBlank { "vpnSetupFailed" }
+            if (
+                config.state == "error" &&
+                reusableAuthenticationFailureAction(code, config.cause) ==
+                ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION
+            ) {
+                bridge.clearAuthenticatedResult()
+                bridge.discardPreparedRealVpn()
+                _state.update {
+                    it.withoutSensitiveInputs().copy(
+                        phase = ConnectionPhase.RESTORING_SESSION,
+                        statusMessage = "正在验证已保存的登录状态…",
+                        internalCode = "",
+                        notice = "登录状态已失效，正在尝试其他恢复方式。",
+                    )
+                }
+                restoreStoredSessionOrAuthenticate(attemptId)
+                return@launch
+            }
+
+            bridge.discardPreparedRealVpn()
+            showError(
+                code = code,
+                diagnosticStage = config.stage,
+                diagnosticCause = config.cause,
+            )
+        }
     }
 
     private fun restoreStoredSessionOrAuthenticate(attemptId: Long) {
@@ -886,6 +1006,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
         restoringStoredSession = false
         pendingCredential = null
+        reusableVpnPreparationPending = false
         val continuation = authenticatedContinuation(sessionSaved, usernameSaved && credentialSaved)
         _state.update {
             it.withoutSensitiveInputs().copy(
@@ -989,6 +1110,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
             "error" -> {
                 if (_state.value.phase !in AUTHENTICATION_PHASES) {
+                    if (vpnState.code == "vpnSessionInvalid") {
+                        bridge.clearAuthenticatedResult()
+                    }
                     showError(vpnState.code)
                 }
             }
@@ -1014,6 +1138,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     ) {
         pendingPermissionAttemptId = null
         pendingCredential = null
+        reusableVpnPreparationPending = false
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.ERROR,
@@ -1029,6 +1154,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         attempts.invalidate()
         pendingPermissionAttemptId = null
+        reusableVpnPreparationPending = false
+        bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         bridge.clearAuthenticatedResult()
         pendingCredential = null
