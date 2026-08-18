@@ -308,9 +308,9 @@ class DiagnosticsTest {
         val stale = RedactedDiagnosticEvent(
             timestampMillis = 1,
             category = "authRecovery",
-            state = AuthenticationRecoverySource.PERSISTED_SESSION_STALE.diagnosticState,
-            code = AuthenticationRecoveryOutcome.REAUTHENTICATING.diagnosticCode,
-            cause = AuthenticationStateBoundary.CREDENTIALS_REJECTED.diagnosticCause,
+            state = "persisted_session_stale",
+            code = "reauthenticating",
+            cause = "credentialsRejected",
         ).redacted()
         val unsafe = RedactedDiagnosticEvent(
             timestampMillis = 2,

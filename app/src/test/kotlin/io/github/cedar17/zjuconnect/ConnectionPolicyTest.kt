@@ -198,108 +198,30 @@ class ConnectionPolicyTest {
 
     @Test
     fun onlyDefinitivelyInvalidStoredSessionsAreDeleted() {
-        assertEquals(
-            StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE,
-            storedSessionFailureAction("sessionInvalid", "sessionInvalid"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE,
-            storedSessionFailureAction("error", "invalidSession"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("authMethodsReady", "sessionExpired"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "sessionRestoreUnavailable"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "certificateRejected"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "authDnsFailure"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "authNetworkFailure"),
-        )
+        assertTrue(isDefinitivelyInvalidStoredSession("sessionInvalid", "sessionInvalid"))
+        assertTrue(isDefinitivelyInvalidStoredSession("error", "invalidSession"))
+        assertFalse(isDefinitivelyInvalidStoredSession("authMethodsReady", "sessionExpired"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "sessionRestoreUnavailable"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "certificateRejected"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "authDnsFailure"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "authNetworkFailure"))
     }
 
     @Test
     fun reusableSessionFallsBackOnlyForAuthenticationRejection() {
-        assertEquals(
-            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
-            reusableAuthenticationFailureAction("vpnSessionInvalid", "authentication"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "serverRejected"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "timeout"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "networkUnavailable"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "tlsValidation"),
-        )
-    }
-
-    @Test
-    fun inProcessAuthenticationIsPreferredBeforePersistedSessionRestore() {
-        assertEquals(
-            AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT,
-            authenticationRecoveryPath(hasReusableAuthenticatedResult = true),
-        )
-        assertEquals(
-            AuthenticationRecoveryPath.RESTORE_STORED_SESSION,
-            authenticationRecoveryPath(hasReusableAuthenticatedResult = false),
-        )
+        assertTrue(shouldFallbackFromReusableAuthentication("vpnSessionInvalid", "authentication"))
+        assertTrue(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "serverRejected"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "timeout"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "networkUnavailable"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "tlsValidation"))
     }
 
     @Test
     fun onlyExplicitCredentialRejectionClearsSavedPassword() {
-        assertEquals(
-            AuthenticationStateBoundary.CREDENTIALS_REJECTED,
-            credentialInvalidationBoundary("credentialsRejected"),
-        )
-        assertNull(credentialInvalidationBoundary("sessionExpired"))
-        assertNull(credentialInvalidationBoundary("certificateRejected"))
-        assertNull(credentialInvalidationBoundary("sessionRestoreUnavailable"))
-    }
-
-    @Test
-    fun authenticationDisposalBoundariesKeepReconnectContextNarrow() {
-        val teardown = authenticationStateDisposition(AuthenticationStateBoundary.VIEW_MODEL_TEARDOWN)
-        assertFalse(teardown.clearInProcessResult)
-        assertFalse(teardown.clearStoredSession)
-        assertFalse(teardown.clearSavedCredential)
-        assertFalse(teardown.clearRememberedAccount)
-
-        val invalidSession = authenticationStateDisposition(AuthenticationStateBoundary.INVALID_STORED_SESSION)
-        assertFalse(invalidSession.clearInProcessResult)
-        assertTrue(invalidSession.clearStoredSession)
-        assertFalse(invalidSession.clearSavedCredential)
-        assertFalse(invalidSession.clearRememberedAccount)
-
-        val rejectedCredential = authenticationStateDisposition(AuthenticationStateBoundary.CREDENTIALS_REJECTED)
-        assertFalse(rejectedCredential.clearInProcessResult)
-        assertFalse(rejectedCredential.clearStoredSession)
-        assertTrue(rejectedCredential.clearSavedCredential)
-        assertFalse(rejectedCredential.clearRememberedAccount)
-
-        val accountSwitch = authenticationStateDisposition(AuthenticationStateBoundary.ACCOUNT_SWITCH)
-        assertTrue(accountSwitch.clearInProcessResult)
-        assertTrue(accountSwitch.clearStoredSession)
-        assertTrue(accountSwitch.clearSavedCredential)
-        assertTrue(accountSwitch.clearRememberedAccount)
+        assertTrue(isCredentialExplicitlyRejected("credentialsRejected"))
+        assertFalse(isCredentialExplicitlyRejected("sessionExpired"))
+        assertFalse(isCredentialExplicitlyRejected("certificateRejected"))
+        assertFalse(isCredentialExplicitlyRejected("sessionRestoreUnavailable"))
     }
 
     @Test

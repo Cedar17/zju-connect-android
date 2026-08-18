@@ -27,61 +27,22 @@ internal enum class AuthenticationRecoveryOutcome(
     FAILED("failed"),
 }
 
-/**
- * Boundaries that can dispose one or more authentication stores. A ViewModel
- * teardown deliberately has an empty disposition: it is not a user logout.
- */
-internal enum class AuthenticationStateBoundary(
+/** Stable, secret-free causes attached to explicit authentication invalidation diagnostics. */
+internal enum class AuthenticationInvalidationCause(
     val diagnosticCause: String,
 ) {
-    VIEW_MODEL_TEARDOWN("viewModelTeardown"),
     ACCOUNT_SWITCH("accountSwitch"),
     INVALID_STORED_SESSION("invalidStoredSession"),
     REUSABLE_RESULT_REJECTED("reusableResultRejected"),
     CREDENTIALS_REJECTED("credentialsRejected"),
 }
 
-internal data class AuthenticationStateDisposition(
-    val clearInProcessResult: Boolean = false,
-    val clearStoredSession: Boolean = false,
-    val clearSavedCredential: Boolean = false,
-    val clearRememberedAccount: Boolean = false,
-)
-
-internal fun authenticationStateDisposition(
-    boundary: AuthenticationStateBoundary,
-): AuthenticationStateDisposition = when (boundary) {
-    AuthenticationStateBoundary.VIEW_MODEL_TEARDOWN -> AuthenticationStateDisposition()
-    AuthenticationStateBoundary.ACCOUNT_SWITCH -> AuthenticationStateDisposition(
-        clearInProcessResult = true,
-        clearStoredSession = true,
-        clearSavedCredential = true,
-        clearRememberedAccount = true,
-    )
-    AuthenticationStateBoundary.INVALID_STORED_SESSION -> AuthenticationStateDisposition(
-        clearStoredSession = true,
-    )
-    AuthenticationStateBoundary.REUSABLE_RESULT_REJECTED -> AuthenticationStateDisposition(
-        clearInProcessResult = true,
-    )
-    AuthenticationStateBoundary.CREDENTIALS_REJECTED -> AuthenticationStateDisposition(
-        clearSavedCredential = true,
-    )
-}
-
-internal fun storedSessionInvalidationBoundary(
+internal fun isDefinitivelyInvalidStoredSession(
     eventType: String,
     code: String,
-): AuthenticationStateBoundary? =
-    if (eventType == "sessionInvalid" || code in setOf("invalidSession", "sessionInvalid")) {
-        AuthenticationStateBoundary.INVALID_STORED_SESSION
-    } else {
-        null
-    }
+): Boolean = eventType == "sessionInvalid" || code in setOf("invalidSession", "sessionInvalid")
 
-internal fun credentialInvalidationBoundary(code: String): AuthenticationStateBoundary? =
-    if (code == "credentialsRejected") {
-        AuthenticationStateBoundary.CREDENTIALS_REJECTED
-    } else {
-        null
-    }
+internal fun shouldFallbackFromReusableAuthentication(code: String, cause: String): Boolean =
+    code == "vpnSessionInvalid" || cause in setOf("authentication", "serverRejected")
+
+internal fun isCredentialExplicitlyRejected(code: String): Boolean = code == "credentialsRejected"

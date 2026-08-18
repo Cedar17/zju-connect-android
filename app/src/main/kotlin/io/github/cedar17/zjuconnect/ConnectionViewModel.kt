@@ -75,6 +75,27 @@ sealed interface ConnectionEffect {
     data class StopVpnService(override val attemptId: Long) : ConnectionEffect
 }
 
+internal enum class CredentialOrigin {
+    USER_INPUT,
+    SAVED_STORE,
+}
+
+/** Holds only the credential accepted by the current auth attempt and its source. */
+internal class PendingCredential(
+    val credential: StoredCredential,
+    val origin: CredentialOrigin,
+)
+
+internal enum class VpnPermissionContinuation {
+    PREPARE_REUSABLE_RESULT,
+    START_AUTHENTICATED_VPN,
+}
+
+internal data class PendingVpnPermission(
+    val attemptId: Long,
+    val continuation: VpnPermissionContinuation,
+)
+
 /** Maps a tap on the displayed bitmap back to the original server image. */
 object CaptchaCoordinateMapper {
     fun toImagePoint(
@@ -114,45 +135,6 @@ internal class ConnectionAttemptTracker {
 
     fun accepts(attemptId: Long): Boolean = attemptId == activeAttemptId
 }
-
-internal enum class StoredSessionFailureAction {
-    CLEAR_AND_REAUTHENTICATE,
-    RETAIN_AND_SHOW_ERROR,
-}
-
-internal enum class ReusableAuthenticationFailureAction {
-    FALLBACK_TO_STORED_SESSION,
-    RETAIN_AND_SHOW_ERROR,
-}
-
-internal enum class AuthenticationRecoveryPath {
-    REUSE_IN_PROCESS_RESULT,
-    RESTORE_STORED_SESSION,
-}
-
-internal fun authenticationRecoveryPath(hasReusableAuthenticatedResult: Boolean): AuthenticationRecoveryPath =
-    if (hasReusableAuthenticatedResult) {
-        AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT
-    } else {
-        AuthenticationRecoveryPath.RESTORE_STORED_SESSION
-    }
-
-internal fun storedSessionFailureAction(eventType: String, code: String): StoredSessionFailureAction =
-    if (storedSessionInvalidationBoundary(eventType, code) != null) {
-        StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE
-    } else {
-        StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR
-    }
-
-internal fun reusableAuthenticationFailureAction(
-    code: String,
-    cause: String,
-): ReusableAuthenticationFailureAction =
-    if (code == "vpnSessionInvalid" || cause in setOf("authentication", "serverRejected")) {
-        ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION
-    } else {
-        ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR
-    }
 
 internal fun savedCredentialMatchesAccount(credential: StoredCredential, rememberedUsername: String): Boolean =
     rememberedUsername.isBlank() || credential.username == rememberedUsername
@@ -256,11 +238,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private var restoringStoredSession = false
     private var activeDeviceID = ""
-    private var pendingCredential: StoredCredential? = null
+    private var pendingCredential: PendingCredential? = null
     private var savedCredentialAttempted = false
-    private var pendingPermissionAttemptId: Long? = null
-    private var reusableVpnPreparationPending = false
-    private var authenticationRecoverySource: AuthenticationRecoverySource? = null
+    private var pendingVpnPermission: PendingVpnPermission? = null
 
     init {
         // Observing an in-process service state is local-only. Session files and
@@ -354,24 +334,23 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun beginAccountSwitch() {
         val attemptId = attempts.invalidate()
-        pendingPermissionAttemptId = null
+        pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = true
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
-        reusableVpnPreparationPending = false
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
-        clearInProcessAuthentication(AuthenticationStateBoundary.ACCOUNT_SWITCH)
+        invalidateReusableAuthentication()
         recordAuthenticationRecovery(
             source = AuthenticationRecoverySource.PERSISTED_SESSION,
             outcome = AuthenticationRecoveryOutcome.INVALIDATED,
-            boundary = AuthenticationStateBoundary.ACCOUNT_SWITCH,
+            cause = AuthenticationInvalidationCause.ACCOUNT_SWITCH,
         )
         _state.update(::accountSwitchPendingState)
 
         viewModelScope.launch {
-            val cleared = clearPersistedAuthentication(AuthenticationStateBoundary.ACCOUNT_SWITCH)
+            val cleared = clearAllAuthenticationForAccountSwitch()
             if (!attempts.accepts(attemptId)) return@launch
             if (!cleared) {
                 showError("accountSwitchClearFailed")
@@ -394,10 +373,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ConnectionPhase.DISCONNECTING,
         )
         val stopAttemptId = attempts.invalidate()
-        pendingPermissionAttemptId = null
+        pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
-        reusableVpnPreparationPending = false
         bridge.discardPreparedRealVpn()
 
         // A normal disconnect is the boundary for the next one-tap reconnect,
@@ -430,18 +408,16 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun onVpnPermissionResult(granted: Boolean) {
-        val attemptId = pendingPermissionAttemptId ?: return
-        pendingPermissionAttemptId = null
-        if (!attempts.accepts(attemptId) || _state.value.phase != ConnectionPhase.PREPARING_VPN_PERMISSION) {
+        val pending = pendingVpnPermission ?: return
+        pendingVpnPermission = null
+        if (!attempts.accepts(pending.attemptId) || _state.value.phase != ConnectionPhase.PREPARING_VPN_PERMISSION) {
             return
         }
         if (!granted) {
-            reusableVpnPreparationPending = false
             showError("vpnPermissionDenied")
             return
         }
-        if (reusableVpnPreparationPending) {
-            reusableVpnPreparationPending = false
+        if (pending.continuation == VpnPermissionContinuation.PREPARE_REUSABLE_RESULT) {
             _state.update {
                 it.copy(
                     phase = ConnectionPhase.ESTABLISHING_VPN,
@@ -449,7 +425,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     internalCode = "",
                 )
             }
-            prepareReusableVpn(attemptId)
+            prepareReusableVpn(pending.attemptId)
             return
         }
         _state.update {
@@ -459,7 +435,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 internalCode = "",
             )
         }
-        effectChannel.trySend(ConnectionEffect.StartVpnService(attemptId))
+        effectChannel.trySend(ConnectionEffect.StartVpnService(pending.attemptId))
     }
 
     fun canHandleEffect(effect: ConnectionEffect): Boolean {
@@ -490,12 +466,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun beginConnection() {
         val attemptId = attempts.begin()
-        pendingPermissionAttemptId = null
+        pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
-        reusableVpnPreparationPending = false
-        authenticationRecoverySource = null
         RealVpnService.prepareForForegroundAuthentication()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
@@ -513,24 +487,21 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 notice = "",
             )
         }
-        when (authenticationRecoveryPath(bridge.hasReusableAuthenticatedResult())) {
-            AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT -> {
-                authenticationRecoverySource = AuthenticationRecoverySource.REUSABLE_RESULT
-                recordAuthenticationRecovery(
-                    source = AuthenticationRecoverySource.REUSABLE_RESULT,
-                    outcome = AuthenticationRecoveryOutcome.SELECTED,
-                )
-                reusableVpnPreparationPending = true
-                requestVpnPermission(attemptId)
-            }
-            AuthenticationRecoveryPath.RESTORE_STORED_SESSION -> {
-                authenticationRecoverySource = AuthenticationRecoverySource.PERSISTED_SESSION
-                recordAuthenticationRecovery(
-                    source = AuthenticationRecoverySource.PERSISTED_SESSION,
-                    outcome = AuthenticationRecoveryOutcome.SELECTED,
-                )
-                restoreStoredSessionOrAuthenticate(attemptId)
-            }
+        if (bridge.hasReusableAuthenticatedResult()) {
+            recordAuthenticationRecovery(
+                source = AuthenticationRecoverySource.REUSABLE_RESULT,
+                outcome = AuthenticationRecoveryOutcome.SELECTED,
+            )
+            requestVpnPermission(
+                attemptId = attemptId,
+                continuation = VpnPermissionContinuation.PREPARE_REUSABLE_RESULT,
+            )
+        } else {
+            recordAuthenticationRecovery(
+                source = AuthenticationRecoverySource.PERSISTED_SESSION,
+                outcome = AuthenticationRecoveryOutcome.SELECTED,
+            )
+            restoreStoredSessionOrAuthenticate(attemptId)
         }
     }
 
@@ -573,14 +544,13 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             val code = config.code.ifBlank { "vpnSetupFailed" }
             if (
                 config.state == "error" &&
-                reusableAuthenticationFailureAction(code, config.cause) ==
-                ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION
+                shouldFallbackFromReusableAuthentication(code, config.cause)
             ) {
-                clearInProcessAuthentication(AuthenticationStateBoundary.REUSABLE_RESULT_REJECTED)
+                invalidateReusableAuthentication()
                 recordAuthenticationRecovery(
                     source = AuthenticationRecoverySource.REUSABLE_RESULT,
                     outcome = AuthenticationRecoveryOutcome.REJECTED,
-                    boundary = AuthenticationStateBoundary.REUSABLE_RESULT_REJECTED,
+                    cause = AuthenticationInvalidationCause.REUSABLE_RESULT_REJECTED,
                 )
                 bridge.discardPreparedRealVpn()
                 _state.update {
@@ -590,7 +560,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         internalCode = "",
                     )
                 }
-                authenticationRecoverySource = AuthenticationRecoverySource.PERSISTED_SESSION
                 recordAuthenticationRecovery(
                     source = AuthenticationRecoverySource.PERSISTED_SESSION,
                     outcome = AuthenticationRecoveryOutcome.SELECTED,
@@ -616,13 +585,11 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             } catch (_: InvalidStoredAuthenticationSession) {
                 restoringStoredSession = false
                 if (attempts.accepts(attemptId)) {
-                    val cleared = clearPersistedAuthentication(
-                        AuthenticationStateBoundary.INVALID_STORED_SESSION,
-                    )
+                    val cleared = clearStoredSession()
                     recordAuthenticationRecovery(
                         source = AuthenticationRecoverySource.PERSISTED_SESSION,
                         outcome = AuthenticationRecoveryOutcome.INVALIDATED,
-                        boundary = AuthenticationStateBoundary.INVALID_STORED_SESSION,
+                        cause = AuthenticationInvalidationCause.INVALID_STORED_SESSION,
                     )
                     if (cleared) {
                         startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
@@ -668,7 +635,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private fun startFreshAuthentication(attemptId: Long, notice: String = "") {
         if (!attempts.accepts(attemptId)) return
         restoringStoredSession = false
-        authenticationRecoverySource = null
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.FETCHING_AUTH_METHODS,
@@ -687,7 +653,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val current = _state.value
         if (current.username.isBlank() || current.password.isBlank()) return
         val credential = StoredCredential(current.username, current.password)
-        pendingCredential = credential
+        pendingCredential = PendingCredential(credential, CredentialOrigin.USER_INPUT)
         submitCredential(attempts.activeAttemptId, credential)
     }
 
@@ -800,7 +766,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             when (event.type) {
                 "authMethodsReady" -> {
                     if (event.code == "sessionExpired") {
-                        authenticationRecoverySource = AuthenticationRecoverySource.PERSISTED_SESSION_STALE
                         recordAuthenticationRecovery(
                             source = AuthenticationRecoverySource.PERSISTED_SESSION_STALE,
                             outcome = AuthenticationRecoveryOutcome.REAUTHENTICATING,
@@ -853,18 +818,11 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 }
                 "error" -> {
                     if (restoringStoredSession &&
-                        storedSessionFailureAction(event.type, event.code) ==
-                        StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE
+                        isDefinitivelyInvalidStoredSession(event.type, event.code)
                     ) {
                         handleStoredSessionFailure(attemptId, event)
                     } else {
                         restoringStoredSession = false
-                        authenticationRecoverySource?.let { source ->
-                            recordAuthenticationRecovery(
-                                source = source,
-                                outcome = AuthenticationRecoveryOutcome.FAILED,
-                            )
-                        }
                         showError(
                             code = event.code,
                             diagnosticStage = event.stage,
@@ -915,13 +873,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private suspend fun handleCredentialsRequired(attemptId: Long, event: GoAuthEvent) {
         if (!attempts.accepts(attemptId)) return
-        val invalidationBoundary = credentialInvalidationBoundary(event.code)
-        if (invalidationBoundary != null) {
-            val cleared = clearPersistedAuthentication(invalidationBoundary)
+        if (isCredentialExplicitlyRejected(event.code)) {
+            val cleared = clearSavedCredential()
             recordAuthenticationRecovery(
                 source = AuthenticationRecoverySource.SAVED_CREDENTIALS,
                 outcome = AuthenticationRecoveryOutcome.REJECTED,
-                boundary = invalidationBoundary,
+                cause = AuthenticationInvalidationCause.CREDENTIALS_REJECTED,
             )
             if (!cleared) {
                 showError("credentialStoreUnavailable")
@@ -952,8 +909,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
             val remembered = _state.value.rememberedUsername
             if (credential != null && savedCredentialMatchesAccount(credential, remembered)) {
-                pendingCredential = credential
-                authenticationRecoverySource = AuthenticationRecoverySource.SAVED_CREDENTIALS
+                pendingCredential = PendingCredential(credential, CredentialOrigin.SAVED_STORE)
                 recordAuthenticationRecovery(
                     source = AuthenticationRecoverySource.SAVED_CREDENTIALS,
                     outcome = AuthenticationRecoveryOutcome.SUBMITTED,
@@ -1006,41 +962,30 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private suspend fun handleStoredSessionFailure(attemptId: Long, event: GoAuthEvent) {
         if (!attempts.accepts(attemptId)) return
-        when (storedSessionFailureAction(event.type, event.code)) {
-            StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE -> {
-                val boundary = requireNotNull(
-                    storedSessionInvalidationBoundary(event.type, event.code),
-                )
-                val cleared = clearPersistedAuthentication(boundary)
-                recordAuthenticationRecovery(
-                    source = AuthenticationRecoverySource.PERSISTED_SESSION,
-                    outcome = AuthenticationRecoveryOutcome.INVALIDATED,
-                    boundary = boundary,
-                )
-                restoringStoredSession = false
-                savedCredentialAttempted = false
-                if (cleared) {
-                    startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
-                } else {
-                    showError("sessionStoreUnavailable")
-                }
+        if (isDefinitivelyInvalidStoredSession(event.type, event.code)) {
+            val cleared = clearStoredSession()
+            recordAuthenticationRecovery(
+                source = AuthenticationRecoverySource.PERSISTED_SESSION,
+                outcome = AuthenticationRecoveryOutcome.INVALIDATED,
+                cause = AuthenticationInvalidationCause.INVALID_STORED_SESSION,
+            )
+            restoringStoredSession = false
+            savedCredentialAttempted = false
+            if (cleared) {
+                startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
             }
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR -> {
-                restoringStoredSession = false
-                authenticationRecoverySource?.let { source ->
-                    recordAuthenticationRecovery(
-                        source = source,
-                        outcome = AuthenticationRecoveryOutcome.FAILED,
-                    )
-                }
-                showError(event.code)
+            else {
+                showError("sessionStoreUnavailable")
             }
+            return
         }
+        restoringStoredSession = false
+        showError(event.code)
     }
 
     private suspend fun persistAuthenticatedSession(attemptId: Long, event: GoAuthEvent) {
         if (!attempts.accepts(attemptId)) return
-        val credentialToSave = pendingCredential
+        val credentialToSave = pendingCredential?.credential
         val snapshot = bridge.exportAuthenticatedSession()
         val sessionSaved = if (snapshot.isEmpty()) {
             false
@@ -1077,7 +1022,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
         val authenticatedSource = when {
             restoringStoredSession -> AuthenticationRecoverySource.PERSISTED_SESSION_AUTHENTICATED
-            else -> authenticationRecoverySource
+            pendingCredential?.origin == CredentialOrigin.SAVED_STORE ->
+                AuthenticationRecoverySource.SAVED_CREDENTIALS
+            else -> null
         }
         authenticatedSource?.let { source ->
             recordAuthenticationRecovery(
@@ -1087,8 +1034,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         restoringStoredSession = false
         pendingCredential = null
-        reusableVpnPreparationPending = false
-        authenticationRecoverySource = null
         val continuation = authenticatedContinuation(sessionSaved, usernameSaved && credentialSaved)
         _state.update {
             it.withoutSensitiveInputs().copy(
@@ -1098,13 +1043,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
         if (continuation.requestVpnPermission) {
-            requestVpnPermission(attemptId)
+            requestVpnPermission(
+                attemptId = attemptId,
+                continuation = VpnPermissionContinuation.START_AUTHENTICATED_VPN,
+            )
         }
     }
 
-    private fun requestVpnPermission(attemptId: Long) {
+    private fun requestVpnPermission(
+        attemptId: Long,
+        continuation: VpnPermissionContinuation,
+    ) {
         if (!attempts.accepts(attemptId)) return
-        pendingPermissionAttemptId = attemptId
+        pendingVpnPermission = PendingVpnPermission(attemptId, continuation)
         _state.update {
             it.copy(
                 phase = ConnectionPhase.PREPARING_VPN_PERMISSION,
@@ -1193,11 +1144,11 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             "error" -> {
                 if (_state.value.phase !in AUTHENTICATION_PHASES) {
                     if (vpnState.code == "vpnSessionInvalid") {
-                        clearInProcessAuthentication(AuthenticationStateBoundary.REUSABLE_RESULT_REJECTED)
+                        invalidateReusableAuthentication()
                         recordAuthenticationRecovery(
                             source = AuthenticationRecoverySource.REUSABLE_RESULT,
                             outcome = AuthenticationRecoveryOutcome.INVALIDATED,
-                            boundary = AuthenticationStateBoundary.REUSABLE_RESULT_REJECTED,
+                            cause = AuthenticationInvalidationCause.REUSABLE_RESULT_REJECTED,
                         )
                     }
                     showError(vpnState.code)
@@ -1218,7 +1169,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun showServerChallenge(transform: (ConnectionUiState) -> ConnectionUiState) {
-        authenticationRecoverySource = AuthenticationRecoverySource.SERVER_CHALLENGE
         recordAuthenticationRecovery(
             source = AuthenticationRecoverySource.SERVER_CHALLENGE,
             outcome = AuthenticationRecoveryOutcome.WAITING_FOR_USER,
@@ -1229,37 +1179,42 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private fun recordAuthenticationRecovery(
         source: AuthenticationRecoverySource,
         outcome: AuthenticationRecoveryOutcome,
-        boundary: AuthenticationStateBoundary? = null,
+        cause: AuthenticationInvalidationCause? = null,
     ) {
         RedactedDiagnostics.recordAuthenticationRecovery(
             context = appContext,
             source = source,
             outcome = outcome,
-            boundary = boundary,
+            cause = cause,
         )
     }
 
-    private fun clearInProcessAuthentication(boundary: AuthenticationStateBoundary) {
-        if (authenticationStateDisposition(boundary).clearInProcessResult) {
-            bridge.clearAuthenticatedResult()
-        }
+    private fun invalidateReusableAuthentication() {
+        bridge.clearAuthenticatedResult()
     }
 
-    private suspend fun clearPersistedAuthentication(
-        boundary: AuthenticationStateBoundary,
-    ): Boolean {
-        val disposition = authenticationStateDisposition(boundary)
-        return try {
-            withContext(Dispatchers.IO) {
-                val sessionCleared = !disposition.clearStoredSession || sessionStore.clear()
-                val credentialCleared = !disposition.clearSavedCredential || credentialStore.clear()
-                val accountCleared = !disposition.clearRememberedAccount || accountStore.clear()
-                sessionCleared && credentialCleared && accountCleared
-            }
-        } catch (error: Exception) {
-            if (error is CancellationException) throw error
-            false
-        }
+    private suspend fun clearStoredSession(): Boolean = withContext(Dispatchers.IO) {
+        tryClear(sessionStore::clear)
+    }
+
+    private suspend fun clearSavedCredential(): Boolean = withContext(Dispatchers.IO) {
+        tryClear(credentialStore::clear)
+    }
+
+    private suspend fun clearAllAuthenticationForAccountSwitch(): Boolean = withContext(Dispatchers.IO) {
+        // Keep these as separate statements: every old-identity store must be
+        // attempted even when an earlier clear fails.
+        val sessionCleared = tryClear(sessionStore::clear)
+        val credentialCleared = tryClear(credentialStore::clear)
+        val accountCleared = tryClear(accountStore::clear)
+        sessionCleared && credentialCleared && accountCleared
+    }
+
+    private fun tryClear(clear: () -> Boolean): Boolean = try {
+        clear()
+    } catch (error: Exception) {
+        if (error is CancellationException) throw error
+        false
     }
 
     private fun showError(
@@ -1268,9 +1223,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         diagnosticCause: String = "",
         diagnosticDurationMillis: Long = 0,
     ) {
-        pendingPermissionAttemptId = null
+        pendingVpnPermission = null
         pendingCredential = null
-        reusableVpnPreparationPending = false
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.ERROR,
@@ -1285,11 +1239,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     override fun onCleared() {
         attempts.invalidate()
-        pendingPermissionAttemptId = null
-        reusableVpnPreparationPending = false
+        pendingVpnPermission = null
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
-        clearInProcessAuthentication(AuthenticationStateBoundary.VIEW_MODEL_TEARDOWN)
         pendingCredential = null
         super.onCleared()
     }

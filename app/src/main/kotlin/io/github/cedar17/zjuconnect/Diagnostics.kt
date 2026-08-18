@@ -28,8 +28,8 @@ private val SAFE_AUTH_RECOVERY_STATES = AuthenticationRecoverySource.entries
 private val SAFE_AUTH_RECOVERY_CODES = AuthenticationRecoveryOutcome.entries
     .map(AuthenticationRecoveryOutcome::diagnosticCode)
     .toSet()
-private val SAFE_AUTH_RECOVERY_CAUSES = AuthenticationStateBoundary.entries
-    .map(AuthenticationStateBoundary::diagnosticCause)
+private val SAFE_AUTH_RECOVERY_CAUSES = AuthenticationInvalidationCause.entries
+    .map(AuthenticationInvalidationCause::diagnosticCause)
     .toSet()
 private val SAFE_VPN_STATES = setOf(
     "idle",
@@ -500,7 +500,7 @@ internal object RedactedDiagnostics {
         context: Context,
         source: AuthenticationRecoverySource,
         outcome: AuthenticationRecoveryOutcome,
-        boundary: AuthenticationStateBoundary? = null,
+        cause: AuthenticationInvalidationCause? = null,
     ) {
         storeFor(context).record(
             RedactedDiagnosticEvent(
@@ -508,7 +508,7 @@ internal object RedactedDiagnostics {
                 category = "authRecovery",
                 state = source.diagnosticState,
                 code = outcome.diagnosticCode,
-                cause = boundary?.diagnosticCause.orEmpty(),
+                cause = cause?.diagnosticCause.orEmpty(),
             ),
         )
     }
