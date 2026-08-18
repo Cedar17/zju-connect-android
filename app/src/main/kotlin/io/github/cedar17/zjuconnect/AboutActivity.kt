@@ -73,6 +73,8 @@ private fun AboutScreen(
     onOpenRepository: () -> Unit,
     onOpenReportProblem: () -> Unit,
 ) {
+    val iconDescription = stringResource(R.string.about_app_icon_description)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -101,7 +103,7 @@ private fun AboutScreen(
                         shape = RoundedCornerShape(32.dp),
                     )
                     .semantics {
-                        contentDescription = stringResource(R.string.about_app_icon_description)
+                        contentDescription = iconDescription
                     },
                 contentAlignment = Alignment.Center,
             ) {
