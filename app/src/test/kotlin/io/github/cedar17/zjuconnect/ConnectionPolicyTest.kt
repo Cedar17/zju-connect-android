@@ -245,14 +245,12 @@ class ConnectionPolicyTest {
     }
 
     @Test
-    fun sessionSaveFailureStillContinuesToVpnPermission() {
-        val saved = authenticatedContinuation(sessionSaved = true, usernameSaved = true)
-        val failed = authenticatedContinuation(sessionSaved = false, usernameSaved = true)
+    fun persistenceFailureWarnsAboutTheNextReconnect() {
+        val saved = authenticationPersistenceNotice(sessionSaved = true, usernameSaved = true)
+        val failed = authenticationPersistenceNotice(sessionSaved = false, usernameSaved = true)
 
-        assertTrue(saved.requestVpnPermission)
-        assertTrue(failed.requestVpnPermission)
-        assertTrue(saved.notice.isEmpty())
-        assertTrue(failed.notice.contains("下次"))
+        assertTrue(saved.isEmpty())
+        assertTrue(failed.contains("下次"))
     }
 
     @Test

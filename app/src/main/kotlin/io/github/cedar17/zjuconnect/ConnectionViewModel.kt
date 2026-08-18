@@ -181,22 +181,14 @@ internal fun connectionErrorMessage(code: String): String = when (code) {
     else -> "连接没有完成，请稍后重试。"
 }
 
-internal data class AuthenticatedContinuation(
-    val requestVpnPermission: Boolean,
-    val notice: String,
-)
-
-internal fun authenticatedContinuation(
+internal fun authenticationPersistenceNotice(
     sessionSaved: Boolean,
     usernameSaved: Boolean,
-): AuthenticatedContinuation = AuthenticatedContinuation(
-    requestVpnPermission = true,
-    notice = if (sessionSaved && usernameSaved) {
-        ""
-    } else {
-        "本次可以继续连接，但下次可能需要重新登录。"
-    },
-)
+): String = if (sessionSaved && usernameSaved) {
+    ""
+} else {
+    "本次可以继续连接，但下次可能需要重新登录。"
+}
 
 internal class AccountStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
@@ -973,8 +965,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             savedCredentialAttempted = false
             if (cleared) {
                 startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
-            }
-            else {
+            } else {
                 showError("sessionStoreUnavailable")
             }
             return
@@ -1034,20 +1025,18 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         restoringStoredSession = false
         pendingCredential = null
-        val continuation = authenticatedContinuation(sessionSaved, usernameSaved && credentialSaved)
+        val persistenceNotice = authenticationPersistenceNotice(sessionSaved, usernameSaved && credentialSaved)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 rememberedUsername = authenticatedUsername,
                 username = authenticatedUsername,
-                notice = continuation.notice,
+                notice = persistenceNotice,
             )
         }
-        if (continuation.requestVpnPermission) {
-            requestVpnPermission(
-                attemptId = attemptId,
-                continuation = VpnPermissionContinuation.START_AUTHENTICATED_VPN,
-            )
-        }
+        requestVpnPermission(
+            attemptId = attemptId,
+            continuation = VpnPermissionContinuation.START_AUTHENTICATED_VPN,
+        )
     }
 
     private fun requestVpnPermission(
