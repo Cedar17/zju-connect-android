@@ -198,66 +198,30 @@ class ConnectionPolicyTest {
 
     @Test
     fun onlyDefinitivelyInvalidStoredSessionsAreDeleted() {
-        assertEquals(
-            StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE,
-            storedSessionFailureAction("sessionInvalid", "sessionInvalid"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE,
-            storedSessionFailureAction("error", "invalidSession"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "sessionRestoreUnavailable"),
-        )
-        assertEquals(
-            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
-            storedSessionFailureAction("error", "certificateRejected"),
-        )
+        assertTrue(isDefinitivelyInvalidStoredSession("sessionInvalid", "sessionInvalid"))
+        assertTrue(isDefinitivelyInvalidStoredSession("error", "invalidSession"))
+        assertFalse(isDefinitivelyInvalidStoredSession("authMethodsReady", "sessionExpired"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "sessionRestoreUnavailable"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "certificateRejected"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "authDnsFailure"))
+        assertFalse(isDefinitivelyInvalidStoredSession("error", "authNetworkFailure"))
     }
 
     @Test
     fun reusableSessionFallsBackOnlyForAuthenticationRejection() {
-        assertEquals(
-            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
-            reusableAuthenticationFailureAction("vpnSessionInvalid", "authentication"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.FALLBACK_TO_STORED_SESSION,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "serverRejected"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "timeout"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "networkUnavailable"),
-        )
-        assertEquals(
-            ReusableAuthenticationFailureAction.RETAIN_AND_SHOW_ERROR,
-            reusableAuthenticationFailureAction("vpnSetupFailed", "tlsValidation"),
-        )
-    }
-
-    @Test
-    fun inProcessAuthenticationIsPreferredBeforePersistedSessionRestore() {
-        assertEquals(
-            AuthenticationRecoveryPath.REUSE_IN_PROCESS_RESULT,
-            authenticationRecoveryPath(hasReusableAuthenticatedResult = true),
-        )
-        assertEquals(
-            AuthenticationRecoveryPath.RESTORE_STORED_SESSION,
-            authenticationRecoveryPath(hasReusableAuthenticatedResult = false),
-        )
+        assertTrue(shouldFallbackFromReusableAuthentication("vpnSessionInvalid", "authentication"))
+        assertTrue(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "serverRejected"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "timeout"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "networkUnavailable"))
+        assertFalse(shouldFallbackFromReusableAuthentication("vpnSetupFailed", "tlsValidation"))
     }
 
     @Test
     fun onlyExplicitCredentialRejectionClearsSavedPassword() {
-        assertTrue(shouldClearSavedCredential("credentialsRejected"))
-        assertFalse(shouldClearSavedCredential("sessionExpired"))
-        assertFalse(shouldClearSavedCredential("certificateRejected"))
-        assertFalse(shouldClearSavedCredential("sessionRestoreUnavailable"))
+        assertTrue(isCredentialExplicitlyRejected("credentialsRejected"))
+        assertFalse(isCredentialExplicitlyRejected("sessionExpired"))
+        assertFalse(isCredentialExplicitlyRejected("certificateRejected"))
+        assertFalse(isCredentialExplicitlyRejected("sessionRestoreUnavailable"))
     }
 
     @Test
@@ -281,14 +245,12 @@ class ConnectionPolicyTest {
     }
 
     @Test
-    fun sessionSaveFailureStillContinuesToVpnPermission() {
-        val saved = authenticatedContinuation(sessionSaved = true, usernameSaved = true)
-        val failed = authenticatedContinuation(sessionSaved = false, usernameSaved = true)
+    fun persistenceFailureWarnsAboutTheNextReconnect() {
+        val saved = authenticationPersistenceNotice(sessionSaved = true, usernameSaved = true)
+        val failed = authenticationPersistenceNotice(sessionSaved = false, usernameSaved = true)
 
-        assertTrue(saved.requestVpnPermission)
-        assertTrue(failed.requestVpnPermission)
-        assertTrue(saved.notice.isEmpty())
-        assertTrue(failed.notice.contains("下次"))
+        assertTrue(saved.isEmpty())
+        assertTrue(failed.contains("下次"))
     }
 
     @Test

@@ -302,4 +302,32 @@ class DiagnosticsTest {
         assertEquals("timeout", event.cause)
         assertEquals(20_000L, event.durationMillis)
     }
+
+    @Test
+    fun authenticationRecoveryDiagnosticsUseOnlyStableAllowlistedLabels() {
+        val stale = RedactedDiagnosticEvent(
+            timestampMillis = 1,
+            category = "authRecovery",
+            state = "persisted_session_stale",
+            code = "reauthenticating",
+            cause = "credentialsRejected",
+        ).redacted()
+        val unsafe = RedactedDiagnosticEvent(
+            timestampMillis = 2,
+            category = "authRecovery",
+            state = "sid=secret",
+            code = "password=secret",
+            cause = "deviceId=secret",
+        ).redacted()
+
+        assertEquals("authRecovery", stale.category)
+        assertEquals("persisted_session_stale", stale.state)
+        assertEquals("reauthenticating", stale.code)
+        assertEquals("credentialsRejected", stale.cause)
+        assertEquals("认证恢复", diagnosticCategoryLabel(stale.category))
+        assertEquals("已保存登录状态需重新认证", diagnosticStateLabel(stale))
+        assertEquals("unknown", unsafe.state)
+        assertEquals("unknown", unsafe.code)
+        assertTrue(unsafe.cause.isEmpty())
+    }
 }

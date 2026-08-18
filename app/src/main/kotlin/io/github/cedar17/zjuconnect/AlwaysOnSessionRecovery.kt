@@ -21,7 +21,7 @@ internal fun classifyAlwaysOnSessionRestoreEvent(event: GoAuthEvent): AlwaysOnSe
     event.type == "sessionInvalid" || event.code in setOf("invalidSession", "sessionInvalid") ->
         AlwaysOnSessionRestoreOutcome.InvalidSession
     event.type == "authMethodsReady" && event.code == "sessionExpired" ->
-        AlwaysOnSessionRestoreOutcome.InvalidSession
+        AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication
     event.type in setOf(
         "authMethodsReady",
         "credentialsRequired",
@@ -40,6 +40,9 @@ private val ALWAYS_ON_RESTORE_DELAYS_MILLIS = longArrayOf(0L, 5_000L, 30_000L)
 
 internal fun alwaysOnRestoreDelayMillis(attemptIndex: Int): Long? =
     ALWAYS_ON_RESTORE_DELAYS_MILLIS.getOrNull(attemptIndex)
+
+internal fun shouldClearAlwaysOnStoredSession(outcome: AlwaysOnSessionRestoreOutcome): Boolean =
+    outcome == AlwaysOnSessionRestoreOutcome.InvalidSession
 
 /** Limits cold-start session validation to one bounded sequence per network revision. */
 internal class AlwaysOnRestoreRetryPolicy {
@@ -64,8 +67,9 @@ internal class AlwaysOnRestoreRetryPolicy {
 
 /**
  * Service-owned session handoff. It deliberately knows nothing about saved
- * passwords or UI prompts: a prompt becomes a waiting result and the Go flow
- * is cancelled before control returns to the foreground Activity.
+ * passwords or UI prompts: a prompt, including an expired SID, becomes a
+ * waiting result and preserves the encrypted client context for the foreground
+ * Activity. The Go flow is then cancelled without background credential use.
  */
 internal class AlwaysOnSessionRestorer(
     private val sessionStore: AuthSessionStore,
@@ -87,7 +91,7 @@ internal class AlwaysOnSessionRestorer(
         val token = generation.incrementAndGet()
         fun finish(result: AlwaysOnSessionRestoreResult) {
             if (!generation.compareAndSet(token, token + 1)) return
-            if (result.outcome == AlwaysOnSessionRestoreOutcome.InvalidSession) {
+            if (shouldClearAlwaysOnStoredSession(result.outcome)) {
                 runCatching { sessionStore.clear() }
             }
             if (result.outcome != AlwaysOnSessionRestoreOutcome.Authenticated) {
