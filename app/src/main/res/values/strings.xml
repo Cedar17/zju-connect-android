@@ -196,6 +196,8 @@
     <string name="about_version">Version %1$s</string>
     <string name="about_description">A minimal Zhejiang University VPN connection client.</string>
     <string name="about_repository">GitHub repository</string>
+    <string name="about_report_problem">GitHub report an issue</string>
+    <string name="about_app_icon_description">ZJU Connect app icon</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
     <string name="notification_channel_description">Shows VPN connection status</string>

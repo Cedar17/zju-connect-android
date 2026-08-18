@@ -196,6 +196,8 @@
     <string name="about_version">版本 %1$s</string>
     <string name="about_description">简洁的浙江大学 VPN 连接客户端。</string>
     <string name="about_repository">GitHub 仓库</string>
+    <string name="about_report_problem">GitHub 报告问题</string>
+    <string name="about_app_icon_description">ZJU Connect 应用图标</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
     <string name="notification_channel_description">显示 VPN 连接状态</string>
