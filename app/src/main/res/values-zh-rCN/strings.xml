@@ -191,7 +191,7 @@
 
     <string name="about_title">关于</string>
     <string name="about_version">版本 %1$s</string>
-    <string name="about_description">简洁的浙江大学 VPN 连接客户端。</string>
+    <string name="about_description">浙江大学 ZJU RVPN 的开源 Android 客户端，支持 aTrust 协议，基于 %1$s 构建。</string>
     <string name="about_repository">GitHub 仓库</string>
     <string name="about_report_problem">GitHub 报告问题</string>
     <string name="about_app_icon_description">ZJU Connect 应用图标</string>
