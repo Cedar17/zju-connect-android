@@ -37,7 +37,6 @@
     <string name="password_show">Show</string>
     <string name="password_hide">Hide</string>
     <string name="sms_sent_to">Code sent to %1$s</string>
-    <string name="captcha_instruction">Follow the server instructions and tap the requested positions.</string>
     <string name="captcha_image_description">Graphical verification code</string>
     <string name="captcha_image_unavailable">The verification image is unavailable.</string>
     <string name="captcha_selected_count">%1$d positions selected</string>

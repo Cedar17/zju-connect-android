@@ -81,6 +81,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
 private const val NOTIFICATION_PREFERENCES = "notification_preferences"
 private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+private val CONNECTION_SURFACE_HEIGHT = 96.dp
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -358,14 +359,18 @@ private fun ConnectionHomeContent(
         }
 
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(CONNECTION_SURFACE_HEIGHT),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
             ),
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -398,7 +403,7 @@ private fun ConnectionHomeContent(
             enabled = presentation.primaryActionEnabled,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp),
+                .height(CONNECTION_SURFACE_HEIGHT),
             shape = RoundedCornerShape(24.dp),
         ) {
             if (presentation.showsProgress) {
@@ -497,7 +502,6 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(stringResource(R.string.captcha_instruction))
                 CaptchaChallenge(state, viewModel)
                 Row(
                     modifier = Modifier.fillMaxWidth(),

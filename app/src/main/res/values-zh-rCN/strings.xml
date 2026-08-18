@@ -37,7 +37,6 @@
     <string name="password_show">显示</string>
     <string name="password_hide">隐藏</string>
     <string name="sms_sent_to">验证码已发送至 %1$s</string>
-    <string name="captcha_instruction">请按服务端提示依次点击图片中的位置。</string>
     <string name="captcha_image_description">图形验证码</string>
     <string name="captcha_image_unavailable">验证码图片暂不可用。</string>
     <string name="captcha_selected_count">已选择 %1$d 个位置</string>
