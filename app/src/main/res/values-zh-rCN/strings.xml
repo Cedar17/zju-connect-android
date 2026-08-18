@@ -108,7 +108,6 @@
     <string name="clear">清除</string>
     <string name="diagnostics_cleared">诊断记录已清除</string>
     <string name="diagnostics_copied">诊断报告已复制</string>
-    <string name="diagnostics_summary_hint">页面摘要可直接截图；复制报告包含完整的白名单记录。</string>
     <string name="diagnostics_latest_status">最近状态</string>
     <string name="loading">正在读取…</string>
     <string name="diagnostics_no_record">暂无诊断记录</string>

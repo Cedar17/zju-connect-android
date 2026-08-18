@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -38,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 class DiagnosticsActivity : ComponentActivity() {
@@ -117,12 +119,6 @@ private fun DiagnosticsScreen(
                     .padding(horizontal = 20.dp, vertical = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                Text(
-                    text = stringResource(R.string.diagnostics_summary_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
                 DiagnosticSummaryCard(
                     loaded = snapshot.loaded,
                     summary = summary,
@@ -253,12 +249,9 @@ private fun DiagnosticHistorySection(
                     previewGroups
                 }
                 SelectionContainer {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         visibleGroups.forEach { group ->
-                            Text(
-                                text = formatDiagnosticPreviewLineLocalized(group),
-                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                            )
+                            DiagnosticHistoryLine(group)
                         }
                     }
                 }
@@ -272,6 +265,20 @@ private fun DiagnosticHistorySection(
             }
         }
     }
+}
+
+@Composable
+private fun DiagnosticHistoryLine(group: DiagnosticEventGroup) {
+    Text(
+        text = formatDiagnosticPreviewLineLocalized(group),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+    )
 }
 
 @Composable
