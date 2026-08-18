@@ -1,8 +1,8 @@
 # zju-connect-android
 
-An open-source Android client for ZJU aTrust remote access, powered by [zju-connect](https://github.com/Mythologyli/zju-connect).
+浙江大学 ZJU RVPN 的开源 Android 客户端，支持 aTrust 协议，基于 zju-connect 构建。
 
-面向浙江大学新版 RVPN / aTrust 的非官方开源 Android 客户端。
+An open-source Android client for ZJU RVPN, with aTrust protocol support. Powered [zju-connect](https://github.com/Mythologyli/zju-connect).
 
 ## 项目定位
 
