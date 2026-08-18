@@ -16,7 +16,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,7 +30,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -364,17 +362,15 @@ private fun ConnectionHomeContent(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 text = stringResource(R.string.app_tagline),
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-
-        ConnectionIndicator(state.phase)
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -417,8 +413,8 @@ private fun ConnectionHomeContent(
             enabled = presentation.primaryActionEnabled,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp),
-            shape = RoundedCornerShape(18.dp),
+                .height(64.dp),
+            shape = RoundedCornerShape(24.dp),
         ) {
             if (presentation.showsProgress) {
                 CircularProgressIndicator(
@@ -434,28 +430,6 @@ private fun ConnectionHomeContent(
                 Text(presentation.primaryAction.resolve())
             }
         }
-    }
-}
-
-@Composable
-private fun ConnectionIndicator(phase: ConnectionPhase) {
-    val indicatorColor = when (phase) {
-        ConnectionPhase.CONNECTED -> MaterialTheme.colorScheme.primary
-        ConnectionPhase.ERROR -> MaterialTheme.colorScheme.error
-        ConnectionPhase.DISCONNECTED -> MaterialTheme.colorScheme.outline
-        else -> MaterialTheme.colorScheme.tertiary
-    }
-    Box(
-        modifier = Modifier
-            .size(112.dp)
-            .background(indicatorColor.copy(alpha = 0.16f), CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(58.dp)
-                .background(indicatorColor, CircleShape),
-        )
     }
 }
 
