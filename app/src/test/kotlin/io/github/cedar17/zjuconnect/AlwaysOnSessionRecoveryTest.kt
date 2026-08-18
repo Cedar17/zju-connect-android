@@ -1,7 +1,9 @@
 package io.github.cedar17.zjuconnect
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AlwaysOnSessionRecoveryTest {
@@ -26,6 +28,17 @@ class AlwaysOnSessionRecoveryTest {
                     state = "idle",
                     code = "sessionInvalid",
                     message = "expired",
+                ),
+            ),
+        )
+        assertEquals(
+            AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication,
+            classifyAlwaysOnSessionRestoreEvent(
+                GoAuthEvent(
+                    type = "authMethodsReady",
+                    state = "awaitingMethod",
+                    code = "sessionExpired",
+                    message = "reauthenticate in foreground",
                 ),
             ),
         )
@@ -61,6 +74,17 @@ class AlwaysOnSessionRecoveryTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun onlyStructurallyInvalidSessionsAreDeletedByAlwaysOnRecovery() {
+        assertTrue(shouldClearAlwaysOnStoredSession(AlwaysOnSessionRestoreOutcome.InvalidSession))
+        assertFalse(
+            shouldClearAlwaysOnStoredSession(
+                AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication,
+            ),
+        )
+        assertFalse(shouldClearAlwaysOnStoredSession(AlwaysOnSessionRestoreOutcome.TransientFailure))
     }
 
     @Test

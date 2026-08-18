@@ -16,8 +16,8 @@
     "upstreamCommit": "1b6ad138737547782dcfc09def2a950738a67188",
     "upstreamRepository": "https://github.com/Mythologyli/zju-connect",
     "forkModule": "github.com/Cedar17/zju-connect",
-    "forkVersion": "v1.2.3-0.20260813033047-ebe7fbe093fc",
-    "forkCommit": "ebe7fbe093fce3875a07fafee70777786d42a279",
+    "forkVersion": "v1.2.3-0.20260818031715-7b54744a2d27",
+    "forkCommit": "7b54744a2d27bcaac1f75543ba9be582ae661754",
     "forkBranch": "dev/android",
     "forkRepository": "https://github.com/Cedar17/zju-connect",
     "license": "AGPL-3.0-only"

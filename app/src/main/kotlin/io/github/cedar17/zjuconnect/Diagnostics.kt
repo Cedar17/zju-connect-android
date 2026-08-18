@@ -20,8 +20,17 @@ private const val MAX_REDACTED_DIAGNOSTIC_DURATION_MILLIS = 5 * 60 * 1000L
 private const val DIAGNOSTIC_FILE_NAME = "redacted-diagnostics.json"
 private const val DIAGNOSTIC_FILE_VERSION = 1
 
-private val SAFE_DIAGNOSTIC_CATEGORIES = setOf("connection", "vpn", "service")
+private val SAFE_DIAGNOSTIC_CATEGORIES = setOf("connection", "vpn", "service", "authRecovery")
 private val SAFE_CONNECTION_STATES = ConnectionPhase.entries.map { it.name.lowercase() }.toSet()
+private val SAFE_AUTH_RECOVERY_STATES = AuthenticationRecoverySource.entries
+    .map(AuthenticationRecoverySource::diagnosticState)
+    .toSet()
+private val SAFE_AUTH_RECOVERY_CODES = AuthenticationRecoveryOutcome.entries
+    .map(AuthenticationRecoveryOutcome::diagnosticCode)
+    .toSet()
+private val SAFE_AUTH_RECOVERY_CAUSES = AuthenticationStateBoundary.entries
+    .map(AuthenticationStateBoundary::diagnosticCause)
+    .toSet()
 private val SAFE_VPN_STATES = setOf(
     "idle",
     "preparing",
@@ -82,7 +91,7 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "vpnStopDispatchFailed",
     "vpnTunReadFailed",
     "vpnTunWriteFailed",
-)
+) + SAFE_AUTH_RECOVERY_CODES
 private val SAFE_DIAGNOSTIC_CAUSES = setOf(
     "authentication",
     "configuration",
@@ -100,7 +109,7 @@ private val SAFE_DIAGNOSTIC_CAUSES = setOf(
     "timeout",
     "tunUnavailable",
     "wouldBlock",
-)
+) + SAFE_AUTH_RECOVERY_CAUSES
 
 /**
  * Numeric data-plane totals are safe to publish, unlike the packet metadata
@@ -302,6 +311,15 @@ internal fun diagnosticStateLabel(event: RedactedDiagnosticEvent): String = when
         "sessionRestore" -> "服务恢复会话"
         else -> "未知服务状态"
     }
+    "authRecovery" -> when (event.state) {
+        "reusable_result" -> "进程内认证结果"
+        "persisted_session" -> "已保存登录状态"
+        "persisted_session_authenticated" -> "已保存登录状态已认证"
+        "persisted_session_stale" -> "已保存登录状态需重新认证"
+        "saved_credentials" -> "已保存密码"
+        "server_challenge" -> "服务端挑战"
+        else -> "未知认证恢复状态"
+    }
     else -> "未知状态"
 }
 
@@ -309,6 +327,7 @@ internal fun diagnosticCategoryLabel(category: String): String = when (category)
     "connection" -> "连接"
     "vpn" -> "VPN"
     "service" -> "服务"
+    "authRecovery" -> "认证恢复"
     else -> "未知"
 }
 
@@ -473,6 +492,23 @@ internal object RedactedDiagnostics {
                 category = "service",
                 state = state,
                 code = code,
+            ),
+        )
+    }
+
+    fun recordAuthenticationRecovery(
+        context: Context,
+        source: AuthenticationRecoverySource,
+        outcome: AuthenticationRecoveryOutcome,
+        boundary: AuthenticationStateBoundary? = null,
+    ) {
+        storeFor(context).record(
+            RedactedDiagnosticEvent(
+                timestampMillis = System.currentTimeMillis(),
+                category = "authRecovery",
+                state = source.diagnosticState,
+                code = outcome.diagnosticCode,
+                cause = boundary?.diagnosticCause.orEmpty(),
             ),
         )
     }
@@ -664,6 +700,7 @@ private fun trimToByteLimit(events: List<RedactedDiagnosticEvent>): List<Redacte
 private fun redactState(category: String, value: String): String = when (category) {
     "connection" -> value.takeIf { it in SAFE_CONNECTION_STATES } ?: "unknown"
     "vpn", "service" -> value.takeIf { it in SAFE_VPN_STATES } ?: "unknown"
+    "authRecovery" -> value.takeIf { it in SAFE_AUTH_RECOVERY_STATES } ?: "unknown"
     else -> "unknown"
 }
 

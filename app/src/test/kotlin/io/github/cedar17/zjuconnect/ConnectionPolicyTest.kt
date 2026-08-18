@@ -199,12 +199,16 @@ class ConnectionPolicyTest {
     @Test
     fun onlyDefinitivelyInvalidStoredSessionsAreDeleted() {
         assertEquals(
-            StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE,
+            StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE,
             storedSessionFailureAction("sessionInvalid", "sessionInvalid"),
         )
         assertEquals(
-            StoredSessionFailureAction.DELETE_AND_REAUTHENTICATE,
+            StoredSessionFailureAction.CLEAR_AND_REAUTHENTICATE,
             storedSessionFailureAction("error", "invalidSession"),
+        )
+        assertEquals(
+            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
+            storedSessionFailureAction("authMethodsReady", "sessionExpired"),
         )
         assertEquals(
             StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
@@ -213,6 +217,14 @@ class ConnectionPolicyTest {
         assertEquals(
             StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
             storedSessionFailureAction("error", "certificateRejected"),
+        )
+        assertEquals(
+            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
+            storedSessionFailureAction("error", "authDnsFailure"),
+        )
+        assertEquals(
+            StoredSessionFailureAction.RETAIN_AND_SHOW_ERROR,
+            storedSessionFailureAction("error", "authNetworkFailure"),
         )
     }
 
@@ -254,10 +266,40 @@ class ConnectionPolicyTest {
 
     @Test
     fun onlyExplicitCredentialRejectionClearsSavedPassword() {
-        assertTrue(shouldClearSavedCredential("credentialsRejected"))
-        assertFalse(shouldClearSavedCredential("sessionExpired"))
-        assertFalse(shouldClearSavedCredential("certificateRejected"))
-        assertFalse(shouldClearSavedCredential("sessionRestoreUnavailable"))
+        assertEquals(
+            AuthenticationStateBoundary.CREDENTIALS_REJECTED,
+            credentialInvalidationBoundary("credentialsRejected"),
+        )
+        assertNull(credentialInvalidationBoundary("sessionExpired"))
+        assertNull(credentialInvalidationBoundary("certificateRejected"))
+        assertNull(credentialInvalidationBoundary("sessionRestoreUnavailable"))
+    }
+
+    @Test
+    fun authenticationDisposalBoundariesKeepReconnectContextNarrow() {
+        val teardown = authenticationStateDisposition(AuthenticationStateBoundary.VIEW_MODEL_TEARDOWN)
+        assertFalse(teardown.clearInProcessResult)
+        assertFalse(teardown.clearStoredSession)
+        assertFalse(teardown.clearSavedCredential)
+        assertFalse(teardown.clearRememberedAccount)
+
+        val invalidSession = authenticationStateDisposition(AuthenticationStateBoundary.INVALID_STORED_SESSION)
+        assertFalse(invalidSession.clearInProcessResult)
+        assertTrue(invalidSession.clearStoredSession)
+        assertFalse(invalidSession.clearSavedCredential)
+        assertFalse(invalidSession.clearRememberedAccount)
+
+        val rejectedCredential = authenticationStateDisposition(AuthenticationStateBoundary.CREDENTIALS_REJECTED)
+        assertFalse(rejectedCredential.clearInProcessResult)
+        assertFalse(rejectedCredential.clearStoredSession)
+        assertTrue(rejectedCredential.clearSavedCredential)
+        assertFalse(rejectedCredential.clearRememberedAccount)
+
+        val accountSwitch = authenticationStateDisposition(AuthenticationStateBoundary.ACCOUNT_SWITCH)
+        assertTrue(accountSwitch.clearInProcessResult)
+        assertTrue(accountSwitch.clearStoredSession)
+        assertTrue(accountSwitch.clearSavedCredential)
+        assertTrue(accountSwitch.clearRememberedAccount)
     }
 
     @Test
