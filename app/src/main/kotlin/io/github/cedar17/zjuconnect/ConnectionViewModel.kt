@@ -588,7 +588,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         phase = ConnectionPhase.RESTORING_SESSION,
                         statusMessage = "正在验证已保存的登录状态…",
                         internalCode = "",
-                        notice = "登录状态已失效，正在尝试其他恢复方式。",
                     )
                 }
                 authenticationRecoverySource = AuthenticationRecoverySource.PERSISTED_SESSION
