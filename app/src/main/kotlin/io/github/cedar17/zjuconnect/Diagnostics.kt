@@ -269,6 +269,7 @@ internal fun diagnosticStateLabel(event: RedactedDiagnosticEvent): String = when
         "awaiting_credentials" -> "等待账号密码"
         "awaiting_phone" -> "等待手机号"
         "awaiting_sms" -> "等待短信验证码"
+        "awaiting_token" -> "等待认证码"
         "awaiting_captcha" -> "等待图形验证码"
         "preparing_vpn_permission" -> "准备 VPN 权限"
         "establishing_vpn" -> "建立 VPN"
@@ -360,7 +361,7 @@ internal fun formatDiagnosticPreviewLine(group: DiagnosticEventGroup): String = 
     }
 }
 
-private fun formatDiagnosticPreviewTime(timestampMillis: Long): String = runCatching {
+internal fun formatDiagnosticPreviewTime(timestampMillis: Long): String = runCatching {
     java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
         .withZone(java.time.ZoneId.systemDefault())
         .format(java.time.Instant.ofEpochMilli(timestampMillis.coerceAtLeast(0)))

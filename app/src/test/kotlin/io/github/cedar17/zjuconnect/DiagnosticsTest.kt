@@ -113,6 +113,10 @@ class DiagnosticsTest {
         assertEquals(2, summary.eventCount)
         assertEquals("awaiting_captcha", summary.latest?.state)
         assertEquals("等待图形验证码", summary.latest?.let(::diagnosticStateLabel))
+        assertEquals(
+            "等待认证码",
+            summary.latest?.copy(state = "awaiting_token")?.let(::diagnosticStateLabel),
+        )
     }
 
     @Test

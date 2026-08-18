@@ -63,12 +63,11 @@ internal fun connectionSupportingText(state: ConnectionUiState): String =
         state.statusMessage
     }
 
-private fun statusMessageText(message: String): UiText = UiText.Resource(
-    id = statusMessageResource(message),
-)
+private fun statusMessageText(message: String): UiText =
+    statusMessageResource(message)?.let(UiText::Resource) ?: UiText.Plain(message)
 
 @StringRes
-private fun statusMessageResource(message: String): Int = when (message) {
+private fun statusMessageResource(message: String): Int? = when (message) {
     "尚未连接" -> R.string.connection_status_disconnected
     "正在复用上次认证状态…" -> R.string.connection_status_reusing_auth
     "正在建立 VPN…" -> R.string.connection_status_establishing_vpn
@@ -98,10 +97,10 @@ private fun statusMessageResource(message: String): Int = when (message) {
     "正在断开 VPN…" -> R.string.connection_status_disconnecting_vpn
     "正在切换账号…" -> R.string.connection_status_switching_account
     "请先在系统 VPN 设置中关闭 Always-on" -> R.string.always_on_disconnect_guidance
-    else -> R.string.connection_status_generic
+    else -> null
 }
 
-private fun connectionErrorText(code: String): UiText = UiText.Resource(
+internal fun connectionErrorText(code: String): UiText = UiText.Resource(
     id = connectionErrorResource(code),
 )
 

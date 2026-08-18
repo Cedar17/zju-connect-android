@@ -138,6 +138,7 @@
     <string name="diagnostic_unknown_state">Unknown status</string>
     <string name="diagnostic_unknown_category">Unknown</string>
     <string name="diagnostic_unknown_error">Unspecified error</string>
+    <string name="diagnostic_l3_reconnecting">Reconnecting the data plane</string>
     <string name="diagnostic_category_connection">Connection</string>
     <string name="diagnostic_category_vpn">VPN</string>
     <string name="diagnostic_category_service">Service</string>

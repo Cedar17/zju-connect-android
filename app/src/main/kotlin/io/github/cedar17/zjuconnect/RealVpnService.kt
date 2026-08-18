@@ -793,8 +793,8 @@ class RealVpnService : VpnService() {
         )
         val content = realVpnAlwaysOnDisconnectGuidanceContent()
         val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle(content.title)
-            .setContentText(content.text)
+            .setContentTitle(getString(content.titleRes))
+            .setContentText(getString(content.textRes))
             .setSmallIcon(R.drawable.ic_stat_cedar)
             .setContentIntent(openVpnSettingsPendingIntent())
             .setAutoCancel(true)
@@ -821,10 +821,10 @@ class RealVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 REAL_VPN_CHANNEL,
-                "ZJU Connect VPN",
+                getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "显示 VPN 连接状态"
+                description = getString(R.string.notification_channel_description)
                 setSound(null, null)
                 enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -851,8 +851,8 @@ class RealVpnService : VpnService() {
     private fun buildVpnNotification(kind: RealVpnNotificationKind): Notification {
         val content = realVpnNotificationContent(kind)
         val builder = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle(content.title)
-            .setContentText(content.text)
+            .setContentTitle(getString(content.titleRes))
+            .setContentText(getString(content.textRes))
             .setSmallIcon(R.drawable.ic_stat_cedar)
             .setContentIntent(openAppPendingIntent())
             .setOngoing(content.ongoing)

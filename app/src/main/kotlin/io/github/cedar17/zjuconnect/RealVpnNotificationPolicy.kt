@@ -1,5 +1,7 @@
 package io.github.cedar17.zjuconnect
 
+import androidx.annotation.StringRes
+
 internal enum class RealVpnNotificationKind {
     CONNECTING,
     CONNECTED,
@@ -9,46 +11,46 @@ internal enum class RealVpnNotificationKind {
 }
 
 internal data class RealVpnNotificationContent(
-    val title: String,
-    val text: String,
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val textRes: Int,
     val ongoing: Boolean,
 )
 
 internal fun realVpnNotificationContent(kind: RealVpnNotificationKind): RealVpnNotificationContent = when (kind) {
     RealVpnNotificationKind.CONNECTING -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在连接浙江大学 VPN",
+        titleRes = R.string.notification_title,
+        textRes = R.string.notification_connecting,
         ongoing = true,
     )
     RealVpnNotificationKind.CONNECTED -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "已连接到浙江大学 VPN",
+        titleRes = R.string.notification_title,
+        textRes = R.string.notification_connected,
         ongoing = true,
     )
     RealVpnNotificationKind.RECOVERING -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在恢复 VPN 连接",
+        titleRes = R.string.notification_title,
+        textRes = R.string.notification_recovering,
         ongoing = true,
     )
     RealVpnNotificationKind.WAITING_FOR_NETWORK -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在等待可用网络",
+        titleRes = R.string.notification_title,
+        textRes = R.string.notification_waiting_network,
         ongoing = true,
     )
     RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "需要打开 App 完成登录",
+        titleRes = R.string.notification_title,
+        textRes = R.string.notification_waiting_authentication,
         ongoing = true,
     )
 }
 
 internal data class RealVpnGuidanceNotificationContent(
-    val title: String,
-    val text: String,
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val textRes: Int,
 )
 
 internal fun realVpnAlwaysOnDisconnectGuidanceContent(): RealVpnGuidanceNotificationContent =
     RealVpnGuidanceNotificationContent(
-        title = "ZJU Connect 由系统管理",
-        text = "请先在系统 VPN 设置中关闭 Always-on",
+        titleRes = R.string.notification_always_on_title,
+        textRes = R.string.notification_always_on_text,
     )

@@ -138,6 +138,7 @@
     <string name="diagnostic_unknown_state">未知状态</string>
     <string name="diagnostic_unknown_category">未知</string>
     <string name="diagnostic_unknown_error">未指定错误</string>
+    <string name="diagnostic_l3_reconnecting">正在重连数据面</string>
     <string name="diagnostic_category_connection">连接</string>
     <string name="diagnostic_category_vpn">VPN</string>
     <string name="diagnostic_category_service">服务</string>

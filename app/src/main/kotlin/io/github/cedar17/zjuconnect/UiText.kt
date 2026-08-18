@@ -7,7 +7,7 @@ import androidx.compose.ui.res.stringResource
 /** A resource-backed user-facing string with a safe plain-text fallback. */
 internal sealed interface UiText {
     data class Resource(
-        @StringRes val id: Int,
+        @get:StringRes val id: Int,
         val arguments: List<Any> = emptyList(),
     ) : UiText
 
