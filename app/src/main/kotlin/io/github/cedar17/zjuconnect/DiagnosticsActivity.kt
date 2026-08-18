@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -249,9 +251,18 @@ private fun DiagnosticHistorySection(
                     previewGroups
                 }
                 SelectionContainer {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        visibleGroups.forEach { group ->
-                            DiagnosticHistoryLine(group)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                    ) {
+                        Column(
+                            modifier = Modifier.wrapContentWidth(unbounded = true),
+                            verticalArrangement = Arrangement.spacedBy(1.dp),
+                        ) {
+                            visibleGroups.forEach { group ->
+                                DiagnosticHistoryLine(group)
+                            }
                         }
                     }
                 }
@@ -271,9 +282,6 @@ private fun DiagnosticHistorySection(
 private fun DiagnosticHistoryLine(group: DiagnosticEventGroup) {
     Text(
         text = formatDiagnosticPreviewLineLocalized(group),
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Clip,
@@ -293,7 +301,7 @@ private fun DiagnosticEventDetails(event: RedactedDiagnosticEvent) {
     }
     details.takeIf { it.isNotEmpty() }?.let {
         Text(
-            text = it.joinToString(" · "),
+            text = it.joinToString("·"),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -327,7 +335,7 @@ private fun formatDiagnosticPreviewLineLocalized(group: DiagnosticEventGroup): S
         if (group.occurrences > 1) {
             add(stringResource(R.string.diagnostic_preview_repeats, group.occurrences))
         }
-    }.joinToString("  ")
+    }.joinToString("·")
 }
 
 @Suppress("DEPRECATION")

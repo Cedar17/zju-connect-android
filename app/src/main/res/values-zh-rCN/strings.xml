@@ -127,7 +127,7 @@
     <string name="diagnostic_duration">耗时：%1$s</string>
     <string name="diagnostic_milliseconds">%1$d 毫秒</string>
     <string name="diagnostic_seconds">%1$.1f 秒</string>
-    <string name="diagnostic_preview_header">%1$s · %2$s · %3$s</string>
+    <string name="diagnostic_preview_header">%1$s·%2$s·%3$s</string>
     <string name="diagnostic_preview_code">类型=%1$s</string>
     <string name="diagnostic_preview_stage">阶段=%1$s</string>
     <string name="diagnostic_preview_cause">原因=%1$s</string>
