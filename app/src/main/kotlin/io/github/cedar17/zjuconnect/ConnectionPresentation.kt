@@ -64,7 +64,8 @@ internal fun connectionSupportingText(state: ConnectionUiState): String =
     }
 
 private fun statusMessageText(message: String): UiText =
-    statusMessageResource(message)?.let(UiText::Resource) ?: UiText.Plain(message)
+    statusMessageResource(message)?.let(UiText::Resource)
+        ?: UiText.Resource(R.string.connection_status_generic)
 
 @StringRes
 private fun statusMessageResource(message: String): Int? = when (message) {

@@ -37,6 +37,11 @@ class ConnectionPresentationTest {
                 ConnectionUiState(phase = ConnectionPhase.DISCONNECTING),
             ).showsProgress,
         )
+        assertTrue(
+            connectionPresentation(
+                ConnectionUiState(phase = ConnectionPhase.PREPARING_VPN_PERMISSION),
+            ).showsProgress,
+        )
         assertEquals(
             UiText.Resource(R.string.error_auth_timeout),
             connectionPresentation(
