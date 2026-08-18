@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +38,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -45,12 +50,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,16 +70,21 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.isSystemInDarkTheme
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
 private const val NOTIFICATION_PREFERENCES = "notification_preferences"
 private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+private const val REPORT_ISSUES_URL = "https://github.com/Cedar17/zju-connect-android/issues"
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -188,14 +201,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 internal fun ZjuConnectTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
+    val darkTheme = isSystemInDarkTheme()
     val colors = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        dynamicDarkColorScheme(context)
-    } else {
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else if (darkTheme) {
         darkColorScheme(
             primary = Color(0xFF9FC9FF),
             secondary = Color(0xFFBBC7DB),
             tertiary = Color(0xFFD9BDE9),
         )
+    } else {
+        lightColorScheme()
     }
     MaterialTheme(colorScheme = colors, content = content)
 }
@@ -206,6 +222,16 @@ private fun ZjuConnectApp(
     viewModel: ConnectionViewModel,
 ) {
     val context = LocalContext.current
+    val menuDescription = stringResource(R.string.menu_overflow)
+    var menuExpanded by rememberSaveable { mutableStateOf(false) }
+    var switchDialogVisible by rememberSaveable { mutableStateOf(false) }
+
+    fun openExternalUrl(url: String) {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }
+    }
+
     Surface(modifier = Modifier.fillMaxSize()) {
         Scaffold { contentPadding ->
             Box(
@@ -235,18 +261,84 @@ private fun ZjuConnectApp(
                     )
                 }
 
-                TextButton(
-                    onClick = {
-                        context.startActivity(Intent(context, DiagnosticsActivity::class.java))
-                    },
+                Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(end = 8.dp, top = 4.dp),
                 ) {
-                    Text("诊断")
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        modifier = Modifier.semantics {
+                            contentDescription = menuDescription
+                        },
+                    ) {
+                        Text(
+                            text = "⋮",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.menu_diagnostics)) },
+                            onClick = {
+                                menuExpanded = false
+                                context.startActivity(Intent(context, DiagnosticsActivity::class.java))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.menu_report_problem)) },
+                            onClick = {
+                                menuExpanded = false
+                                openExternalUrl(REPORT_ISSUES_URL)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.menu_about)) },
+                            onClick = {
+                                menuExpanded = false
+                                context.startActivity(Intent(context, AboutActivity::class.java))
+                            },
+                        )
+                        if (canSwitchAccount(state)) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_switch_account)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    switchDialogVisible = true
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (switchDialogVisible && canSwitchAccount(state)) {
+        AlertDialog(
+            onDismissRequest = { switchDialogVisible = false },
+            title = { Text(stringResource(R.string.switch_account_title)) },
+            text = { Text(stringResource(R.string.switch_account_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        switchDialogVisible = false
+                        viewModel.switchAccount()
+                    },
+                ) {
+                    Text(stringResource(R.string.switch_account_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { switchDialogVisible = false }) {
+                    Text(stringResource(R.string.switch_account_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -257,6 +349,9 @@ private fun ConnectionHomeContent(
     modifier: Modifier,
     centered: Boolean,
 ) {
+    val presentation = connectionPresentation(state)
+    val supportingText = presentation.supportingText.resolve()
+    val progressDescription = stringResource(R.string.connection_progress)
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -268,12 +363,12 @@ private fun ConnectionHomeContent(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "ZJU Connect",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "浙江大学 VPN",
+                text = stringResource(R.string.app_tagline),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -290,18 +385,23 @@ private fun ConnectionHomeContent(
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = connectionTitle(state.phase),
+                    text = presentation.title.resolve(),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = connectionSupportingText(state),
+                    text = supportingText,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = supportingText }
+                        .horizontalScroll(rememberScrollState()),
+                    maxLines = 1,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (state.phase == ConnectionPhase.ERROR) {
+                    color = if (presentation.isError) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -310,44 +410,28 @@ private fun ConnectionHomeContent(
             }
         }
 
-        if (state.notice.isNotBlank()) {
-            Text(
-                text = state.notice,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-        }
-
         AuthenticationStep(state, viewModel)
 
         Button(
             onClick = viewModel::onPrimaryAction,
-            enabled = isPrimaryActionEnabled(state),
+            enabled = presentation.primaryActionEnabled,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp),
             shape = RoundedCornerShape(18.dp),
         ) {
-            if (isConnectionProgress(state.phase)) {
+            if (presentation.showsProgress) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier
+                        .size(22.dp)
+                        .semantics {
+                            contentDescription = progressDescription
+                        },
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary,
                 )
             } else {
-                Text(primaryActionLabel(state.phase))
-            }
-        }
-
-        if (canSwitchAccount(state)) {
-            TextButton(onClick = viewModel::switchAccount) {
-                Text("切换账号")
-            }
-        }
-
-        if (canCancelConnection(state.phase)) {
-            TextButton(onClick = viewModel::cancelConnection) {
-                Text("取消连接")
+                Text(presentation.primaryAction.resolve())
             }
         }
     }
@@ -388,14 +472,14 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                     modifier = Modifier.fillMaxWidth(),
                     value = state.username,
                     onValueChange = viewModel::updateUsername,
-                    label = { Text("上网账号") },
+                    label = { Text(stringResource(R.string.field_account)) },
                     singleLine = true,
                 )
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth(),
                     value = state.password,
                     onValueChange = viewModel::updatePassword,
-                    label = { Text("密码") },
+                    label = { Text(stringResource(R.string.field_password)) },
                     visualTransformation = if (passwordVisible) {
                         VisualTransformation.None
                     } else {
@@ -404,7 +488,9 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Text(
-                                text = if (passwordVisible) "隐藏" else "显示",
+                                text = stringResource(
+                                    if (passwordVisible) R.string.password_hide else R.string.password_show,
+                                ),
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
@@ -417,7 +503,7 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
             modifier = Modifier.fillMaxWidth(),
             value = state.phone,
             onValueChange = viewModel::updatePhone,
-            label = { Text("手机号") },
+            label = { Text(stringResource(R.string.field_phone)) },
             singleLine = true,
         )
         ConnectionPhase.AWAITING_SMS -> {
@@ -427,7 +513,7 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
             ) {
                 state.phoneNumbers.firstOrNull()?.let { maskedPhone ->
                     Text(
-                        text = "验证码已发送至 $maskedPhone",
+                        text = stringResource(R.string.sms_sent_to, maskedPhone),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -435,7 +521,7 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                     modifier = Modifier.fillMaxWidth(),
                     value = state.smsCode,
                     onValueChange = viewModel::updateSmsCode,
-                    label = { Text("短信验证码") },
+                    label = { Text(stringResource(R.string.field_sms_code)) },
                     singleLine = true,
                 )
             }
@@ -444,7 +530,7 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
             modifier = Modifier.fillMaxWidth(),
             value = state.token,
             onValueChange = viewModel::updateToken,
-            label = { Text(tokenChallengeMessage(state.challengeKind)) },
+            label = { Text(tokenChallengeUiText(state.challengeKind).resolve()) },
             singleLine = true,
         )
         ConnectionPhase.AWAITING_CAPTCHA -> {
@@ -452,16 +538,16 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("请按服务端提示依次点击图片中的位置。")
+                Text(stringResource(R.string.captcha_instruction))
                 CaptchaChallenge(state, viewModel)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("已选择 ${state.captchaPoints.size} 个位置")
+                    Text(stringResource(R.string.captcha_selected_count, state.captchaPoints.size))
                     TextButton(onClick = viewModel::clearCaptchaPoints) {
-                        Text("重新选择")
+                        Text(stringResource(R.string.captcha_reset))
                     }
                 }
             }
@@ -476,7 +562,7 @@ private fun CaptchaChallenge(state: ConnectionUiState, viewModel: ConnectionView
         remember(bytes) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
     }
     if (image == null) {
-        Text("验证码图片暂不可用", color = MaterialTheme.colorScheme.error)
+        Text(stringResource(R.string.captcha_image_unavailable), color = MaterialTheme.colorScheme.error)
         return
     }
 
@@ -500,7 +586,7 @@ private fun CaptchaChallenge(state: ConnectionUiState, viewModel: ConnectionView
     ) {
         androidx.compose.foundation.Image(
             bitmap = image,
-            contentDescription = "图形验证码",
+            contentDescription = stringResource(R.string.captcha_image_description),
             contentScale = ContentScale.FillWidth,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -514,71 +600,3 @@ private fun CaptchaChallenge(state: ConnectionUiState, viewModel: ConnectionView
         }
     }
 }
-
-private fun connectionTitle(phase: ConnectionPhase): String = when (phase) {
-    ConnectionPhase.CONNECTED -> "已连接"
-    ConnectionPhase.RECOVERING_VPN -> "正在恢复"
-    ConnectionPhase.ERROR -> "连接遇到问题"
-    ConnectionPhase.DISCONNECTED -> "未连接"
-    ConnectionPhase.DISCONNECTING -> "正在断开"
-    else -> "正在连接"
-}
-
-internal fun connectionSupportingText(state: ConnectionUiState): String =
-    if (state.phase == ConnectionPhase.DISCONNECTED || state.phase == ConnectionPhase.CONNECTED) {
-        if (state.rememberedUsername.isBlank()) {
-            "尚未保存账号"
-        } else {
-            "账号：${state.rememberedUsername}"
-        }
-    } else {
-        state.statusMessage
-    }
-
-private fun primaryActionLabel(phase: ConnectionPhase): String = when (phase) {
-    ConnectionPhase.DISCONNECTED -> "连接"
-    ConnectionPhase.ERROR -> "重试"
-    ConnectionPhase.AWAITING_CREDENTIALS -> "登录并连接"
-    ConnectionPhase.AWAITING_PHONE -> "发送验证码"
-    ConnectionPhase.AWAITING_SMS -> "验证并连接"
-    ConnectionPhase.AWAITING_TOKEN -> "验证并连接"
-    ConnectionPhase.AWAITING_CAPTCHA -> "提交并继续"
-    ConnectionPhase.RECOVERING_VPN,
-    ConnectionPhase.CONNECTED -> "断开"
-    else -> "正在连接"
-}
-
-private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (state.phase) {
-    ConnectionPhase.DISCONNECTED,
-    ConnectionPhase.ERROR,
-    ConnectionPhase.RECOVERING_VPN,
-    ConnectionPhase.CONNECTED -> true
-    ConnectionPhase.AWAITING_CREDENTIALS -> state.username.isNotBlank() && state.password.isNotBlank()
-    ConnectionPhase.AWAITING_PHONE -> state.phone.isNotBlank()
-    ConnectionPhase.AWAITING_SMS -> state.smsCode.isNotBlank()
-    ConnectionPhase.AWAITING_TOKEN -> state.token.isNotBlank()
-    ConnectionPhase.AWAITING_CAPTCHA -> state.captchaPoints.isNotEmpty()
-    else -> false
-}
-
-private fun isConnectionProgress(phase: ConnectionPhase): Boolean = phase in setOf(
-    ConnectionPhase.RESTORING_SESSION,
-    ConnectionPhase.FETCHING_AUTH_METHODS,
-    ConnectionPhase.AUTHENTICATING,
-    ConnectionPhase.PREPARING_VPN_PERMISSION,
-    ConnectionPhase.ESTABLISHING_VPN,
-    ConnectionPhase.DISCONNECTING,
-)
-
-private fun canCancelConnection(phase: ConnectionPhase): Boolean = phase in setOf(
-    ConnectionPhase.RESTORING_SESSION,
-    ConnectionPhase.FETCHING_AUTH_METHODS,
-    ConnectionPhase.AUTHENTICATING,
-    ConnectionPhase.AWAITING_CREDENTIALS,
-    ConnectionPhase.AWAITING_PHONE,
-    ConnectionPhase.AWAITING_SMS,
-    ConnectionPhase.AWAITING_TOKEN,
-    ConnectionPhase.AWAITING_CAPTCHA,
-    ConnectionPhase.PREPARING_VPN_PERMISSION,
-    ConnectionPhase.ESTABLISHING_VPN,
-)
