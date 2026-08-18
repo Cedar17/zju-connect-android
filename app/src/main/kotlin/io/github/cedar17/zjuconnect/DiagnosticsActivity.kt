@@ -166,7 +166,7 @@ private fun DiagnosticSummaryCard(
                     latest == null -> stringResource(R.string.diagnostics_no_record)
                     else -> diagnosticStateText(latest).resolve()
                 },
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Medium,
             )
             when {

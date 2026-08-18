@@ -101,7 +101,7 @@ private fun AboutScreen(
             )
             Text(
                 text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineLarge,
             )
             Text(
                 text = stringResource(R.string.about_version, version),

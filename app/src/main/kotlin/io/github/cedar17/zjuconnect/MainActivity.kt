@@ -265,7 +265,7 @@ private fun ZjuConnectApp(
                     ) {
                         Text(
                             text = "⋮",
-                            style = MaterialTheme.typography.headlineSmall,
+                            style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
@@ -417,7 +417,10 @@ private fun ConnectionHomeContent(
                     color = MaterialTheme.colorScheme.onPrimary,
                 )
             } else {
-                Text(presentation.primaryAction.resolve())
+                Text(
+                    text = presentation.primaryAction.resolve(),
+                    style = MaterialTheme.typography.titleLarge,
+                )
             }
         }
     }
@@ -455,7 +458,7 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                                 text = stringResource(
                                     if (passwordVisible) R.string.password_hide else R.string.password_show,
                                 ),
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelLarge,
                             )
                         }
                     },
