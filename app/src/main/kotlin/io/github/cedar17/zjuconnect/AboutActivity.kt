@@ -1,7 +1,5 @@
 package io.github.cedar17.zjuconnect
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
@@ -9,9 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -27,11 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
@@ -51,21 +45,6 @@ class AboutActivity : ComponentActivity() {
                 AboutScreen(
                     version = packageVersionName(),
                     onBack = ::finish,
-                    onOpenRepository = {
-                        runCatching {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPOSITORY_URL)))
-                        }
-                    },
-                    onOpenCoreRepository = {
-                        runCatching {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(CORE_REPOSITORY_URL)))
-                        }
-                    },
-                    onOpenReportProblem = {
-                        runCatching {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPORT_ISSUES_URL)))
-                        }
-                    },
                 )
             }
         }
@@ -81,9 +60,6 @@ class AboutActivity : ComponentActivity() {
 private fun AboutScreen(
     version: String,
     onBack: () -> Unit,
-    onOpenRepository: () -> Unit,
-    onOpenCoreRepository: () -> Unit,
-    onOpenReportProblem: () -> Unit,
 ) {
     val iconDescription = stringResource(R.string.about_app_icon_description)
     val description = stringResource(R.string.about_description, CORE_REPOSITORY_NAME)
@@ -102,7 +78,6 @@ private fun AboutScreen(
                             textDecoration = TextDecoration.Underline,
                         ),
                     ),
-                    linkInteractionListener = LinkInteractionListener { onOpenCoreRepository() },
                 ),
             ) {
                 append(CORE_REPOSITORY_NAME)
@@ -110,6 +85,14 @@ private fun AboutScreen(
             append(description.substring(linkStart + CORE_REPOSITORY_NAME.length))
         }
     }
+    val repositoryText = aboutLinkText(
+        label = stringResource(R.string.about_repository),
+        url = REPOSITORY_URL,
+    )
+    val reportProblemText = aboutLinkText(
+        label = stringResource(R.string.about_report_problem),
+        url = REPORT_ISSUES_URL,
+    )
 
     Scaffold(
         topBar = {
@@ -147,54 +130,38 @@ private fun AboutScreen(
                 style = MaterialTheme.typography.headlineLarge,
             )
             Column(
-                modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = stringResource(R.string.about_version, version),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
                     text = descriptionText,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                TextButton(
-                    onClick = onOpenRepository,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.about_repository),
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Start,
-                        textDecoration = TextDecoration.Underline,
-                    )
-                }
-                TextButton(
-                    onClick = onOpenReportProblem,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.about_report_problem),
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Start,
-                        textDecoration = TextDecoration.Underline,
-                    )
-                }
+                Text(text = repositoryText, style = MaterialTheme.typography.bodyLarge)
+                Text(text = reportProblemText, style = MaterialTheme.typography.bodyLarge)
             }
         }
+    }
+}
+
+@Composable
+private fun aboutLinkText(label: String, url: String) = buildAnnotatedString {
+    withLink(
+        LinkAnnotation.Url(
+            url = url,
+            styles = TextLinkStyles(
+                style = SpanStyle(
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                ),
+            ),
+        ),
+    ) {
+        append(label)
     }
 }
