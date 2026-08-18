@@ -81,7 +81,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
 private const val NOTIFICATION_PREFERENCES = "notification_preferences"
 private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
-private val CONNECTION_SURFACE_HEIGHT = 96.dp
+private val CONNECTION_STATUS_CARD_HEIGHT = 96.dp
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -361,7 +361,7 @@ private fun ConnectionHomeContent(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(CONNECTION_SURFACE_HEIGHT),
+                .height(CONNECTION_STATUS_CARD_HEIGHT),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -403,8 +403,8 @@ private fun ConnectionHomeContent(
             enabled = presentation.primaryActionEnabled,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(CONNECTION_SURFACE_HEIGHT),
-            shape = RoundedCornerShape(24.dp),
+                .height(54.dp),
+            shape = RoundedCornerShape(18.dp),
         ) {
             if (presentation.showsProgress) {
                 CircularProgressIndicator(
@@ -417,10 +417,7 @@ private fun ConnectionHomeContent(
                     color = MaterialTheme.colorScheme.onPrimary,
                 )
             } else {
-                Text(
-                    text = presentation.primaryAction.resolve(),
-                    style = MaterialTheme.typography.titleLarge,
-                )
+                Text(presentation.primaryAction.resolve())
             }
         }
     }
