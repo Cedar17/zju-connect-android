@@ -806,9 +806,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             source = AuthenticationRecoverySource.PERSISTED_SESSION_STALE,
                             outcome = AuthenticationRecoveryOutcome.REAUTHENTICATING,
                         )
-                        _state.update {
-                            it.copy(notice = "登录状态已过期，正在使用本机保存的凭据重新验证。")
-                        }
                     }
                     restoringStoredSession = false
                     handleAuthMethods(attemptId, event.authMethods)
