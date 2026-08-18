@@ -4,7 +4,6 @@
     <string name="app_tagline">Zhejiang University VPN</string>
     <string name="menu_overflow">More actions</string>
     <string name="menu_diagnostics">Diagnostics</string>
-    <string name="menu_report_problem">Report a problem</string>
     <string name="menu_about">About</string>
     <string name="menu_switch_account">Switch account</string>
     <string name="switch_account_title">Switch account?</string>

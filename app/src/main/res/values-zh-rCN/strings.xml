@@ -4,7 +4,6 @@
     <string name="app_tagline">浙江大学 VPN</string>
     <string name="menu_overflow">更多操作</string>
     <string name="menu_diagnostics">诊断</string>
-    <string name="menu_report_problem">报告问题</string>
     <string name="menu_about">关于</string>
     <string name="menu_switch_account">切换账号</string>
     <string name="switch_account_title">切换账号？</string>

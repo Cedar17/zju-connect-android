@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -82,7 +81,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
 private const val NOTIFICATION_PREFERENCES = "notification_preferences"
 private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
-private const val REPORT_ISSUES_URL = "https://github.com/Cedar17/zju-connect-android/issues"
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -224,12 +222,6 @@ private fun ZjuConnectApp(
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
     var switchDialogVisible by rememberSaveable { mutableStateOf(false) }
 
-    fun openExternalUrl(url: String) {
-        runCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }
-    }
-
     Surface(modifier = Modifier.fillMaxSize()) {
         Scaffold { contentPadding ->
             Box(
@@ -285,13 +277,6 @@ private fun ZjuConnectApp(
                             onClick = {
                                 menuExpanded = false
                                 context.startActivity(Intent(context, DiagnosticsActivity::class.java))
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.menu_report_problem)) },
-                            onClick = {
-                                menuExpanded = false
-                                openExternalUrl(REPORT_ISSUES_URL)
                             },
                         )
                         DropdownMenuItem(
