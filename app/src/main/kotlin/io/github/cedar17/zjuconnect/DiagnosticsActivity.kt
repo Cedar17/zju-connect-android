@@ -10,17 +10,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -35,8 +40,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 class DiagnosticsActivity : ComponentActivity() {
@@ -54,7 +62,7 @@ class DiagnosticsActivity : ComponentActivity() {
                     onCopy = { report -> copyReport(report) },
                     onClear = {
                         RedactedDiagnostics.clear(this)
-                        Toast.makeText(this, "诊断记录已清除", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, getString(R.string.diagnostics_cleared), Toast.LENGTH_SHORT).show()
                     },
                 )
             }
@@ -64,7 +72,7 @@ class DiagnosticsActivity : ComponentActivity() {
     private fun copyReport(report: String) {
         getSystemService(ClipboardManager::class.java)
             ?.setPrimaryClip(ClipData.newPlainText("ZJU Connect diagnostics", report))
-        Toast.makeText(this, "诊断报告已复制", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.diagnostics_copied), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -87,22 +95,27 @@ private fun DiagnosticsScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("诊断") },
+                    title = { Text(stringResource(R.string.diagnostics_title)) },
                     navigationIcon = {
-                        TextButton(onClick = onBack) { Text("返回") }
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_arrow_back),
+                                contentDescription = stringResource(R.string.back),
+                            )
+                        }
                     },
                     actions = {
                         TextButton(
                             onClick = { onCopy(report) },
                             enabled = snapshot.loaded,
                         ) {
-                            Text("复制报告")
+                            Text(stringResource(R.string.copy_report))
                         }
                         TextButton(
                             onClick = onClear,
                             enabled = snapshot.loaded && summary.eventCount > 0,
                         ) {
-                            Text("清除")
+                            Text(stringResource(R.string.clear))
                         }
                     },
                 )
@@ -116,12 +129,6 @@ private fun DiagnosticsScreen(
                     .padding(horizontal = 20.dp, vertical = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                Text(
-                    text = "页面摘要可直接截图；复制报告包含完整的白名单记录。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
                 DiagnosticSummaryCard(
                     loaded = snapshot.loaded,
                     summary = summary,
@@ -157,39 +164,36 @@ private fun DiagnosticSummaryCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "最近状态",
+                text = stringResource(R.string.diagnostics_latest_status),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 text = when {
-                    !loaded -> "正在读取…"
-                    latest == null -> "暂无诊断记录"
-                    else -> diagnosticStateLabel(latest)
+                    !loaded -> stringResource(R.string.loading)
+                    latest == null -> stringResource(R.string.diagnostics_no_record)
+                    else -> diagnosticStateText(latest).resolve()
                 },
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Medium,
             )
             when {
                 !loaded -> Unit
                 latest == null -> Text(
-                    text = "开始连接后，白名单状态会显示在这里。",
+                    text = stringResource(R.string.diagnostics_start_hint),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> {
                     Text(
-                        text = "最近更新 ${formatDiagnosticDisplayTime(latest.timestampMillis)}",
+                        text = stringResource(
+                            R.string.diagnostics_updated_at,
+                            formatDiagnosticDisplayTime(latest.timestampMillis),
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    diagnosticEventDetails(latest)?.let { details ->
-                        Text(
-                            text = details,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    DiagnosticEventDetails(latest)
                 }
             }
         }
@@ -213,14 +217,14 @@ private fun DiagnosticHistorySection(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = "最近记录",
+                    text = stringResource(R.string.diagnostics_recent_records),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
                     text = when {
-                        !loaded -> "正在读取…"
-                        summary.eventCount == 0 -> "暂无记录"
-                        else -> "${summary.eventCount} 条记录"
+                        !loaded -> stringResource(R.string.loading)
+                        summary.eventCount == 0 -> stringResource(R.string.diagnostics_no_records)
+                        else -> stringResource(R.string.diagnostics_record_count, summary.eventCount)
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -228,19 +232,23 @@ private fun DiagnosticHistorySection(
             }
             if (loaded && groups.size > MAX_DIAGNOSTIC_PREVIEW_GROUPS) {
                 TextButton(onClick = onToggle) {
-                    Text(if (showAllEvents) "收起" else "查看全部")
+                    Text(
+                        stringResource(
+                            if (showAllEvents) R.string.diagnostics_collapse else R.string.diagnostics_show_all,
+                        ),
+                    )
                 }
             }
         }
 
         when {
             !loaded -> Text(
-                text = "正在读取本机诊断记录…",
+                text = stringResource(R.string.diagnostics_reading_local),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             groups.isEmpty() -> Text(
-                text = "暂无记录。连接或断开后，相关状态会显示在这里。",
+                text = stringResource(R.string.diagnostics_no_record_detail),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -251,14 +259,24 @@ private fun DiagnosticHistorySection(
                     previewGroups
                 }
                 SelectionContainer {
-                    Text(
-                        text = visibleGroups.joinToString("\n", transform = ::formatDiagnosticPreviewLine),
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                    ) {
+                        Column(
+                            modifier = Modifier.wrapContentWidth(unbounded = true),
+                            verticalArrangement = Arrangement.spacedBy(1.dp),
+                        ) {
+                            visibleGroups.forEach { group ->
+                                DiagnosticHistoryLine(group)
+                            }
+                        }
+                    }
                 }
                 if (!showAllEvents && groups.size > MAX_DIAGNOSTIC_PREVIEW_GROUPS) {
                     Text(
-                        text = "默认仅显示最近状态变化；连续重复状态会合并。完整记录请使用“复制报告”。",
+                        text = stringResource(R.string.diagnostics_history_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -268,19 +286,76 @@ private fun DiagnosticHistorySection(
     }
 }
 
-private fun diagnosticEventDetails(event: RedactedDiagnosticEvent): String? {
-    val details = buildList {
-        event.code.takeIf(String::isNotBlank)?.let { add("错误码 $it") }
-        event.stage.takeIf(String::isNotBlank)?.let { add("阶段 $it") }
-        event.cause.takeIf(String::isNotBlank)?.let { add("原因 $it") }
-        event.durationMillis.takeIf { it > 0 }?.let { add("耗时 ${formatDiagnosticDuration(it)}") }
-    }
-    return details.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+@Composable
+private fun DiagnosticHistoryLine(group: DiagnosticEventGroup) {
+    Text(
+        text = formatDiagnosticPreviewLineLocalized(group),
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+    )
 }
 
+@Composable
+private fun DiagnosticEventDetails(event: RedactedDiagnosticEvent) {
+    val details = buildList {
+        event.code.takeIf(String::isNotBlank)?.let {
+            add("code=$it")
+        }
+        event.stage.takeIf(String::isNotBlank)?.let {
+            add("stage=$it")
+        }
+        event.cause.takeIf(String::isNotBlank)?.let {
+            add("cause=$it")
+        }
+        event.durationMillis.takeIf { it > 0 }?.let {
+            add(stringResource(R.string.diagnostic_duration, formatDiagnosticDuration(it)))
+        }
+    }
+    details.takeIf { it.isNotEmpty() }?.let {
+        Text(
+            text = it.joinToString("·"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun formatDiagnosticDuration(durationMillis: Long): String = when {
-    durationMillis < 1_000 -> "$durationMillis 毫秒"
-    else -> "${"%.1f".format(java.util.Locale.ROOT, durationMillis / 1_000.0)} 秒"
+    durationMillis < 1_000 -> stringResource(R.string.diagnostic_milliseconds, durationMillis)
+    else -> stringResource(R.string.diagnostic_seconds, durationMillis / 1_000.0)
+}
+
+@Composable
+private fun formatDiagnosticPreviewLineLocalized(group: DiagnosticEventGroup): String {
+    val event = group.event
+    return buildList {
+        add(
+            stringResource(
+                R.string.diagnostic_preview_header,
+                formatDiagnosticPreviewTime(event.timestampMillis),
+                diagnosticCategoryText(event.category).resolve(),
+                diagnosticStateText(event).resolve(),
+            ),
+        )
+        event.code.takeIf(String::isNotBlank)?.let {
+            add("code=$it")
+        }
+        event.stage.takeIf(String::isNotBlank)?.let {
+            add("stage=$it")
+        }
+        event.cause.takeIf(String::isNotBlank)?.let {
+            add("cause=$it")
+        }
+        event.durationMillis.takeIf { it > 0 }?.let {
+            add(stringResource(R.string.diagnostic_preview_duration, it))
+        }
+        if (group.occurrences > 1) {
+            add(stringResource(R.string.diagnostic_preview_repeats, group.occurrences))
+        }
+    }.joinToString("·")
 }
 
 @Suppress("DEPRECATION")

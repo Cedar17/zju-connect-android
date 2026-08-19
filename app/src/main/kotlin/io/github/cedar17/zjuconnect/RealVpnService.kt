@@ -247,7 +247,7 @@ class RealVpnService : VpnService() {
         }
         alwaysOnWaiting = true
         startForegroundCompat(RealVpnNotificationKind.CONNECTING)
-        setStatus("preparing", "正在恢复已保存的登录状态")
+        setStatus("preparing")
         scheduleAlwaysOnRestoreForNetwork(
             snapshot = underlaySnapshot(),
             resetRevision = true,
@@ -275,13 +275,7 @@ class RealVpnService : VpnService() {
             } else {
                 alwaysOnSessionRestorer?.invalidate()
             }
-            enterAlwaysOnWaitingForNetwork(
-                if (underlayMonitorFailure != null) {
-                    "Android 正在等待可用网络监测"
-                } else {
-                    "正在等待可用网络"
-                },
-            )
+            enterAlwaysOnWaitingForNetwork()
             return
         }
 
@@ -324,7 +318,7 @@ class RealVpnService : VpnService() {
             alwaysOnSessionRestorer?.invalidate()
         }
         if (exhausted) {
-            enterAlwaysOnWaitingForNetwork("当前网络暂时无法恢复登录状态，等待网络变化后重试")
+            enterAlwaysOnWaitingForNetwork()
         }
     }
 
@@ -383,7 +377,7 @@ class RealVpnService : VpnService() {
             -> enterAlwaysOnWaitingForAuthentication()
             AlwaysOnSessionRestoreOutcome.TransientFailure -> {
                 if (!snapshot.hasUsableNetwork) {
-                    enterAlwaysOnWaitingForNetwork("正在等待可用网络")
+                    enterAlwaysOnWaitingForNetwork()
                 } else {
                     scheduleAlwaysOnRestoreForNetwork(snapshot, resetRevision = false)
                 }
@@ -391,15 +385,15 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun enterAlwaysOnWaitingForNetwork(message: String) {
+    private fun enterAlwaysOnWaitingForNetwork() {
         alwaysOnWaiting = true
-        setStatus("waitingForNetwork", message)
+        setStatus("waitingForNetwork")
         updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
     }
 
     private fun enterAlwaysOnWaitingForAuthentication() {
         alwaysOnWaiting = true
-        setStatus("waitingForAuthentication", "需要打开 App 完成登录")
+        setStatus("waitingForAuthentication")
         updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION)
     }
 
@@ -462,7 +456,7 @@ class RealVpnService : VpnService() {
         if (recovering) {
             publishRecoveryPresentation()
         } else {
-            setStatus("preparing", "Preparing the authenticated aTrust VPN")
+            setStatus("preparing")
         }
         var detachedTunFd: Int? = null
         try {
@@ -524,7 +518,7 @@ class RealVpnService : VpnService() {
             }
 
             if (!recovering) {
-                setStatus("attaching", "Establishing the Android VPN interface")
+                setStatus("attaching")
             }
             Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
             val watchdog = scheduleTunEstablishWatchdog()
@@ -604,7 +598,7 @@ class RealVpnService : VpnService() {
         val outcomeBeforeCleanup = synchronized(stateLock) { lifecycle.terminalOutcome() }
 
         if (shouldStop && outcomeBeforeCleanup == null) {
-            setStatus("stopping", "Stopping the real aTrust VPN")
+            setStatus("stopping")
         }
         goCoreBridge.stopRealVpn()
         stopForegroundCompat()
@@ -612,7 +606,7 @@ class RealVpnService : VpnService() {
             is RealVpnTerminalOutcome.Error -> {
                 publishFailure("stopInternal", outcome.failure)
             }
-            RealVpnTerminalOutcome.Stopped -> setStatus("stopped", "Real aTrust VPN is stopped")
+            RealVpnTerminalOutcome.Stopped -> setStatus("stopped")
             null -> Unit
         }
         stopSelf()
@@ -731,16 +725,16 @@ class RealVpnService : VpnService() {
         when (presentation) {
             RealVpnRecoveryPresentation.NONE -> {
                 if (previous != RealVpnRecoveryPresentation.NONE && acceptsStartProgress()) {
-                    setStatus("active", "ZJU aTrust VPN is active")
+                    setStatus("active")
                     updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
                 }
             }
             RealVpnRecoveryPresentation.RECOVERING -> {
-                setStatus("recovering", "The VPN data connection is recovering")
+                setStatus("recovering")
                 updateForegroundNotification(RealVpnNotificationKind.RECOVERING)
             }
             RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
-                setStatus("waitingForNetwork", "Waiting for an underlying network")
+                setStatus("waitingForNetwork")
                 updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
             }
         }
@@ -774,27 +768,23 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun setStatus(state: String, message: String) {
+    private fun setStatus(state: String) {
         Log.i(REAL_VPN_LOG_TAG, "service state=$state")
         RedactedDiagnostics.recordVpnServiceState(applicationContext, state)
-        RealVpnStateStore.setStatus(state, message)
+        RealVpnStateStore.setStatus(state)
     }
 
     private fun publishFailure(origin: String, failure: RealVpnFailure) {
         Log.e(REAL_VPN_LOG_TAG, "terminal failure origin=$origin code=${failure.code}")
         RedactedDiagnostics.recordVpnServiceState(applicationContext, "error", failure.code)
-        RealVpnStateStore.setError(failure.code, failure.message)
+        RealVpnStateStore.setError(failure.code)
     }
 
     private fun publishAlwaysOnDisconnectBlocked() {
-        setStatus(
-            "alwaysOnDisconnectBlocked",
-            "请先在系统 VPN 设置中关闭 Always-on",
-        )
-        val content = realVpnAlwaysOnDisconnectGuidanceContent()
+        setStatus("alwaysOnDisconnectBlocked")
         val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle(content.title)
-            .setContentText(content.text)
+            .setContentTitle(getString(R.string.notification_always_on_title))
+            .setContentText(getString(R.string.notification_always_on_text))
             .setSmallIcon(R.drawable.ic_stat_cedar)
             .setContentIntent(openVpnSettingsPendingIntent())
             .setAutoCancel(true)
@@ -821,10 +811,10 @@ class RealVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 REAL_VPN_CHANNEL,
-                "ZJU Connect VPN",
+                getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "显示 VPN 连接状态"
+                description = getString(R.string.notification_channel_description)
                 setSound(null, null)
                 enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -849,13 +839,12 @@ class RealVpnService : VpnService() {
     }
 
     private fun buildVpnNotification(kind: RealVpnNotificationKind): Notification {
-        val content = realVpnNotificationContent(kind)
         val builder = Notification.Builder(this, REAL_VPN_CHANNEL)
-            .setContentTitle(content.title)
-            .setContentText(content.text)
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(getString(realVpnNotificationTextRes(kind)))
             .setSmallIcon(R.drawable.ic_stat_cedar)
             .setContentIntent(openAppPendingIntent())
-            .setOngoing(content.ongoing)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
@@ -957,7 +946,6 @@ internal fun realVpnDiagnosticLog(event: GoVpnEvent): String? {
 data class RealVpnUiState(
     val state: String = "idle",
     val code: String = "",
-    val message: String = "Real VPN is idle",
 )
 
 object RealVpnStateStore {
@@ -969,17 +957,16 @@ object RealVpnStateStore {
             it.copy(
                 state = event.state,
                 code = event.code,
-                message = event.message,
             )
         }
     }
 
-    fun setStatus(nextState: String, message: String) {
-        mutableState.update { it.copy(state = nextState, code = "", message = message) }
+    fun setStatus(nextState: String) {
+        mutableState.update { it.copy(state = nextState, code = "") }
     }
 
-    fun setError(code: String, message: String) {
-        mutableState.update { it.copy(state = "error", code = code, message = message) }
+    fun setError(code: String) {
+        mutableState.update { it.copy(state = "error", code = code) }
     }
 
     fun reset() {

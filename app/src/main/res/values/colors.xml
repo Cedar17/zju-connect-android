@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <color name="window_background">#FFFBFE</color>
     <color name="zima_blue">#5BC2E7</color>
+    <color name="ic_launcher_foreground">#FF000000</color>
+    <color name="ic_launcher_background">@color/zima_blue</color>
 </resources>

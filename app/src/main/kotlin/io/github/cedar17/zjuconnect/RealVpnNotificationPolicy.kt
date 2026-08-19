@@ -1,5 +1,7 @@
 package io.github.cedar17.zjuconnect
 
+import androidx.annotation.StringRes
+
 internal enum class RealVpnNotificationKind {
     CONNECTING,
     CONNECTED,
@@ -8,47 +10,11 @@ internal enum class RealVpnNotificationKind {
     WAITING_FOR_AUTHENTICATION,
 }
 
-internal data class RealVpnNotificationContent(
-    val title: String,
-    val text: String,
-    val ongoing: Boolean,
-)
-
-internal fun realVpnNotificationContent(kind: RealVpnNotificationKind): RealVpnNotificationContent = when (kind) {
-    RealVpnNotificationKind.CONNECTING -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在连接浙江大学 VPN",
-        ongoing = true,
-    )
-    RealVpnNotificationKind.CONNECTED -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "已连接到浙江大学 VPN",
-        ongoing = true,
-    )
-    RealVpnNotificationKind.RECOVERING -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在恢复 VPN 连接",
-        ongoing = true,
-    )
-    RealVpnNotificationKind.WAITING_FOR_NETWORK -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "正在等待可用网络",
-        ongoing = true,
-    )
-    RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION -> RealVpnNotificationContent(
-        title = "ZJU Connect",
-        text = "需要打开 App 完成登录",
-        ongoing = true,
-    )
+@StringRes
+internal fun realVpnNotificationTextRes(kind: RealVpnNotificationKind): Int = when (kind) {
+    RealVpnNotificationKind.CONNECTING -> R.string.notification_connecting
+    RealVpnNotificationKind.CONNECTED -> R.string.notification_connected
+    RealVpnNotificationKind.RECOVERING -> R.string.notification_recovering
+    RealVpnNotificationKind.WAITING_FOR_NETWORK -> R.string.notification_waiting_network
+    RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION -> R.string.notification_waiting_authentication
 }
-
-internal data class RealVpnGuidanceNotificationContent(
-    val title: String,
-    val text: String,
-)
-
-internal fun realVpnAlwaysOnDisconnectGuidanceContent(): RealVpnGuidanceNotificationContent =
-    RealVpnGuidanceNotificationContent(
-        title = "ZJU Connect 由系统管理",
-        text = "请先在系统 VPN 设置中关闭 Always-on",
-    )
