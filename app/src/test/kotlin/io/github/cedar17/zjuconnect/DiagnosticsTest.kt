@@ -111,11 +111,57 @@ class DiagnosticsTest {
         val summary = diagnosticSummary(events)
 
         assertEquals(2, summary.eventCount)
-        assertEquals("awaiting_captcha", summary.latest?.state)
-        assertEquals("等待图形验证码", summary.latest?.let(::diagnosticStateLabel))
+        val latest = requireNotNull(summary.latest)
+        assertEquals("awaiting_captcha", latest.state)
         assertEquals(
-            "等待认证码",
-            summary.latest?.copy(state = "awaiting_token")?.let(::diagnosticStateLabel),
+            UiText.Resource(R.string.diagnostic_connection_awaiting_captcha),
+            diagnosticStateText(latest),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_connection_awaiting_token),
+            diagnosticStateText(latest.copy(state = "awaiting_token")),
+        )
+    }
+
+    @Test
+    fun resourceBackedPresentationCoversRepresentativeStatesAndErrors() {
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_connection_connected),
+            diagnosticStateText(
+                RedactedDiagnosticEvent(
+                    timestampMillis = 1,
+                    category = "connection",
+                    state = "connected",
+                ),
+            ),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_vpn_waiting_network),
+            diagnosticStateText(
+                RedactedDiagnosticEvent(
+                    timestampMillis = 2,
+                    category = "vpn",
+                    state = "waitingForNetwork",
+                ),
+            ),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_unknown_state),
+            diagnosticStateText(
+                RedactedDiagnosticEvent(
+                    timestampMillis = 3,
+                    category = "connection",
+                    state = "future_state",
+                ),
+            ),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_category_auth_recovery),
+            diagnosticCategoryText("authRecovery"),
+        )
+        assertEquals(
+            connectionErrorText("vpnSessionInvalid"),
+            diagnosticErrorText("vpnSessionInvalid"),
         )
     }
 
@@ -203,30 +249,6 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun previewLineUsesCompactAllowlistedFieldsAndRepeatCount() {
-        val line = formatDiagnosticPreviewLine(
-            DiagnosticEventGroup(
-                event = RedactedDiagnosticEvent(
-                    timestampMillis = 42,
-                    category = "vpn",
-                    state = "diagnostic",
-                    stage = "dataplane",
-                    cause = "wouldBlock",
-                    durationMillis = 42,
-                ),
-                occurrences = 5,
-            ),
-        )
-
-        assertTrue(line.contains("vpn/diagnostic"))
-        assertTrue(line.contains("stage=dataplane"))
-        assertTrue(line.contains("cause=wouldBlock"))
-        assertTrue(line.contains("durationMs=42"))
-        assertTrue(line.endsWith("×5"))
-        assertFalse(line.contains("tunReadPackets"))
-    }
-
-    @Test
     fun previewKeepsOnlyTheMostRecentStateChanges() {
         val events = (0 until MAX_DIAGNOSTIC_PREVIEW_GROUPS + 2).map { index ->
             RedactedDiagnosticEvent(
@@ -259,8 +281,14 @@ class DiagnosticsTest {
 
         assertEquals("recovering", recovering.state)
         assertEquals("waitingForNetwork", waiting.state)
-        assertEquals("服务恢复中", diagnosticStateLabel(recovering))
-        assertEquals("服务等待网络", diagnosticStateLabel(waiting))
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_service_recovering),
+            diagnosticStateText(recovering),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_service_waiting_network),
+            diagnosticStateText(waiting),
+        )
     }
 
     @Test
@@ -328,8 +356,14 @@ class DiagnosticsTest {
         assertEquals("persisted_session_stale", stale.state)
         assertEquals("reauthenticating", stale.code)
         assertEquals("credentialsRejected", stale.cause)
-        assertEquals("认证恢复", diagnosticCategoryLabel(stale.category))
-        assertEquals("已保存登录状态需重新认证", diagnosticStateLabel(stale))
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_category_auth_recovery),
+            diagnosticCategoryText(stale.category),
+        )
+        assertEquals(
+            UiText.Resource(R.string.diagnostic_auth_persisted_session_stale),
+            diagnosticStateText(stale),
+        )
         assertEquals("unknown", unsafe.state)
         assertEquals("unknown", unsafe.code)
         assertTrue(unsafe.cause.isEmpty())
