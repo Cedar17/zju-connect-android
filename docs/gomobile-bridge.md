@@ -19,6 +19,10 @@ The authoritative machine-readable record is
 | Android API / Build Tools | **29** / **36.0.0** |
 | AAR ABIs | **arm64-v8a**, **x86_64** |
 
+The generated AAR retains both ABIs for the reusable Go bridge. The Android
+application's Release APK applies its own packaging filter and contains only
+`arm64-v8a`.
+
 The bootstrap script verifies the Go archive's SHA-256 and the NDK archive's
 published SHA-1 before extracting them. It leaves all downloaded tools under
 the ignored .gomobile-toolchain directory, except for the NDK, which is
@@ -33,7 +37,7 @@ must already have SDK Platform 36.1 and Build Tools 36.0.0 installed.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-gomobile-toolchain.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-gomobile-aar.ps1
 .\.gomobile-toolchain\go\bin\go.exe -C .\go\bridge test ./...
-cmd.exe /c "gradlew.bat :app:assembleDebug --no-daemon --console=plain"
+cmd.exe /c "gradlew.bat :app:assembleRelease --no-daemon --console=plain"
 ~~~
 
 Use -AndroidSdkRoot, -JavaHome, or -ToolRoot on either script when the defaults
@@ -155,24 +159,6 @@ aTrust resource set are dropped as split-tunnel traffic instead of terminating
 the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
 codes, and cleanup preserves the original failure instead of replacing it with
 an uninformative `stopped` state.
-
-## Experimental data-plane validation boundary
-
-The bridge additionally exposes a credential-free validation surface:
-
-- SocketProtector.Protect(socketFD) is implemented by Android VpnService.
-- StartTestDataPlane(tunFD, protector, listener) takes ownership of the
-  detached TUN descriptor on the Go side.
-- StopTestDataPlane() is idempotent and closes the TUN and fake transport.
-- Event payloads use type = testVpnState and report state, stable error code,
-  packet counts, and byte counts.
-- The Go side opens a local UDP echo transport, calls Protect through
-  net.Dialer.Control before connecting, and reflects only the fixed
-  zju-connect-tun-test-v1 IPv4/UDP marker.
-
-This is an integration probe for Android TUN, gomobile callbacks, descriptor
-ownership, socket protection, and cleanup. It must not be mistaken for the
-production aTrust client API or a proof of real school-network access.
 
 ## Licensing
 

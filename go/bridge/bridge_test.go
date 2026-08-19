@@ -379,11 +379,11 @@ func TestInspectRealVpnPacketReportsOnlySafeMetadata(t *testing.T) {
 	if meta.SourcePort != 49152 || meta.DestinationPort != 34890 {
 		t.Fatalf("packet port metadata = %#v", meta)
 	}
-	if meta.DataLength != len(testMarker) || meta.IPChecksum != "valid" || meta.TransportChecksum != "valid" {
+	if meta.DataLength != len(diagnosticMarker) || meta.IPChecksum != "valid" || meta.TransportChecksum != "valid" {
 		t.Fatalf("packet checksum metadata = %#v", meta)
 	}
 	encoded := marshal(meta)
-	if strings.Contains(encoded, testMarker) {
+	if strings.Contains(encoded, diagnosticMarker) {
 		t.Fatalf("packet metadata leaked payload marker: %s", encoded)
 	}
 }
@@ -495,7 +495,7 @@ func TestRealVpnDiagnosticEventContainsNoAuthenticationFields(t *testing.T) {
 		Packet:        &packet,
 	})
 
-	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey", testMarker} {
+	for _, forbidden := range []string{"password", "cookie", "sid", "deviceId", "signKey", diagnosticMarker} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("diagnostic event contained forbidden value %q: %s", forbidden, encoded)
 		}
