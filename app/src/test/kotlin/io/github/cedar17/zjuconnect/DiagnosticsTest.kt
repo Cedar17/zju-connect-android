@@ -318,7 +318,7 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun authenticationFailureDetailsRemainVisibleWithoutRawErrorText() {
+    fun authenticationFailurePresentationKeepsRawMachineFields() {
         val event = RedactedDiagnosticEvent(
             timestampMillis = 1,
             category = "connection",
@@ -333,6 +333,10 @@ class DiagnosticsTest {
         assertEquals("auth.config", event.stage)
         assertEquals("timeout", event.cause)
         assertEquals(20_000L, event.durationMillis)
+        assertEquals(
+            UiText.Resource(R.string.error_auth_timeout),
+            diagnosticErrorText(event.code),
+        )
     }
 
     @Test
