@@ -210,8 +210,8 @@ continue to follow them:
 
 - The single Android application module uses Kotlin, Compose, and Material 3
   and builds with the checked-in Gradle Wrapper.
-- The project produces a debug APK for physical-device validation through the
-  documented Windows Android toolchain.
+- The project produces a single Release APK containing only `arm64-v8a` for
+  physical-device validation through the documented Windows Android toolchain.
 - Android VPN permission remains a user-approved system boundary.
 
 ### Gomobile binding
@@ -222,21 +222,6 @@ continue to follow them:
   through the generated AAR; packet data uses file descriptors.
 - AAR, Go bridge, Android unit, build, and device checks remain distinct
   verification surfaces and must be repeated when their inputs change.
-
-### Experimental TUN diagnostic path
-
-The repository contains a debug-only integration probe that is separate from
-the production aTrust connection path:
-
-- A `VpnService` requests permission and creates a blocking TUN for the current
-  app, a fixed test route, and MTU 1400.
-- Go owns the detached TUN descriptor, opens a protected local fake UDP
-  transport, and reflects a fixed marker packet so the UI can report counters.
-- Start is single-session; stop, revoke, and service destruction close the
-  diagnostic data plane idempotently.
-
-This probe does not authenticate to aTrust, parse real resources, or prove
-access to school-network resources.
 
 ### Authentication control plane
 

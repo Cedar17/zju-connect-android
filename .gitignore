@@ -13,5 +13,6 @@ captures/
 /app/libs/*.aar
 /app/libs/*-sources.jar
 /app/libs/*.build-info.json
+/app/release.jks
 /.gomobile-toolchain/
 screenshot/
