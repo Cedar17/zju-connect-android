@@ -384,7 +384,7 @@ private fun ConnectionHomeContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .semantics { contentDescription = supportingText },
-                    maxLines = if (presentation.isError) 2 else 1,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (presentation.isError) {
