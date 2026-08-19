@@ -213,10 +213,9 @@ class ConnectionPolicyTest {
     fun realVpnStorePublishesStateFlowUpdates() {
         RealVpnStateStore.reset()
 
-        RealVpnStateStore.setStatus("active", "active")
+        RealVpnStateStore.setStatus("active")
 
         assertEquals("active", RealVpnStateStore.state.value.state)
-        assertEquals("active", RealVpnStateStore.state.value.message)
         RealVpnStateStore.reset()
     }
 }

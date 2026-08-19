@@ -75,9 +75,3 @@ internal fun diagnosticStateText(event: RedactedDiagnosticEvent): UiText = UiTex
         else -> R.string.diagnostic_unknown_state
     },
 )
-
-internal fun diagnosticErrorText(code: String): UiText = when (code) {
-    "", "unknown" -> UiText.Resource(R.string.diagnostic_unknown_error)
-    "l3Reconnecting" -> UiText.Resource(R.string.diagnostic_l3_reconnecting)
-    else -> connectionErrorText(code)
-}

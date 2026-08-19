@@ -27,7 +27,6 @@
     <string name="action_verify_and_connect">Verify and connect</string>
     <string name="action_submit_and_continue">Submit and continue</string>
     <string name="action_disconnect">Disconnect</string>
-    <string name="action_connecting">Connecting</string>
 
     <string name="field_account">Campus account</string>
     <string name="field_password">Password</string>
@@ -103,22 +102,14 @@
     <string name="diagnostics_reading_local">Reading local diagnostic records…</string>
     <string name="diagnostics_no_record_detail">No records. Status changes after connecting or disconnecting will appear here.</string>
     <string name="diagnostics_history_hint">Only recent status changes are shown by default; consecutive repeats are grouped. Use “Copy report” for the complete record.</string>
-    <string name="diagnostic_error_code">Error type: %1$s</string>
-    <string name="diagnostic_stage">Stage: %1$s</string>
-    <string name="diagnostic_cause">Reason: %1$s</string>
     <string name="diagnostic_duration">Duration: %1$s</string>
     <string name="diagnostic_milliseconds">%1$d ms</string>
     <string name="diagnostic_seconds">%1$.1f s</string>
     <string name="diagnostic_preview_header">%1$s·%2$s·%3$s</string>
-    <string name="diagnostic_preview_code">Type=%1$s</string>
-    <string name="diagnostic_preview_stage">Stage=%1$s</string>
-    <string name="diagnostic_preview_cause">Reason=%1$s</string>
     <string name="diagnostic_preview_duration">Duration=%1$d ms</string>
     <string name="diagnostic_preview_repeats">×%1$d</string>
     <string name="diagnostic_unknown_state">Unknown status</string>
     <string name="diagnostic_unknown_category">Unknown</string>
-    <string name="diagnostic_unknown_error">Unspecified error</string>
-    <string name="diagnostic_l3_reconnecting">Reconnecting the data plane</string>
     <string name="diagnostic_category_connection">Connection</string>
     <string name="diagnostic_category_vpn">VPN</string>
     <string name="diagnostic_category_service">Service</string>

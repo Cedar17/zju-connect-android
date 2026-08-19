@@ -1,16 +1,12 @@
 package io.github.cedar17.zjuconnect
 
-import androidx.annotation.StringRes
-
 internal const val ALWAYS_ON_DISCONNECT_BLOCKED_CODE = "alwaysOnDisconnectBlocked"
 
 internal data class ConnectionPresentation(
     val title: UiText,
     val supportingText: UiText,
-    val primaryAction: UiText,
+    val primaryAction: UiText?,
     val primaryActionEnabled: Boolean,
-    val showsProgress: Boolean,
-    val isError: Boolean,
 )
 
 internal fun connectionPresentation(state: ConnectionUiState): ConnectionPresentation =
@@ -19,8 +15,6 @@ internal fun connectionPresentation(state: ConnectionUiState): ConnectionPresent
         supportingText = supportingTextFor(state),
         primaryAction = primaryActionText(state.phase),
         primaryActionEnabled = isPrimaryActionEnabled(state),
-        showsProgress = isConnectionProgress(state.phase),
-        isError = state.phase == ConnectionPhase.ERROR,
     )
 
 private fun connectionTitleText(phase: ConnectionPhase): UiText = UiText.Resource(
@@ -75,11 +69,7 @@ private fun rememberedAccountText(username: String): UiText = if (username.isBla
 }
 
 internal fun connectionErrorText(code: String): UiText = UiText.Resource(
-    id = connectionErrorResource(code),
-)
-
-@StringRes
-private fun connectionErrorResource(code: String): Int = when (code) {
+    id = when (code) {
     "vpnPermissionDenied" -> R.string.error_vpn_permission_denied
     "authDnsFailure" -> R.string.error_auth_dns
     "authNetworkFailure" -> R.string.error_auth_network
@@ -108,22 +98,29 @@ private fun connectionErrorResource(code: String): Int = when (code) {
     "vpnTunReadFailed", "vpnTunWriteFailed", "vpnServerReadFailed", "vpnServerWriteFailed", "stopTimeout" ->
         R.string.error_vpn_interrupted
     else -> R.string.error_generic
-}
-
-private fun primaryActionText(phase: ConnectionPhase): UiText = UiText.Resource(
-    id = when (phase) {
-        ConnectionPhase.DISCONNECTED -> R.string.action_connect
-        ConnectionPhase.ERROR -> R.string.action_retry
-        ConnectionPhase.AWAITING_CREDENTIALS -> R.string.action_login_and_connect
-        ConnectionPhase.AWAITING_PHONE -> R.string.action_send_code
-        ConnectionPhase.AWAITING_SMS,
-        ConnectionPhase.AWAITING_TOKEN -> R.string.action_verify_and_connect
-        ConnectionPhase.AWAITING_CAPTCHA -> R.string.action_submit_and_continue
-        ConnectionPhase.RECOVERING_VPN,
-        ConnectionPhase.CONNECTED -> R.string.action_disconnect
-        else -> R.string.action_connecting
     },
 )
+
+private fun primaryActionText(phase: ConnectionPhase): UiText? = when (phase) {
+    ConnectionPhase.RESTORING_SESSION,
+    ConnectionPhase.FETCHING_AUTH_METHODS,
+    ConnectionPhase.AUTHENTICATING,
+    ConnectionPhase.PREPARING_VPN_PERMISSION,
+    ConnectionPhase.ESTABLISHING_VPN,
+    ConnectionPhase.DISCONNECTING,
+    -> null
+    ConnectionPhase.DISCONNECTED -> UiText.Resource(R.string.action_connect)
+    ConnectionPhase.ERROR -> UiText.Resource(R.string.action_retry)
+    ConnectionPhase.AWAITING_CREDENTIALS -> UiText.Resource(R.string.action_login_and_connect)
+    ConnectionPhase.AWAITING_PHONE -> UiText.Resource(R.string.action_send_code)
+    ConnectionPhase.AWAITING_SMS,
+    ConnectionPhase.AWAITING_TOKEN,
+    -> UiText.Resource(R.string.action_verify_and_connect)
+    ConnectionPhase.AWAITING_CAPTCHA -> UiText.Resource(R.string.action_submit_and_continue)
+    ConnectionPhase.RECOVERING_VPN,
+    ConnectionPhase.CONNECTED,
+    -> UiText.Resource(R.string.action_disconnect)
+}
 
 internal fun tokenChallengeUiText(challengeKind: String): UiText = UiText.Resource(
     id = when (challengeKind) {
@@ -146,12 +143,3 @@ private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (st
     ConnectionPhase.AWAITING_CAPTCHA -> state.captchaPoints.isNotEmpty()
     else -> false
 }
-
-private fun isConnectionProgress(phase: ConnectionPhase): Boolean = phase in setOf(
-    ConnectionPhase.RESTORING_SESSION,
-    ConnectionPhase.FETCHING_AUTH_METHODS,
-    ConnectionPhase.AUTHENTICATING,
-    ConnectionPhase.PREPARING_VPN_PERMISSION,
-    ConnectionPhase.ESTABLISHING_VPN,
-    ConnectionPhase.DISCONNECTING,
-)

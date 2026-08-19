@@ -27,7 +27,6 @@
     <string name="action_verify_and_connect">验证并连接</string>
     <string name="action_submit_and_continue">提交并继续</string>
     <string name="action_disconnect">断开</string>
-    <string name="action_connecting">正在连接</string>
 
     <string name="field_account">上网账号</string>
     <string name="field_password">密码</string>
@@ -103,22 +102,14 @@
     <string name="diagnostics_reading_local">正在读取本机诊断记录…</string>
     <string name="diagnostics_no_record_detail">暂无记录。连接或断开后，相关状态会显示在这里。</string>
     <string name="diagnostics_history_hint">默认仅显示最近状态变化；连续重复状态会合并。完整记录请使用“复制报告”。</string>
-    <string name="diagnostic_error_code">错误类型：%1$s</string>
-    <string name="diagnostic_stage">阶段：%1$s</string>
-    <string name="diagnostic_cause">原因：%1$s</string>
     <string name="diagnostic_duration">耗时：%1$s</string>
     <string name="diagnostic_milliseconds">%1$d 毫秒</string>
     <string name="diagnostic_seconds">%1$.1f 秒</string>
     <string name="diagnostic_preview_header">%1$s·%2$s·%3$s</string>
-    <string name="diagnostic_preview_code">类型=%1$s</string>
-    <string name="diagnostic_preview_stage">阶段=%1$s</string>
-    <string name="diagnostic_preview_cause">原因=%1$s</string>
     <string name="diagnostic_preview_duration">耗时=%1$d 毫秒</string>
     <string name="diagnostic_preview_repeats">×%1$d</string>
     <string name="diagnostic_unknown_state">未知状态</string>
     <string name="diagnostic_unknown_category">未知</string>
-    <string name="diagnostic_unknown_error">未指定错误</string>
-    <string name="diagnostic_l3_reconnecting">正在重连数据面</string>
     <string name="diagnostic_category_connection">连接</string>
     <string name="diagnostic_category_vpn">VPN</string>
     <string name="diagnostic_category_service">服务</string>

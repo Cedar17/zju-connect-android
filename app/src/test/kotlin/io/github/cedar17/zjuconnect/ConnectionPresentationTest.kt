@@ -2,6 +2,7 @@ package io.github.cedar17.zjuconnect
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -138,7 +139,6 @@ class ConnectionPresentationTest {
                 ),
             )
             assertEquals(UiText.Resource(resource), presentation.supportingText)
-            assertTrue(presentation.isError)
         }
     }
 
@@ -164,21 +164,22 @@ class ConnectionPresentationTest {
             connectionPresentation(ConnectionUiState(phase = ConnectionPhase.RECOVERING_VPN))
                 .primaryActionEnabled,
         )
-        assertTrue(
+        assertNull(
             connectionPresentation(ConnectionUiState(phase = ConnectionPhase.RESTORING_SESSION))
-                .showsProgress,
+                .primaryAction,
         )
-        assertTrue(
+        assertNull(
             connectionPresentation(ConnectionUiState(phase = ConnectionPhase.PREPARING_VPN_PERMISSION))
-                .showsProgress,
+                .primaryAction,
         )
-        assertTrue(
+        assertNull(
             connectionPresentation(ConnectionUiState(phase = ConnectionPhase.DISCONNECTING))
-                .showsProgress,
+                .primaryAction,
         )
-        assertFalse(
+        assertEquals(
+            UiText.Resource(R.string.action_disconnect),
             connectionPresentation(ConnectionUiState(phase = ConnectionPhase.CONNECTED))
-                .showsProgress,
+                .primaryAction,
         )
     }
 }

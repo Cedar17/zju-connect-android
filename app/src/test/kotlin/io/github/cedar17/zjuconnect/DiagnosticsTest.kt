@@ -113,18 +113,10 @@ class DiagnosticsTest {
         assertEquals(2, summary.eventCount)
         val latest = requireNotNull(summary.latest)
         assertEquals("awaiting_captcha", latest.state)
-        assertEquals(
-            UiText.Resource(R.string.diagnostic_connection_awaiting_captcha),
-            diagnosticStateText(latest),
-        )
-        assertEquals(
-            UiText.Resource(R.string.diagnostic_connection_awaiting_token),
-            diagnosticStateText(latest.copy(state = "awaiting_token")),
-        )
     }
 
     @Test
-    fun resourceBackedPresentationCoversRepresentativeStatesAndErrors() {
+    fun resourceBackedPresentationCoversRepresentativeStatesAndFallbacks() {
         assertEquals(
             UiText.Resource(R.string.diagnostic_connection_connected),
             diagnosticStateText(
@@ -158,10 +150,6 @@ class DiagnosticsTest {
         assertEquals(
             UiText.Resource(R.string.diagnostic_category_auth_recovery),
             diagnosticCategoryText("authRecovery"),
-        )
-        assertEquals(
-            connectionErrorText("vpnSessionInvalid"),
-            diagnosticErrorText("vpnSessionInvalid"),
         )
     }
 
@@ -315,28 +303,6 @@ class DiagnosticsTest {
         assertEquals("vpnSessionInvalid", failed.code)
         assertEquals("authentication", failed.cause)
         assertEquals("dataplane", failed.stage)
-    }
-
-    @Test
-    fun authenticationFailurePresentationKeepsRawMachineFields() {
-        val event = RedactedDiagnosticEvent(
-            timestampMillis = 1,
-            category = "connection",
-            state = "error",
-            code = "authNetworkTimeout",
-            stage = "auth.config",
-            cause = "timeout",
-            durationMillis = 20_000,
-        ).redacted()
-
-        assertEquals("authNetworkTimeout", event.code)
-        assertEquals("auth.config", event.stage)
-        assertEquals("timeout", event.cause)
-        assertEquals(20_000L, event.durationMillis)
-        assertEquals(
-            UiText.Resource(R.string.error_auth_timeout),
-            diagnosticErrorText(event.code),
-        )
     }
 
     @Test

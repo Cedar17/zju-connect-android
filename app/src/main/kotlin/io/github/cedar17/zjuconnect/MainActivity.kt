@@ -387,7 +387,7 @@ private fun ConnectionHomeContent(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (presentation.isError) {
+                    color = if (state.phase == ConnectionPhase.ERROR) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -406,8 +406,8 @@ private fun ConnectionHomeContent(
                 .height(54.dp),
             shape = RoundedCornerShape(18.dp),
         ) {
-            if (presentation.showsProgress) {
-                CircularProgressIndicator(
+            when (val primaryAction = presentation.primaryAction) {
+                null -> CircularProgressIndicator(
                     modifier = Modifier
                         .size(22.dp)
                         .semantics {
@@ -416,8 +416,7 @@ private fun ConnectionHomeContent(
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary,
                 )
-            } else {
-                Text(presentation.primaryAction.resolve())
+                else -> Text(primaryAction.resolve())
             }
         }
     }

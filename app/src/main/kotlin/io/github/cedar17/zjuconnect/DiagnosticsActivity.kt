@@ -301,13 +301,13 @@ private fun DiagnosticHistoryLine(group: DiagnosticEventGroup) {
 private fun DiagnosticEventDetails(event: RedactedDiagnosticEvent) {
     val details = buildList {
         event.code.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_error_code, it))
+            add("code=$it")
         }
         event.stage.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_stage, it))
+            add("stage=$it")
         }
         event.cause.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_cause, it))
+            add("cause=$it")
         }
         event.durationMillis.takeIf { it > 0 }?.let {
             add(stringResource(R.string.diagnostic_duration, formatDiagnosticDuration(it)))
@@ -341,13 +341,13 @@ private fun formatDiagnosticPreviewLineLocalized(group: DiagnosticEventGroup): S
             ),
         )
         event.code.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_preview_code, it))
+            add("code=$it")
         }
         event.stage.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_preview_stage, it))
+            add("stage=$it")
         }
         event.cause.takeIf(String::isNotBlank)?.let {
-            add(stringResource(R.string.diagnostic_preview_cause, it))
+            add("cause=$it")
         }
         event.durationMillis.takeIf { it > 0 }?.let {
             add(stringResource(R.string.diagnostic_preview_duration, it))
