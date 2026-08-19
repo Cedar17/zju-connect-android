@@ -2,6 +2,8 @@ package io.github.cedar17.zjuconnect
 
 import androidx.annotation.StringRes
 
+internal const val ALWAYS_ON_DISCONNECT_BLOCKED_CODE = "alwaysOnDisconnectBlocked"
+
 internal data class ConnectionPresentation(
     val title: UiText,
     val supportingText: UiText,
@@ -14,7 +16,7 @@ internal data class ConnectionPresentation(
 internal fun connectionPresentation(state: ConnectionUiState): ConnectionPresentation =
     ConnectionPresentation(
         title = connectionTitleText(state.phase),
-        supportingText = connectionSupportingTextValue(state),
+        supportingText = supportingTextFor(state),
         primaryAction = primaryActionText(state.phase),
         primaryActionEnabled = isPrimaryActionEnabled(state),
         showsProgress = isConnectionProgress(state.phase),
@@ -32,73 +34,44 @@ private fun connectionTitleText(phase: ConnectionPhase): UiText = UiText.Resourc
     },
 )
 
-private fun connectionSupportingTextValue(state: ConnectionUiState): UiText = when {
-    state.phase == ConnectionPhase.CONNECTED &&
-        state.statusMessage == "请先在系统 VPN 设置中关闭 Always-on" ->
+private fun supportingTextFor(state: ConnectionUiState): UiText = when (state.phase) {
+    ConnectionPhase.DISCONNECTED,
+    ConnectionPhase.CONNECTED,
+    -> if (
+        state.phase == ConnectionPhase.CONNECTED &&
+        state.internalCode == ALWAYS_ON_DISCONNECT_BLOCKED_CODE
+    ) {
         UiText.Resource(R.string.always_on_disconnect_guidance)
-
-    state.phase == ConnectionPhase.DISCONNECTED || state.phase == ConnectionPhase.CONNECTED ->
-        if (state.rememberedUsername.isBlank()) {
-            UiText.Resource(R.string.connection_no_saved_account)
-        } else {
-            UiText.Resource(
-                R.string.connection_account,
-                listOf(state.rememberedUsername),
-            )
-        }
-
-    state.phase == ConnectionPhase.ERROR -> connectionErrorText(state.internalCode)
-    else -> statusMessageText(state.statusMessage)
-}
-
-/** Retained as a pure policy helper for existing tests and non-Compose callers. */
-internal fun connectionSupportingText(state: ConnectionUiState): String =
-    if (state.phase == ConnectionPhase.DISCONNECTED || state.phase == ConnectionPhase.CONNECTED) {
-        if (state.rememberedUsername.isBlank()) {
-            "尚未保存账号"
-        } else {
-            "账号：${state.rememberedUsername}"
-        }
     } else {
-        state.statusMessage
+        rememberedAccountText(state.rememberedUsername)
     }
 
-private fun statusMessageText(message: String): UiText =
-    statusMessageResource(message)?.let(UiText::Resource)
-        ?: UiText.Resource(R.string.connection_status_generic)
+    ConnectionPhase.ERROR -> connectionErrorText(state.internalCode)
+    ConnectionPhase.RESTORING_SESSION,
+    ConnectionPhase.FETCHING_AUTH_METHODS,
+    ConnectionPhase.AUTHENTICATING,
+    -> UiText.Resource(R.string.connection_status_signing_in)
 
-@StringRes
-private fun statusMessageResource(message: String): Int? = when (message) {
-    "尚未连接" -> R.string.connection_status_disconnected
-    "正在复用上次认证状态…" -> R.string.connection_status_reusing_auth
-    "正在建立 VPN…" -> R.string.connection_status_establishing_vpn
-    "正在检查已保存的登录状态…" -> R.string.connection_status_checking_saved_session
-    "正在验证已保存的登录状态…" -> R.string.connection_status_verifying_saved_session
-    "正在获取学校要求的登录方式…" -> R.string.connection_status_fetching_auth_methods
-    "正在验证账号…" -> R.string.connection_status_verifying_account
-    "正在发送短信验证码…" -> R.string.connection_status_sending_sms
-    "正在验证短信验证码…" -> R.string.connection_status_verifying_sms
-    "正在验证服务端要求的认证码…" -> R.string.connection_status_verifying_token
-    "正在验证图形验证码…" -> R.string.connection_status_verifying_captcha
-    "请输入服务端要求的手机号" -> R.string.connection_status_awaiting_phone
-    "请输入收到的短信验证码" -> R.string.connection_status_awaiting_sms
-    "请输入动态认证码" -> R.string.connection_status_awaiting_totp
-    "请输入 RADIUS 认证码" -> R.string.connection_status_awaiting_radius
-    "请输入服务端挑战码" -> R.string.connection_status_awaiting_challenge
-    "请输入服务端要求的认证码" -> R.string.connection_status_awaiting_token
-    "请按提示完成图形验证码" -> R.string.connection_status_awaiting_captcha
-    "正在完成登录…" -> R.string.connection_status_finishing_login
-    "保存的密码已失效，请重新输入" -> R.string.connection_status_saved_password_expired
-    "正在使用已保存的凭据重新验证…" -> R.string.connection_status_verifying_saved_credentials
-    "请输入浙大上网账号和密码" -> R.string.connection_status_awaiting_credentials
-    "正在准备登录…" -> R.string.connection_status_preparing_login
-    "正在检查系统 VPN 权限…" -> R.string.connection_status_checking_vpn_permission
-    "正在恢复 VPN…" -> R.string.connection_status_recovering_vpn
-    "正在等待可用网络…" -> R.string.connection_status_waiting_for_network
-    "正在断开 VPN…" -> R.string.connection_status_disconnecting_vpn
-    "正在切换账号…" -> R.string.connection_status_switching_account
-    "请先在系统 VPN 设置中关闭 Always-on" -> R.string.always_on_disconnect_guidance
-    else -> null
+    ConnectionPhase.AWAITING_CREDENTIALS ->
+        UiText.Resource(R.string.connection_status_awaiting_credentials)
+    ConnectionPhase.AWAITING_PHONE -> UiText.Resource(R.string.connection_status_awaiting_phone)
+    ConnectionPhase.AWAITING_SMS -> UiText.Resource(R.string.connection_status_awaiting_sms)
+    ConnectionPhase.AWAITING_TOKEN -> tokenChallengeUiText(state.challengeKind)
+    ConnectionPhase.AWAITING_CAPTCHA -> UiText.Resource(R.string.connection_status_awaiting_captcha)
+    ConnectionPhase.PREPARING_VPN_PERMISSION,
+    ConnectionPhase.ESTABLISHING_VPN,
+    -> UiText.Resource(R.string.connection_status_establishing_vpn)
+    ConnectionPhase.RECOVERING_VPN -> UiText.Resource(R.string.connection_status_recovering_connection)
+    ConnectionPhase.DISCONNECTING -> UiText.Resource(R.string.connection_status_disconnecting_vpn)
+}
+
+private fun rememberedAccountText(username: String): UiText = if (username.isBlank()) {
+    UiText.Resource(R.string.connection_no_saved_account)
+} else {
+    UiText.Resource(
+        R.string.connection_account,
+        listOf(username),
+    )
 }
 
 internal fun connectionErrorText(code: String): UiText = UiText.Resource(
@@ -124,7 +97,7 @@ private fun connectionErrorResource(code: String): Int = when (code) {
     "accountSwitchClearFailed" -> R.string.error_account_switch_clear
     "sessionRestoreUnavailable" -> R.string.error_session_restore
     "alwaysOnAuthenticationRequired" -> R.string.error_always_on_authentication
-    "alwaysOnDisconnectBlocked" -> R.string.error_always_on_disconnect
+    ALWAYS_ON_DISCONNECT_BLOCKED_CODE -> R.string.error_always_on_disconnect
     "authInfoUnavailable", "initializationFailed" -> R.string.error_auth_info
     "vpnRevoked" -> R.string.error_vpn_revoked
     "vpnStopDispatchFailed" -> R.string.error_vpn_stop_dispatch

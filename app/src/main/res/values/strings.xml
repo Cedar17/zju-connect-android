@@ -42,17 +42,8 @@
     <string name="captcha_selected_count">%1$d positions selected</string>
     <string name="captcha_reset">Select again</string>
 
-    <string name="connection_status_disconnected">Not connected</string>
-    <string name="connection_status_reusing_auth">Reusing the previous authentication state…</string>
+    <string name="connection_status_signing_in">Signing in…</string>
     <string name="connection_status_establishing_vpn">Establishing the VPN…</string>
-    <string name="connection_status_checking_saved_session">Checking the saved login state…</string>
-    <string name="connection_status_verifying_saved_session">Verifying the saved login state…</string>
-    <string name="connection_status_fetching_auth_methods">Getting the required login method…</string>
-    <string name="connection_status_verifying_account">Verifying the account…</string>
-    <string name="connection_status_sending_sms">Sending the SMS code…</string>
-    <string name="connection_status_verifying_sms">Verifying the SMS code…</string>
-    <string name="connection_status_verifying_token">Verifying the server authentication code…</string>
-    <string name="connection_status_verifying_captcha">Verifying the graphical code…</string>
     <string name="connection_status_awaiting_phone">Enter the phone number requested by the server</string>
     <string name="connection_status_awaiting_sms">Enter the SMS code you received</string>
     <string name="connection_status_awaiting_totp">Enter the authenticator code</string>
@@ -60,17 +51,9 @@
     <string name="connection_status_awaiting_challenge">Enter the server challenge code</string>
     <string name="connection_status_awaiting_token">Enter the authentication code requested by the server</string>
     <string name="connection_status_awaiting_captcha">Complete the graphical verification code</string>
-    <string name="connection_status_finishing_login">Finishing login…</string>
-    <string name="connection_status_saved_password_expired">The saved password has expired. Enter it again.</string>
-    <string name="connection_status_verifying_saved_credentials">Verifying the saved credentials…</string>
     <string name="connection_status_awaiting_credentials">Enter your campus account and password</string>
-    <string name="connection_status_preparing_login">Preparing login…</string>
-    <string name="connection_status_checking_vpn_permission">Checking system VPN permission…</string>
-    <string name="connection_status_recovering_vpn">Recovering the VPN…</string>
-    <string name="connection_status_waiting_for_network">Waiting for an available network…</string>
+    <string name="connection_status_recovering_connection">Recovering the connection…</string>
     <string name="connection_status_disconnecting_vpn">Disconnecting the VPN…</string>
-    <string name="connection_status_switching_account">Switching account…</string>
-    <string name="connection_status_generic">The connection did not complete. Try again later.</string>
     <string name="always_on_disconnect_guidance">Always-on is managed by the system. Turn it off in VPN settings first.</string>
 
     <string name="error_vpn_permission_denied">Grant system VPN permission to connect.</string>

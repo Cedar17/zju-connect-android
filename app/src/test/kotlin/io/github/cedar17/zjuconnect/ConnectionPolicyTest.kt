@@ -126,41 +126,6 @@ class ConnectionPolicyTest {
     }
 
     @Test
-    fun stableStatusUsesRememberedAccountAsItsOnlySupportingLine() {
-        val disconnected = ConnectionUiState(
-            rememberedUsername = "student",
-            statusMessage = "尚未连接",
-        )
-        val connected = disconnected.copy(
-            phase = ConnectionPhase.CONNECTED,
-            statusMessage = "已连接到浙江大学 VPN",
-        )
-
-        assertEquals("账号：student", connectionSupportingText(disconnected))
-        assertEquals("账号：student", connectionSupportingText(connected))
-        assertEquals(
-            "尚未保存账号",
-            connectionSupportingText(ConnectionUiState()),
-        )
-    }
-
-    @Test
-    fun transientAndErrorStatusKeepTheirActionableDetail() {
-        val restoring = ConnectionUiState(
-            phase = ConnectionPhase.RESTORING_SESSION,
-            statusMessage = "正在验证已保存的登录状态…",
-            rememberedUsername = "student",
-        )
-        val error = restoring.copy(
-            phase = ConnectionPhase.ERROR,
-            statusMessage = "暂时无法连接，请检查网络后重试。",
-        )
-
-        assertEquals("正在验证已保存的登录状态…", connectionSupportingText(restoring))
-        assertEquals("暂时无法连接，请检查网络后重试。", connectionSupportingText(error))
-    }
-
-    @Test
     fun radiusPasswordMethodWinsRegardlessOfServerOrder() {
         val radius = GoAuthMethod("auth/psw", "Radius", "Account")
         val selected = selectAutomaticAuthMethod(
@@ -242,48 +207,6 @@ class ConnectionPolicyTest {
 
         assertFalse(attempts.accepts(first))
         assertTrue(attempts.accepts(afterCancellation))
-    }
-
-    @Test
-    fun persistenceFailureWarnsAboutTheNextReconnect() {
-        val saved = authenticationPersistenceNotice(sessionSaved = true, usernameSaved = true)
-        val failed = authenticationPersistenceNotice(sessionSaved = false, usernameSaved = true)
-
-        assertTrue(saved.isEmpty())
-        assertTrue(failed.contains("下次"))
-    }
-
-    @Test
-    fun userFacingErrorsNeverExposeInternalCodes() {
-        val internalCodes = listOf(
-            "vpnPermissionDenied",
-            "authDnsFailure",
-            "authNetworkFailure",
-            "authNetworkTimeout",
-            "authProtocolFailure",
-            "authServerFailure",
-            "certificateRejected",
-            "unsupportedAuthMethod",
-            "sessionRestoreUnavailable",
-            "deviceIdentityUnavailable",
-            "credentialStoreUnavailable",
-            "vpnTunWriteFailed",
-            "unexpectedInternalCode",
-        )
-
-        internalCodes.forEach { code ->
-            val message = connectionErrorMessage(code)
-            assertTrue(message.isNotBlank())
-            assertFalse("message leaked internal code $code", message.contains(code))
-        }
-    }
-
-    @Test
-    fun tokenChallengesUseServerSpecificPrompts() {
-        assertEquals("请输入动态认证码", tokenChallengeMessage("auth/totp"))
-        assertEquals("请输入 RADIUS 认证码", tokenChallengeMessage("auth/radius"))
-        assertEquals("请输入服务端挑战码", tokenChallengeMessage("auth/challenge"))
-        assertEquals("请输入服务端要求的认证码", tokenChallengeMessage("auth/unknown"))
     }
 
     @Test

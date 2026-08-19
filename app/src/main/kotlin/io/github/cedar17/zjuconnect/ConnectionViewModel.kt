@@ -45,9 +45,7 @@ data class CaptchaPoint(
 
 data class ConnectionUiState(
     val phase: ConnectionPhase = ConnectionPhase.DISCONNECTED,
-    val statusMessage: String = "尚未连接",
     val internalCode: String = "",
-    val notice: String = "",
     val diagnosticStage: String = "",
     val diagnosticCause: String = "",
     val diagnosticDurationMillis: Long = 0,
@@ -146,48 +144,6 @@ internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMetho
 
     val supported = methods.filter { it.authType in SUPPORTED_AUTH_TYPES }
     return supported.singleOrNull()
-}
-
-internal fun connectionErrorMessage(code: String): String = when (code) {
-    "vpnPermissionDenied" -> "需要授予系统 VPN 权限才能连接。"
-    "authDnsFailure" -> "无法解析学校 VPN 服务地址，请检查当前网络后重试。"
-    "authNetworkFailure" -> "无法连接学校 VPN 服务，请切换网络后重试。"
-    "authNetworkTimeout" -> "连接学校 VPN 服务超时，请切换网络后重试。"
-    "authProtocolFailure" -> "学校 VPN 服务返回了无法识别的响应，请稍后重试。"
-    "authServerFailure" -> "学校 VPN 服务暂时不可用，请稍后重试。"
-    "vpnSessionInvalid" -> "登录状态已失效，请重新连接。"
-    "vpnConfigurationUnavailable" -> "学校 VPN 暂时没有提供可用配置，请稍后重试。"
-    "certificateRejected" -> "无法验证学校 VPN 服务器，请检查系统时间和当前网络后重试。"
-    "unsupportedAuthMethod" -> "学校当前要求的登录方式暂不受支持。"
-    "invalidInput", "authenticationFailed" -> "登录未完成，请检查账号、密码或验证码后重试。"
-    "sessionStoreUnavailable" -> "无法读取本机保存的登录状态，请稍后重试。"
-    "credentialStoreUnavailable" -> "无法更新本机保存的登录凭据，请稍后重试。"
-    "deviceIdentityUnavailable" -> "无法读取本机设备身份，请重启设备后重试。"
-    "accountSwitchClearFailed" -> "无法清除本机登录状态，请稍后重试。"
-    "sessionRestoreUnavailable" -> "暂时无法验证已保存的登录状态，请检查网络后重试。"
-    "alwaysOnAuthenticationRequired" -> "请打开应用完成登录后重试。"
-    "alwaysOnDisconnectBlocked" -> "Always-on 由系统管理，请先在系统 VPN 设置中关闭。"
-    "authInfoUnavailable", "initializationFailed" -> "暂时无法连接学校 VPN 服务，请检查网络后重试。"
-    "vpnRevoked" -> "系统已撤销 VPN 权限，请重新连接。"
-    "vpnStopDispatchFailed" -> "未能发送断开请求，请稍后重试。"
-    "vpnStartDispatchFailed" -> "未能启动 VPN 服务，请稍后重试。"
-    "networkMonitorUnavailable" -> "Android 无法监测当前网络，请重新连接。"
-    "vpnSetupFailed", "vpnAddressUnavailable", "vpnRoutesUnavailable" ->
-        "学校 VPN 暂时无法完成连接，请稍后重试。"
-    "tunEstablishFailed", "tunEstablishTimeout", "tunInitializationFailed" ->
-        "Android 无法建立 VPN 接口，请稍后重试。"
-    "vpnTunReadFailed", "vpnTunWriteFailed", "vpnServerReadFailed", "vpnServerWriteFailed", "stopTimeout" ->
-        "VPN 连接意外中断，请重试。"
-    else -> "连接没有完成，请稍后重试。"
-}
-
-internal fun authenticationPersistenceNotice(
-    sessionSaved: Boolean,
-    usernameSaved: Boolean,
-): String = if (sessionSaved && usernameSaved) {
-    ""
-} else {
-    "本次可以继续连接，但下次可能需要重新登录。"
 }
 
 internal class AccountStore(context: Context) {
@@ -381,7 +337,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             _state.update {
                 it.withoutSensitiveInputs().copy(
                     phase = ConnectionPhase.DISCONNECTING,
-                    statusMessage = "正在断开 VPN…",
                     internalCode = "",
                 )
             }
@@ -391,9 +346,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             _state.update {
                 it.withoutSensitiveInputs().copy(
                     phase = ConnectionPhase.DISCONNECTED,
-                    statusMessage = "尚未连接",
                     internalCode = "",
-                    notice = "",
                 )
             }
         }
@@ -413,7 +366,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             _state.update {
                 it.copy(
                     phase = ConnectionPhase.ESTABLISHING_VPN,
-                    statusMessage = "正在复用上次认证状态…",
                     internalCode = "",
                 )
             }
@@ -423,7 +375,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.ESTABLISHING_VPN,
-                statusMessage = "正在建立 VPN…",
                 internalCode = "",
             )
         }
@@ -474,9 +425,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.RESTORING_SESSION,
-                statusMessage = "正在检查已保存的登录状态…",
                 internalCode = "",
-                notice = "",
             )
         }
         if (bridge.hasReusableAuthenticatedResult()) {
@@ -525,7 +474,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 _state.update {
                     it.copy(
                         phase = ConnectionPhase.ESTABLISHING_VPN,
-                        statusMessage = "正在建立 VPN…",
                         internalCode = "",
                     )
                 }
@@ -548,7 +496,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 _state.update {
                     it.withoutSensitiveInputs().copy(
                         phase = ConnectionPhase.RESTORING_SESSION,
-                        statusMessage = "正在验证已保存的登录状态…",
                         internalCode = "",
                     )
                 }
@@ -584,7 +531,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         cause = AuthenticationInvalidationCause.INVALID_STORED_SESSION,
                     )
                     if (cleared) {
-                        startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
+                        startFreshAuthentication(attemptId)
                     } else {
                         showError("sessionStoreUnavailable")
                     }
@@ -624,15 +571,13 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun startFreshAuthentication(attemptId: Long, notice: String = "") {
+    private fun startFreshAuthentication(attemptId: Long) {
         if (!attempts.accepts(attemptId)) return
         restoringStoredSession = false
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.FETCHING_AUTH_METHODS,
-                statusMessage = "正在获取学校要求的登录方式…",
                 internalCode = "",
-                notice = notice,
             )
         }
         consumeAuthEvent(
@@ -653,7 +598,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在验证账号…",
                 internalCode = "",
                 password = "",
             )
@@ -674,7 +618,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在发送短信验证码…",
                 internalCode = "",
                 phone = "",
             )
@@ -689,7 +632,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在验证短信验证码…",
                 internalCode = "",
                 smsCode = "",
             )
@@ -704,7 +646,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在验证服务端要求的认证码…",
                 internalCode = "",
                 token = "",
             )
@@ -724,7 +665,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在验证图形验证码…",
                 internalCode = "",
                 captchaPoints = emptyList(),
                 captchaImage = null,
@@ -770,14 +710,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 "phoneRequired" -> showServerChallenge {
                     it.copy(
                         phase = ConnectionPhase.AWAITING_PHONE,
-                        statusMessage = "请输入服务端要求的手机号",
                         internalCode = "",
                     )
                 }
                 "smsRequired" -> showServerChallenge {
                     it.copy(
                         phase = ConnectionPhase.AWAITING_SMS,
-                        statusMessage = "请输入收到的短信验证码",
                         internalCode = "",
                         phoneNumbers = event.phoneNumbers.ifEmpty { it.phoneNumbers },
                         smsCode = "",
@@ -786,7 +724,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 "tokenRequired" -> showServerChallenge {
                     it.copy(
                         phase = ConnectionPhase.AWAITING_TOKEN,
-                        statusMessage = tokenChallengeMessage(event.challengeKind),
                         internalCode = "",
                         token = "",
                         challengeKind = event.challengeKind,
@@ -795,7 +732,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 "captchaRequired" -> showServerChallenge {
                     it.copy(
                         phase = ConnectionPhase.AWAITING_CAPTCHA,
-                        statusMessage = "请按提示完成图形验证码",
                         internalCode = "",
                         captchaImage = bridge.pendingCaptchaImage().takeIf(ByteArray::isNotEmpty),
                         captchaWidth = event.captchaWidth,
@@ -828,7 +764,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         _state.update {
                             it.withoutSensitiveInputs().copy(
                                 phase = ConnectionPhase.DISCONNECTED,
-                                statusMessage = "尚未连接",
                                 internalCode = "",
                             )
                         }
@@ -837,24 +772,20 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 "authenticationStarted", "retryStarted" -> {
                     if (_state.value.phase !in AUTH_INPUT_PHASES) {
                         _state.update {
-                            it.copy(
-                                phase = ConnectionPhase.FETCHING_AUTH_METHODS,
-                                statusMessage = "正在获取学校要求的登录方式…",
-                            )
+                        it.copy(
+                            phase = ConnectionPhase.FETCHING_AUTH_METHODS,
+                        )
                         }
                     }
                 }
                 "sessionRestoreStarted" -> {
-                    if (_state.value.phase == ConnectionPhase.RESTORING_SESSION) {
-                        _state.update { it.copy(statusMessage = "正在验证已保存的登录状态…") }
-                    }
+                    Unit
                 }
                 "responseAccepted" -> {
                     if (_state.value.phase !in AUTH_INPUT_PHASES) {
                         _state.update {
                             it.copy(
                                 phase = ConnectionPhase.AUTHENTICATING,
-                                statusMessage = "正在完成登录…",
                             )
                         }
                     }
@@ -881,7 +812,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             _state.update {
                 it.copy(
                     phase = ConnectionPhase.AWAITING_CREDENTIALS,
-                    statusMessage = "保存的密码已失效，请重新输入",
                     internalCode = "",
                     password = "",
                 )
@@ -910,7 +840,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     it.copy(
                         username = credential.username,
                         phase = ConnectionPhase.AUTHENTICATING,
-                        statusMessage = "正在使用已保存的凭据重新验证…",
                         internalCode = "",
                     )
                 }
@@ -922,7 +851,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AWAITING_CREDENTIALS,
-                statusMessage = "请输入浙大上网账号和密码",
                 internalCode = "",
                 password = "",
             )
@@ -939,7 +867,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AUTHENTICATING,
-                statusMessage = "正在准备登录…",
                 internalCode = "",
             )
         }
@@ -964,7 +891,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             restoringStoredSession = false
             savedCredentialAttempted = false
             if (cleared) {
-                startFreshAuthentication(attemptId, "已保存的登录状态不可用，请重新登录。")
+                startFreshAuthentication(attemptId)
             } else {
                 showError("sessionStoreUnavailable")
             }
@@ -978,35 +905,26 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         if (!attempts.accepts(attemptId)) return
         val credentialToSave = pendingCredential?.credential
         val snapshot = bridge.exportAuthenticatedSession()
-        val sessionSaved = if (snapshot.isEmpty()) {
-            false
-        } else {
+        if (snapshot.isNotEmpty()) {
             try {
                 withContext(Dispatchers.IO) { sessionStore.write(snapshot) }
-                true
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                false
             } finally {
                 snapshot.fill(0)
             }
         }
         val authenticatedUsername = event.username.ifBlank { _state.value.username }
-        val usernameSaved = try {
+        try {
             withContext(Dispatchers.IO) { accountStore.writeUsername(authenticatedUsername) }
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            false
         }
-        val credentialSaved = if (credentialToSave == null) {
-            true
-        } else {
+        if (credentialToSave != null) {
             try {
                 withContext(Dispatchers.IO) { credentialStore.write(credentialToSave) }
-                true
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                false
             }
         }
         if (!attempts.accepts(attemptId)) return
@@ -1025,12 +943,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         restoringStoredSession = false
         pendingCredential = null
-        val persistenceNotice = authenticationPersistenceNotice(sessionSaved, usernameSaved && credentialSaved)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 rememberedUsername = authenticatedUsername,
                 username = authenticatedUsername,
-                notice = persistenceNotice,
             )
         }
         requestVpnPermission(
@@ -1048,7 +964,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.copy(
                 phase = ConnectionPhase.PREPARING_VPN_PERMISSION,
-                statusMessage = "正在检查系统 VPN 权限…",
                 internalCode = "",
             )
         }
@@ -1062,7 +977,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     _state.update {
                         it.copy(
                             phase = ConnectionPhase.ESTABLISHING_VPN,
-                            statusMessage = "正在建立 VPN…",
                             internalCode = "",
                         )
                     }
@@ -1073,7 +987,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     _state.update {
                         it.copy(
                             phase = ConnectionPhase.RECOVERING_VPN,
-                            statusMessage = "正在恢复 VPN…",
                             internalCode = "",
                         )
                     }
@@ -1084,7 +997,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     _state.update {
                         it.copy(
                             phase = ConnectionPhase.RECOVERING_VPN,
-                            statusMessage = "正在等待可用网络…",
                             internalCode = "",
                         )
                     }
@@ -1099,22 +1011,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 _state.update {
                     it.withoutSensitiveInputs().copy(
                         phase = ConnectionPhase.CONNECTED,
-                        statusMessage = vpnState.message.ifBlank { "已连接到浙江大学 VPN" },
-                        internalCode = "",
+                        internalCode = ALWAYS_ON_DISCONNECT_BLOCKED_CODE,
                     )
                 }
             }
             "active" -> _state.update {
                 it.withoutSensitiveInputs().copy(
                     phase = ConnectionPhase.CONNECTED,
-                    statusMessage = "已连接到浙江大学 VPN",
                     internalCode = "",
                 )
             }
             "stopping" -> _state.update {
                 it.copy(
                     phase = ConnectionPhase.DISCONNECTING,
-                    statusMessage = "正在断开 VPN…",
                     internalCode = "",
                 )
             }
@@ -1123,9 +1032,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     _state.update {
                         it.withoutSensitiveInputs().copy(
                             phase = ConnectionPhase.DISCONNECTED,
-                            statusMessage = "尚未连接",
                             internalCode = "",
-                            notice = "",
                         )
                     }
                 }
@@ -1217,7 +1124,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.ERROR,
-                statusMessage = connectionErrorMessage(code),
                 internalCode = code,
                 diagnosticStage = diagnosticStage,
                 diagnosticCause = diagnosticCause,
@@ -1261,9 +1167,7 @@ internal fun isVpnDisconnectablePhase(phase: ConnectionPhase): Boolean =
 internal fun accountSwitchPendingState(state: ConnectionUiState): ConnectionUiState =
     state.withoutSensitiveInputs().copy(
         phase = ConnectionPhase.FETCHING_AUTH_METHODS,
-        statusMessage = "正在切换账号…",
         internalCode = "",
-        notice = "",
         rememberedUsername = "",
         username = "",
     )
@@ -1272,13 +1176,6 @@ internal fun shouldRetryAccountSwitchClear(state: ConnectionUiState): Boolean =
     state.phase == ConnectionPhase.ERROR && state.internalCode == "accountSwitchClearFailed"
 
 internal fun usesScrollableHomeLayout(phase: ConnectionPhase): Boolean = phase in AUTH_INPUT_PHASES
-
-internal fun tokenChallengeMessage(challengeKind: String): String = when (challengeKind) {
-    "auth/totp" -> "请输入动态认证码"
-    "auth/radius" -> "请输入 RADIUS 认证码"
-    "auth/challenge" -> "请输入服务端挑战码"
-    else -> "请输入服务端要求的认证码"
-}
 
 private val AUTH_INPUT_PHASES = setOf(
     ConnectionPhase.AWAITING_CREDENTIALS,
