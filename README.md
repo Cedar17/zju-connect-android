@@ -154,7 +154,9 @@ Always-on 是 Android 系统设置中的高级选项，不会由应用自动打�
 
 ## 许可证
 
-本项目依赖采用 AGPL-3.0 许可证的 `zju-connect`。在公开发布可分发版本前，将明确并遵守上游许可证对应的版权声明、开源和源代码提供义务。
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布。
+
+本项目基于 [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect) 构建，并遵循其 AGPL-3.0 许可证及相关版权声明。
 
 ## 免责声明
 
