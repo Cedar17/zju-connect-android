@@ -7,6 +7,6 @@
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:windowBackground">#0F1115</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>
