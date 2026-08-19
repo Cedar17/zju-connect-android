@@ -13,14 +13,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -32,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
 private const val REPOSITORY_URL = "https://github.com/Cedar17/zju-connect-android"
-private const val REPORT_ISSUES_URL = "https://github.com/Cedar17/zju-connect-android/issues"
+private const val REPORT_ISSUES_URL = "https://github.com/Cedar17/zju-connect-android/issues/"
 private const val CORE_REPOSITORY_NAME = "zju-connect"
 private const val CORE_REPOSITORY_URL = "https://github.com/Mythologyli/zju-connect"
 
@@ -99,8 +101,11 @@ private fun AboutScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.about_title)) },
                 navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text(stringResource(R.string.back))
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_arrow_back),
+                            contentDescription = stringResource(R.string.back),
+                        )
                     }
                 },
             )
@@ -138,6 +143,10 @@ private fun AboutScreen(
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
+                    text = stringResource(R.string.about_author),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
                     text = descriptionText,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -151,6 +160,8 @@ private fun AboutScreen(
 
 @Composable
 private fun aboutLinkText(label: String, url: String) = buildAnnotatedString {
+    append(label)
+    append(": ")
     withLink(
         LinkAnnotation.Url(
             url = url,
@@ -162,6 +173,6 @@ private fun aboutLinkText(label: String, url: String) = buildAnnotatedString {
             ),
         ),
     ) {
-        append(label)
+        append(url)
     }
 }

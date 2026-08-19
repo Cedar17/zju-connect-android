@@ -174,9 +174,10 @@
 
     <string name="about_title">About</string>
     <string name="about_version">Version %1$s</string>
+    <string name="about_author">Author: Cedar17</string>
     <string name="about_description">An open-source Android client for ZJU RVPN, with aTrust protocol support. Powered by %1$s.</string>
-    <string name="about_repository">GitHub repository</string>
-    <string name="about_report_problem">GitHub report an issue</string>
+    <string name="about_repository">Repository</string>
+    <string name="about_report_problem">Report an issue</string>
     <string name="about_app_icon_description">ZJU Connect app icon</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
