@@ -120,6 +120,7 @@ class ConnectionPresentationTest {
             "vpnStartDispatchFailed" to R.string.error_vpn_start_dispatch,
             "networkMonitorUnavailable" to R.string.error_network_monitor,
             "vpnSetupFailed" to R.string.error_vpn_setup,
+            "vpnPrepareTimeout" to R.string.error_vpn_setup,
             "vpnAddressUnavailable" to R.string.error_vpn_setup,
             "vpnRoutesUnavailable" to R.string.error_vpn_setup,
             "tunEstablishFailed" to R.string.error_tun_establish,

@@ -82,6 +82,23 @@ class RealVpnLifecycleTest {
     }
 
     @Test
+    fun userStopSuppressesLatePreparationTimeout() {
+        val lifecycle = RealVpnLifecycle()
+        assertTrue(lifecycle.beginSession())
+
+        lifecycle.requestUserStop()
+        assertNull(
+            lifecycle.recordFailure(
+                "vpnPrepareTimeout",
+                "Timed out while preparing the authenticated aTrust VPN",
+            ),
+        )
+        lifecycle.beginCleanup()
+
+        assertEquals(RealVpnTerminalOutcome.Stopped, lifecycle.terminalOutcome())
+    }
+
+    @Test
     fun tunWriteDiagnosticIsSafeAndVisibleInTheExistingMessage() {
         val message = realVpnErrorMessage(
             GoVpnEvent(

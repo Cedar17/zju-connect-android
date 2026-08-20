@@ -302,6 +302,32 @@ func TestRealVpnErrorIsRedactedAndVersioned(t *testing.T) {
 	}
 }
 
+func TestRealVpnPreparationTimeoutIsStableAndRedacted(t *testing.T) {
+	encoded := realVpnPreparationEvent(
+		"error",
+		"vpnPrepareTimeout",
+		"prepare.nodeProbe",
+		"timeout",
+		30_000,
+		"Timed out while preparing the authenticated aTrust VPN",
+	)
+	var event realVpnPreparedEvent
+	if err := json.Unmarshal([]byte(encoded), &event); err != nil {
+		t.Fatalf("timeout event was not valid JSON: %v", err)
+	}
+	if event.State != "error" || event.Code != "vpnPrepareTimeout" || event.Stage != "prepare.nodeProbe" || event.Cause != "timeout" {
+		t.Fatalf("timeout event = %#v", event)
+	}
+	if event.DurationMillis != 30_000 {
+		t.Fatalf("timeout duration = %d, want 30000", event.DurationMillis)
+	}
+	for _, forbidden := range []string{"cookie", "sid", "deviceId", "resource", "endpoint"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("timeout event contained forbidden field %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func TestClassifyTunWriteErrorUsesOnlyStableCategories(t *testing.T) {
 	tests := []struct {
 		err  error

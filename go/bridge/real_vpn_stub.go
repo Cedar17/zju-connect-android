@@ -12,18 +12,19 @@ type realVpnRoute struct {
 }
 
 type realVpnPreparedEvent struct {
-	SchemaVersion int                         `json:"schemaVersion"`
-	Type          string                      `json:"type"`
-	State         string                      `json:"state"`
-	Code          string                      `json:"code,omitempty"`
-	Stage         string                      `json:"stage,omitempty"`
-	Cause         string                      `json:"cause,omitempty"`
-	Message       string                      `json:"message"`
-	Address       string                      `json:"address,omitempty"`
-	MTU           int                         `json:"mtu,omitempty"`
-	Routes        []realVpnRoute              `json:"routes,omitempty"`
-	Diagnostics   *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
-	Packet        *realVpnPacketMetadata      `json:"packet,omitempty"`
+	SchemaVersion  int                         `json:"schemaVersion"`
+	Type           string                      `json:"type"`
+	State          string                      `json:"state"`
+	Code           string                      `json:"code,omitempty"`
+	Stage          string                      `json:"stage,omitempty"`
+	Cause          string                      `json:"cause,omitempty"`
+	DurationMillis int64                       `json:"durationMs,omitempty"`
+	Message        string                      `json:"message"`
+	Address        string                      `json:"address,omitempty"`
+	MTU            int                         `json:"mtu,omitempty"`
+	Routes         []realVpnRoute              `json:"routes,omitempty"`
+	Diagnostics    *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
+	Packet         *realVpnPacketMetadata      `json:"packet,omitempty"`
 }
 
 func PrepareRealVpn() string {
@@ -37,6 +38,8 @@ func StartRealVpn(_ int, _ SocketProtector, listener BridgeListener) {
 }
 
 func DiscardPreparedRealVpn() {}
+
+func CancelPreparingRealVpn() {}
 
 func StopRealVpn() {}
 

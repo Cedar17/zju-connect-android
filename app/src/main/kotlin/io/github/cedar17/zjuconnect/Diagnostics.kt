@@ -81,6 +81,7 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "vpnPermissionDenied",
     "vpnSessionInvalid",
     "vpnPacketForwardFailed",
+    "vpnPrepareTimeout",
     "vpnRevoked",
     "vpnRoutesUnavailable",
     "vpnServerReadFailed",
@@ -385,13 +386,23 @@ internal object RedactedDiagnostics {
         )
     }
 
-    fun recordVpnServiceState(context: Context, state: String, code: String = "") {
+    fun recordVpnServiceState(
+        context: Context,
+        state: String,
+        code: String = "",
+        stage: String = "",
+        cause: String = "",
+        durationMillis: Long = 0,
+    ) {
         storeFor(context).record(
             RedactedDiagnosticEvent(
                 timestampMillis = System.currentTimeMillis(),
                 category = "service",
                 state = state,
                 code = code,
+                stage = stage,
+                cause = cause,
+                durationMillis = durationMillis,
             ),
         )
     }
@@ -624,6 +635,13 @@ private fun redactStage(value: String): String = when {
         "auth.token",
     ) -> value
     value.startsWith("auth") -> "auth"
+    value in setOf(
+        "prepare.resource",
+        "prepare.nodeProbe",
+        "prepare.ip",
+        "prepare.l3",
+        "prepare.complete",
+    ) -> value
     value.startsWith("prepare") -> "prepare"
     value.startsWith("tun") -> "tun"
     value.startsWith("dataplane") -> "dataplane"

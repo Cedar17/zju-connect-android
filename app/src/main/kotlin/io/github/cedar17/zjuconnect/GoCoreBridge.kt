@@ -39,6 +39,10 @@ class GoCoreBridge {
         Core.discardPreparedRealVpn()
     }
 
+    fun cancelPreparingRealVpn() {
+        Core.cancelPreparingRealVpn()
+    }
+
     fun startAuthentication(deviceID: String, onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
@@ -83,7 +87,7 @@ class GoCoreBridge {
             }
         }
 
-    private fun parseVpnPrepared(eventJson: String): GoVpnPrepared = runCatching {
+    internal fun parseVpnPrepared(eventJson: String): GoVpnPrepared = runCatching {
         val event = JSONObject(eventJson)
         GoVpnPrepared(
             state = event.optString("state", "unknown"),
@@ -91,6 +95,7 @@ class GoCoreBridge {
             message = event.optString("message", "Real VPN response received"),
             stage = event.optString("stage", ""),
             cause = event.optString("cause", ""),
+            durationMillis = event.optLong("durationMs", 0),
             address = event.optString("address", ""),
             mtu = event.optInt("mtu", 1400),
             routes = event.optJSONArray("routes").toVpnRoutes(),
@@ -247,6 +252,7 @@ data class GoVpnPrepared(
     val message: String,
     val stage: String = "",
     val cause: String = "",
+    val durationMillis: Long = 0,
     val address: String = "",
     val mtu: Int = 1400,
     val routes: List<GoVpnRoute> = emptyList(),

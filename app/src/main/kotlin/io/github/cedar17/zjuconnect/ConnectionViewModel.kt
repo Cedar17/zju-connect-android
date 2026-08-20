@@ -134,6 +134,27 @@ internal class ConnectionAttemptTracker {
     fun accepts(attemptId: Long): Boolean = attemptId == activeAttemptId
 }
 
+/** Tracks only an in-flight reusable preparation launched by this ViewModel. */
+internal class ReusableVpnPreparationInFlight {
+    private var active = false
+
+    fun begin() {
+        active = true
+    }
+
+    fun completeIfCurrentAttempt(isCurrentAttempt: Boolean) {
+        if (isCurrentAttempt) {
+            active = false
+        }
+    }
+
+    fun cancelIfInFlight(cancel: () -> Unit) {
+        if (!active) return
+        active = false
+        cancel()
+    }
+}
+
 internal fun savedCredentialMatchesAccount(credential: StoredCredential, rememberedUsername: String): Boolean =
     rememberedUsername.isBlank() || credential.username == rememberedUsername
 
@@ -173,6 +194,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val deviceIdentityProvider = DeviceIdentityProvider(application)
     private val rememberedUsername = accountStore.readUsername()
     private val attempts = ConnectionAttemptTracker()
+    private val reusableVpnPreparation = ReusableVpnPreparationInFlight()
     private val _state = MutableStateFlow(
         ConnectionUiState(
             rememberedUsername = rememberedUsername,
@@ -290,6 +312,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingCredential = null
         savedCredentialAttempted = true
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
+        cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         invalidateReusableAuthentication()
@@ -327,6 +350,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
+        cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
 
         // A normal disconnect is the boundary for the next one-tap reconnect,
@@ -426,6 +450,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
+        cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
@@ -461,6 +486,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun prepareReusableVpn(attemptId: Long) {
         viewModelScope.launch {
+            if (!attempts.accepts(attemptId)) return@launch
+            reusableVpnPreparation.begin()
             val config = try {
                 withContext(Dispatchers.IO) { bridge.prepareRealVpn() }
             } catch (error: Exception) {
@@ -472,6 +499,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     stage = "prepare.reusable",
                     cause = "unexpected",
                 )
+            } finally {
+                reusableVpnPreparation.completeIfCurrentAttempt(attempts.accepts(attemptId))
             }
 
             if (!attempts.accepts(attemptId)) {
@@ -525,6 +554,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 code = code,
                 diagnosticStage = config.stage,
                 diagnosticCause = config.cause,
+                diagnosticDurationMillis = config.durationMillis,
             )
         }
     }
@@ -1154,11 +1184,16 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         attempts.invalidate()
         pendingVpnPermission = null
+        cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         pendingCredential = null
         releaseConnectionEntry()
         super.onCleared()
+    }
+
+    private fun cancelReusableVpnPreparation() {
+        reusableVpnPreparation.cancelIfInFlight(bridge::cancelPreparingRealVpn)
     }
 
     private fun reserveConnectionEntry(): Boolean {

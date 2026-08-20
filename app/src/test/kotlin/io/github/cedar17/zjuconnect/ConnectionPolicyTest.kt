@@ -210,6 +210,29 @@ class ConnectionPolicyTest {
     }
 
     @Test
+    fun reusablePreparationCancellationIsScopedToInFlightViewModelWork() {
+        val preparation = ReusableVpnPreparationInFlight()
+        var cancellationCalls = 0
+
+        preparation.cancelIfInFlight { cancellationCalls += 1 }
+        assertEquals(0, cancellationCalls)
+
+        preparation.begin()
+        preparation.cancelIfInFlight { cancellationCalls += 1 }
+        assertEquals(1, cancellationCalls)
+
+        preparation.begin()
+        preparation.completeIfCurrentAttempt(isCurrentAttempt = false)
+        preparation.cancelIfInFlight { cancellationCalls += 1 }
+        assertEquals(2, cancellationCalls)
+
+        preparation.begin()
+        preparation.completeIfCurrentAttempt(isCurrentAttempt = true)
+        preparation.cancelIfInFlight { cancellationCalls += 1 }
+        assertEquals(2, cancellationCalls)
+    }
+
+    @Test
     fun realVpnStorePublishesStateFlowUpdates() {
         RealVpnStateStore.reset()
 
