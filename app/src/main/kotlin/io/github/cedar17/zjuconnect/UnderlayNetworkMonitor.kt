@@ -90,6 +90,21 @@ internal class UnderlayNetworkMonitor(
 
     fun snapshot(): UnderlayNetworkSnapshot = synchronized(lock) { snapshotLocked() }
 
+    /**
+     * Captures the physical system-default network immediately before VPN setup.
+     *
+     * This runs on the service start path rather than from a NetworkCallback, so
+     * the synchronous ConnectivityManager reads are not used to interpret a
+     * callback that may already be stale.
+     */
+    fun captureSessionStart(): UnderlaySessionStart {
+        val activeUnderlay = readActiveUnderlay()
+        return UnderlaySessionStart(
+            snapshot = snapshot(),
+            activeUnderlay = activeUnderlay,
+        )
+    }
+
     private fun update(
         networkHandle: Long,
         transform: (UnderlayNetworkFingerprint?) -> UnderlayNetworkFingerprint,
@@ -138,6 +153,19 @@ internal class UnderlayNetworkMonitor(
                 ),
             )
         }
+    }
+
+    private fun readActiveUnderlay(): UnderlayNetworkFingerprint? {
+        val network = connectivity.activeNetwork ?: return null
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return null
+        if (!capabilities.isEligibleUnderlay()) return null
+        val linkProperties = connectivity.getLinkProperties(network)
+        return UnderlayNetworkFingerprint(
+            networkHandle = network.networkHandle,
+            transportMask = capabilities.transportMask(),
+            suspended = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED),
+            linkIdentityHash = linkProperties?.opaqueIpv4IdentityHash() ?: 0,
+        )
     }
 
     private fun reconcileCurrentNetworks() {

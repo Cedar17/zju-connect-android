@@ -39,11 +39,12 @@ class RealVpnRecoveryCoordinatorTest {
     }
 
     @Test
-    fun initialSnapshotBecomesBaselineWithoutRestart() {
+    fun sessionAnchorBecomesBaselineWithoutRestart() {
+        val wifi = network(100, linkHash = 1)
+        val initial = snapshot(0, wifi)
         val coordinator = RealVpnRecoveryCoordinator()
-        val initial = snapshot(0, network(100))
 
-        assertTrue(coordinator.beginSession(initial))
+        assertTrue(coordinator.beginSession(initial, wifi))
         assertTrue(coordinator.onSessionActive(initial).isEmpty())
 
         assertEquals(RealVpnRecoveryCoordinator.Mode.ACTIVE, coordinator.mode)
@@ -51,52 +52,102 @@ class RealVpnRecoveryCoordinatorTest {
     }
 
     @Test
-    fun networkChangeDuringStartupSchedulesRecoveryAfterActive() {
-        val coordinator = RealVpnRecoveryCoordinator()
-        val initial = snapshot(0, network(100))
-        val changed = snapshot(1, network(101))
+    fun healthySessionIgnoresBackupNetworkChurn() {
+        val wifi = network(100, linkHash = 1)
+        val cellular = network(101, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
 
-        assertTrue(coordinator.beginSession(initial))
-        assertTrue(coordinator.onNetworkChanged(changed).isEmpty())
-
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
-            coordinator.onSessionActive(changed),
+        assertTrue(coordinator.onNetworkChanged(snapshot(1, wifi, cellular)).isEmpty())
+        assertTrue(
+            coordinator.onNetworkChanged(
+                snapshot(2, wifi, cellular.copy(linkIdentityHash = 2)),
+            ).isEmpty(),
         )
-        assertEquals(RealVpnRecoveryPresentation.RECOVERING, coordinator.presentation)
+        assertTrue(coordinator.onNetworkChanged(snapshot(3, wifi)).isEmpty())
+
+        assertEquals(RealVpnRecoveryCoordinator.Mode.ACTIVE, coordinator.mode)
+        assertEquals(RealVpnRecoveryPresentation.NONE, coordinator.presentation)
     }
 
     @Test
-    fun callbackBurstReschedulesAndOnlyLatestRevisionStopsSession() {
-        val coordinator = activeCoordinator(snapshot(0, network(100)))
+    fun healthyCellularSessionDoesNotFollowNewWifiDefault() {
+        val cellular = network(101, linkHash = 1)
+        val wifi = network(100, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, cellular), cellular)
+
+        assertTrue(coordinator.onNetworkChanged(snapshot(1, cellular, wifi)).isEmpty())
+
+        assertEquals(RealVpnRecoveryCoordinator.Mode.ACTIVE, coordinator.mode)
+    }
+
+    @Test
+    fun sessionAnchorLossSchedulesOneRecoveryDespiteBackupChurn() {
+        val wifi = network(100, linkHash = 1)
+        val cellular = network(101, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
 
         assertEquals(
             listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
-            coordinator.onNetworkChanged(snapshot(1, network(100), network(101))),
+            coordinator.onNetworkChanged(snapshot(1, cellular)),
         )
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.ScheduleDebounce(2)),
-            coordinator.onNetworkChanged(snapshot(2, network(100), network(102))),
+        assertTrue(
+            coordinator.onNetworkChanged(
+                snapshot(2, cellular.copy(linkIdentityHash = 2)),
+            ).isEmpty(),
         )
-        assertTrue(coordinator.onDebounceElapsed(1).isEmpty())
+
         assertEquals(
             listOf(RealVpnRecoveryCommand.StopSession),
-            coordinator.onDebounceElapsed(2),
+            coordinator.onDebounceElapsed(1),
         )
     }
 
     @Test
-    fun linkIdentityChangeOnSameNetworkTriggersRecovery() {
-        val coordinator = activeCoordinator(snapshot(0, network(100, linkHash = 1)))
+    fun linkIdentityChangeOnSessionAnchorTriggersRecovery() {
+        val wifi = network(100, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
 
-        val commands = coordinator.onNetworkChanged(snapshot(1, network(100, linkHash = 2)))
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            coordinator.onNetworkChanged(snapshot(1, wifi.copy(linkIdentityHash = 2))),
+        )
+    }
 
-        assertEquals(listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)), commands)
+    @Test
+    fun suspendedSessionAnchorRecoversThroughRemainingNetwork() {
+        val wifi = network(100, linkHash = 1)
+        val cellular = network(101, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi, cellular), wifi)
+
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            coordinator.onNetworkChanged(snapshot(1, wifi.copy(suspended = true), cellular)),
+        )
+    }
+
+    @Test
+    fun restoredSessionAnchorCancelsPendingRecovery() {
+        val wifi = network(100, linkHash = 1)
+        val cellular = network(101, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
+
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            coordinator.onNetworkChanged(snapshot(1, cellular)),
+        )
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.CancelDebounce),
+            coordinator.onNetworkChanged(snapshot(2, wifi, cellular)),
+        )
+        assertTrue(coordinator.onDebounceElapsed(1).isEmpty())
+        assertEquals(RealVpnRecoveryCoordinator.Mode.ACTIVE, coordinator.mode)
     }
 
     @Test
     fun losingEveryUnderlayStopsThenWaitsUntilNetworkReturns() {
-        val coordinator = activeCoordinator(snapshot(0, network(100)))
+        val wifi = network(100)
+        val cellular = network(101)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
 
         assertEquals(
             listOf(
@@ -111,80 +162,123 @@ class RealVpnRecoveryCoordinatorTest {
         assertEquals(RealVpnRecoveryCoordinator.Mode.WAITING_FOR_NETWORK, coordinator.mode)
 
         assertEquals(
-            listOf(RealVpnRecoveryCommand.ScheduleDebounce(2)),
-            coordinator.onNetworkChanged(snapshot(2, network(101))),
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            coordinator.onNetworkChanged(snapshot(2, cellular)),
         )
         assertEquals(
             listOf(RealVpnRecoveryCommand.StartSession),
-            coordinator.onDebounceElapsed(2),
+            coordinator.onDebounceElapsed(1),
         )
-        assertTrue(coordinator.beginSession(snapshot(2, network(101))))
-        assertTrue(coordinator.onSessionActive(snapshot(2, network(101))).isEmpty())
+        assertTrue(coordinator.beginSession(snapshot(2, cellular), cellular))
+        assertTrue(coordinator.onSessionActive(snapshot(2, cellular)).isEmpty())
         assertEquals(RealVpnRecoveryCoordinator.Mode.ACTIVE, coordinator.mode)
     }
 
     @Test
-    fun suspendedUnderlayIsTreatedAsUnavailable() {
-        val coordinator = activeCoordinator(snapshot(0, network(100)))
+    fun backupChurnDoesNotResetWaitingStartDebounce() {
+        val wifi = network(100)
+        val cellular = network(101, linkHash = 1)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
 
-        val commands = coordinator.onNetworkChanged(snapshot(1, network(100, suspended = true)))
+        coordinator.onNetworkChanged(snapshot(1))
+        coordinator.onRecoveryStopCompleted(snapshot(1))
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            coordinator.onNetworkChanged(snapshot(2, cellular)),
+        )
+        assertTrue(
+            coordinator.onNetworkChanged(
+                snapshot(3, cellular.copy(linkIdentityHash = 2)),
+            ).isEmpty(),
+        )
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.StartSession),
+            coordinator.onDebounceElapsed(1),
+        )
+    }
+
+    @Test
+    fun recoveryStopRestartsImmediatelyWithUsableNetwork() {
+        val wifi = network(100)
+        val cellular = network(101)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
+
+        coordinator.onNetworkChanged(snapshot(1, cellular))
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.StopSession),
+            coordinator.onDebounceElapsed(1),
+        )
+
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.StartSession),
+            coordinator.onRecoveryStopCompleted(snapshot(2, cellular)),
+        )
+        assertTrue(coordinator.beginSession(snapshot(2, cellular), cellular))
+        assertTrue(coordinator.onSessionActive(snapshot(2, cellular)).isEmpty())
+    }
+
+    @Test
+    fun startupOnlyRestartsWhenTheSessionAnchorWasLost() {
+        val wifi = network(100)
+        val cellular = network(101)
+        val healthyCoordinator = RealVpnRecoveryCoordinator()
+
+        assertTrue(healthyCoordinator.beginSession(snapshot(0, wifi), wifi))
+        assertTrue(healthyCoordinator.onNetworkChanged(snapshot(1, wifi, cellular)).isEmpty())
+        assertTrue(healthyCoordinator.onSessionActive(snapshot(1, wifi, cellular)).isEmpty())
+
+        val lostAnchorCoordinator = RealVpnRecoveryCoordinator()
+        assertTrue(lostAnchorCoordinator.beginSession(snapshot(0, wifi), wifi))
+        assertTrue(lostAnchorCoordinator.onNetworkChanged(snapshot(1, cellular)).isEmpty())
+        assertEquals(
+            listOf(RealVpnRecoveryCommand.ScheduleDebounce(1)),
+            lostAnchorCoordinator.onSessionActive(snapshot(1, cellular)),
+        )
+    }
+
+    @Test
+    fun missingSessionAnchorUsesConservativeFallback() {
+        val wifi = network(100)
+        val cellular = network(101)
+        val coordinator = RealVpnRecoveryCoordinator()
+
+        assertTrue(coordinator.beginSession(snapshot(0, wifi), activeUnderlay = null))
+        assertTrue(coordinator.onSessionActive(snapshot(0, wifi)).isEmpty())
+        assertTrue(coordinator.onNetworkChanged(snapshot(1, cellular)).isEmpty())
+        assertTrue(coordinator.onNetworkChanged(snapshot(2, wifi, cellular)).isEmpty())
 
         assertEquals(
             listOf(
                 RealVpnRecoveryCommand.CancelDebounce,
                 RealVpnRecoveryCommand.StopSession,
             ),
-            commands,
-        )
-        assertEquals(RealVpnRecoveryPresentation.WAITING_FOR_NETWORK, coordinator.presentation)
-    }
-
-    @Test
-    fun changeDuringRestartProducesAtMostOneFollowUpRecovery() {
-        val coordinator = activeCoordinator(snapshot(0, network(100)))
-        coordinator.onNetworkChanged(snapshot(1, network(101)))
-        coordinator.onDebounceElapsed(1)
-
-        assertTrue(coordinator.onNetworkChanged(snapshot(2, network(102))).isEmpty())
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.ScheduleDebounce(2)),
-            coordinator.onRecoveryStopCompleted(snapshot(2, network(102))),
-        )
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.StartSession),
-            coordinator.onDebounceElapsed(2),
-        )
-        assertTrue(coordinator.beginSession(snapshot(2, network(102))))
-        assertTrue(coordinator.onNetworkChanged(snapshot(3, network(103))).isEmpty())
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.ScheduleDebounce(3)),
-            coordinator.onSessionActive(snapshot(3, network(103))),
-        )
-        assertEquals(
-            listOf(RealVpnRecoveryCommand.StopSession),
-            coordinator.onDebounceElapsed(3),
+            coordinator.onNetworkChanged(snapshot(3)),
         )
     }
 
     @Test
     fun terminationCancelsPendingRecoveryAndRejectsLaterStarts() {
-        val coordinator = activeCoordinator(snapshot(0, network(100)))
-        coordinator.onNetworkChanged(snapshot(1, network(101)))
+        val wifi = network(100)
+        val cellular = network(101)
+        val coordinator = activeCoordinator(snapshot(0, wifi), wifi)
+        coordinator.onNetworkChanged(snapshot(1, cellular))
 
         assertEquals(
             listOf(RealVpnRecoveryCommand.CancelDebounce),
             coordinator.terminate(),
         )
         assertTrue(coordinator.onDebounceElapsed(1).isEmpty())
-        assertTrue(coordinator.onNetworkChanged(snapshot(2, network(102))).isEmpty())
-        assertFalse(coordinator.beginSession(snapshot(2, network(102))))
+        assertTrue(coordinator.onNetworkChanged(snapshot(2, wifi)).isEmpty())
+        assertFalse(coordinator.beginSession(snapshot(2, wifi), wifi))
     }
 
-    private fun activeCoordinator(initial: UnderlayNetworkSnapshot): RealVpnRecoveryCoordinator =
-        RealVpnRecoveryCoordinator().also { coordinator ->
-            assertTrue(coordinator.beginSession(initial))
-            assertTrue(coordinator.onSessionActive(initial).isEmpty())
-        }
+    private fun activeCoordinator(
+        initial: UnderlayNetworkSnapshot,
+        activeUnderlay: UnderlayNetworkFingerprint,
+    ): RealVpnRecoveryCoordinator = RealVpnRecoveryCoordinator().also { coordinator ->
+        assertTrue(coordinator.beginSession(initial, activeUnderlay))
+        assertTrue(coordinator.onSessionActive(initial).isEmpty())
+    }
 
     private fun snapshot(
         revision: Long,

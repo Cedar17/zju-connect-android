@@ -596,7 +596,11 @@ class RealVpnService : VpnService() {
 
         val canStart = synchronized(recoveryLock) {
             l3RecoveryActive = false
-            recoveryCoordinator.beginSession(underlaySnapshot())
+            val sessionStart = underlaySessionStart()
+            recoveryCoordinator.beginSession(
+                snapshot = sessionStart.snapshot,
+                activeUnderlay = sessionStart.activeUnderlay,
+            )
         }
         if (!canStart) {
             synchronized(stateLock) { lifecycle.beginCleanup() }
@@ -787,14 +791,14 @@ class RealVpnService : VpnService() {
         commands.forEach { command ->
             when (command) {
                 RealVpnRecoveryCommand.CancelDebounce -> cancelRecoveryDebounce()
-                is RealVpnRecoveryCommand.ScheduleDebounce -> scheduleRecoveryDebounce(command.revision)
+                is RealVpnRecoveryCommand.ScheduleDebounce -> scheduleRecoveryDebounce(command.generation)
                 RealVpnRecoveryCommand.StopSession -> requestRecoveryStop()
                 RealVpnRecoveryCommand.StartSession -> requestRecoveryStart()
             }
         }
     }
 
-    private fun scheduleRecoveryDebounce(revision: Long) {
+    private fun scheduleRecoveryDebounce(generation: Long) {
         if (watchdogExecutor.isShutdown) return
         synchronized(recoveryLock) {
             recoveryDebounce?.cancel(false)
@@ -802,7 +806,7 @@ class RealVpnService : VpnService() {
                 {
                     val commands = synchronized(recoveryLock) {
                         recoveryDebounce = null
-                        recoveryCoordinator.onDebounceElapsed(revision)
+                        recoveryCoordinator.onDebounceElapsed(generation)
                     }
                     handleRecoveryCommands(commands)
                 },
@@ -866,6 +870,16 @@ class RealVpnService : VpnService() {
             underlayNetworkMonitor.snapshot()
         } else {
             UnderlayNetworkSnapshot()
+        }
+
+    private fun underlaySessionStart(): UnderlaySessionStart =
+        if (::underlayNetworkMonitor.isInitialized) {
+            underlayNetworkMonitor.captureSessionStart()
+        } else {
+            UnderlaySessionStart(
+                snapshot = UnderlayNetworkSnapshot(),
+                activeUnderlay = null,
+            )
         }
 
     private fun publishRecoveryPresentation() {
