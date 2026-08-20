@@ -15,6 +15,12 @@ internal data class UnderlayNetworkSnapshot(
         get() = networks.any { !it.suspended }
 }
 
+/** Immutable underlay observation captured immediately before a VPN session starts. */
+internal data class UnderlaySessionStart(
+    val snapshot: UnderlayNetworkSnapshot,
+    val activeUnderlay: UnderlayNetworkFingerprint?,
+)
+
 internal enum class RealVpnRecoveryPresentation {
     NONE,
     RECOVERING,
@@ -35,7 +41,7 @@ internal fun combinedRealVpnRecoveryPresentation(
 internal sealed interface RealVpnRecoveryCommand {
     data object CancelDebounce : RealVpnRecoveryCommand
 
-    data class ScheduleDebounce(val revision: Long) : RealVpnRecoveryCommand
+    data class ScheduleDebounce(val generation: Long) : RealVpnRecoveryCommand
 
     data object StopSession : RealVpnRecoveryCommand
 
@@ -61,8 +67,9 @@ internal class RealVpnRecoveryCoordinator {
     }
 
     private var currentSnapshot = UnderlayNetworkSnapshot()
-    private var startRevision = 0L
-    private var stopRevision = 0L
+    private var sessionUnderlay: UnderlayNetworkFingerprint? = null
+    private var nextDebounceGeneration = 0L
+    private var pendingDebounceGeneration: Long? = null
     private var recoveryRequested = false
 
     var mode: Mode = Mode.IDLE
@@ -79,14 +86,17 @@ internal class RealVpnRecoveryCoordinator {
         get() = recoveryRequested && mode == Mode.STOPPING_FOR_RECOVERY
 
     /** Returns false only when a recovery start raced with another loss. */
-    fun beginSession(snapshot: UnderlayNetworkSnapshot): Boolean {
+    fun beginSession(
+        snapshot: UnderlayNetworkSnapshot,
+        activeUnderlay: UnderlayNetworkFingerprint?,
+    ): Boolean {
         if (mode == Mode.TERMINATED) return false
         currentSnapshot = snapshot
+        sessionUnderlay = activeUnderlay
         if (recoveryRequested && !snapshot.hasUsableNetwork) {
             mode = Mode.WAITING_FOR_NETWORK
             return false
         }
-        startRevision = snapshot.revision
         mode = Mode.STARTING
         return true
     }
@@ -95,18 +105,10 @@ internal class RealVpnRecoveryCoordinator {
         if (mode == Mode.TERMINATED) return emptyList()
         currentSnapshot = snapshot
         if (!snapshot.hasUsableNetwork) {
-            recoveryRequested = true
-            stopRevision = snapshot.revision
-            mode = Mode.STOPPING_FOR_RECOVERY
-            return listOf(
-                RealVpnRecoveryCommand.CancelDebounce,
-                RealVpnRecoveryCommand.StopSession,
-            )
+            return stopForUnavailableNetwork()
         }
-        if (snapshot.revision != startRevision) {
-            recoveryRequested = true
-            mode = Mode.DEBOUNCING_RESTART
-            return listOf(RealVpnRecoveryCommand.ScheduleDebounce(snapshot.revision))
+        if (!sessionUnderlayIsUsable(snapshot)) {
+            return scheduleRestart()
         }
         recoveryRequested = false
         mode = Mode.ACTIVE
@@ -119,44 +121,54 @@ internal class RealVpnRecoveryCoordinator {
         }
         currentSnapshot = snapshot
         return when (mode) {
-            Mode.ACTIVE, Mode.DEBOUNCING_RESTART -> {
-                recoveryRequested = true
-                if (snapshot.hasUsableNetwork) {
-                    mode = Mode.DEBOUNCING_RESTART
-                    listOf(RealVpnRecoveryCommand.ScheduleDebounce(snapshot.revision))
-                } else {
-                    stopRevision = snapshot.revision
-                    mode = Mode.STOPPING_FOR_RECOVERY
-                    listOf(
-                        RealVpnRecoveryCommand.CancelDebounce,
-                        RealVpnRecoveryCommand.StopSession,
-                    )
-                }
+            Mode.ACTIVE -> when {
+                !snapshot.hasUsableNetwork -> stopForUnavailableNetwork()
+                !sessionUnderlayIsUsable(snapshot) -> scheduleRestart()
+                else -> emptyList()
             }
-            Mode.WAITING_FOR_NETWORK, Mode.DEBOUNCING_START -> {
-                recoveryRequested = true
+            Mode.DEBOUNCING_RESTART -> when {
+                !snapshot.hasUsableNetwork -> stopForUnavailableNetwork()
+                sessionUnderlayIsUsable(snapshot) -> {
+                    recoveryRequested = false
+                    mode = Mode.ACTIVE
+                    cancelDebounce()
+                }
+                else -> emptyList()
+            }
+            Mode.WAITING_FOR_NETWORK -> {
                 if (snapshot.hasUsableNetwork) {
+                    recoveryRequested = true
                     mode = Mode.DEBOUNCING_START
-                    listOf(RealVpnRecoveryCommand.ScheduleDebounce(snapshot.revision))
+                    listOf(scheduleDebounce())
                 } else {
-                    mode = Mode.WAITING_FOR_NETWORK
-                    listOf(RealVpnRecoveryCommand.CancelDebounce)
+                    emptyList()
                 }
             }
-            // A change during stop/start is compared with startRevision after
-            // the operation completes, producing at most one follow-up cycle.
+            Mode.DEBOUNCING_START -> {
+                if (!snapshot.hasUsableNetwork) {
+                    mode = Mode.WAITING_FOR_NETWORK
+                    cancelDebounce()
+                } else {
+                    emptyList()
+                }
+            }
             Mode.STARTING, Mode.STOPPING_FOR_RECOVERY, Mode.IDLE -> emptyList()
             Mode.TERMINATED -> emptyList()
         }
     }
 
-    fun onDebounceElapsed(revision: Long): List<RealVpnRecoveryCommand> {
-        if (mode == Mode.TERMINATED || revision != currentSnapshot.revision) {
+    fun onDebounceElapsed(generation: Long): List<RealVpnRecoveryCommand> {
+        if (mode == Mode.TERMINATED || generation != pendingDebounceGeneration) {
             return emptyList()
         }
+        pendingDebounceGeneration = null
         return when (mode) {
             Mode.DEBOUNCING_RESTART -> {
-                stopRevision = currentSnapshot.revision
+                if (currentSnapshot.hasUsableNetwork && sessionUnderlayIsUsable(currentSnapshot)) {
+                    recoveryRequested = false
+                    mode = Mode.ACTIVE
+                    return emptyList()
+                }
                 mode = Mode.STOPPING_FOR_RECOVERY
                 listOf(RealVpnRecoveryCommand.StopSession)
             }
@@ -178,13 +190,9 @@ internal class RealVpnRecoveryCoordinator {
         currentSnapshot = snapshot
         recoveryRequested = true
         return if (snapshot.hasUsableNetwork) {
-            if (snapshot.revision != stopRevision) {
-                mode = Mode.DEBOUNCING_START
-                listOf(RealVpnRecoveryCommand.ScheduleDebounce(snapshot.revision))
-            } else {
-                mode = Mode.STARTING
-                listOf(RealVpnRecoveryCommand.StartSession)
-            }
+            sessionUnderlay = null
+            mode = Mode.STARTING
+            listOf(RealVpnRecoveryCommand.StartSession)
         } else {
             mode = Mode.WAITING_FOR_NETWORK
             emptyList()
@@ -193,7 +201,41 @@ internal class RealVpnRecoveryCoordinator {
 
     fun terminate(): List<RealVpnRecoveryCommand> {
         recoveryRequested = false
+        sessionUnderlay = null
+        pendingDebounceGeneration = null
         mode = Mode.TERMINATED
+        return listOf(RealVpnRecoveryCommand.CancelDebounce)
+    }
+
+    private fun sessionUnderlayIsUsable(snapshot: UnderlayNetworkSnapshot): Boolean =
+        sessionUnderlay?.let { underlay ->
+            snapshot.networks.any { it == underlay && !it.suspended }
+        } ?: true
+
+    private fun scheduleRestart(): List<RealVpnRecoveryCommand> {
+        recoveryRequested = true
+        mode = Mode.DEBOUNCING_RESTART
+        return listOf(scheduleDebounce())
+    }
+
+    private fun stopForUnavailableNetwork(): List<RealVpnRecoveryCommand> {
+        recoveryRequested = true
+        pendingDebounceGeneration = null
+        mode = Mode.STOPPING_FOR_RECOVERY
+        return listOf(
+            RealVpnRecoveryCommand.CancelDebounce,
+            RealVpnRecoveryCommand.StopSession,
+        )
+    }
+
+    private fun scheduleDebounce(): RealVpnRecoveryCommand.ScheduleDebounce {
+        val generation = ++nextDebounceGeneration
+        pendingDebounceGeneration = generation
+        return RealVpnRecoveryCommand.ScheduleDebounce(generation)
+    }
+
+    private fun cancelDebounce(): List<RealVpnRecoveryCommand> {
+        pendingDebounceGeneration = null
         return listOf(RealVpnRecoveryCommand.CancelDebounce)
     }
 }

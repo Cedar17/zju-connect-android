@@ -124,7 +124,12 @@ class RealVpnLifecycleTest {
             networks = setOf(UnderlayNetworkFingerprint(networkHandle = 100)),
         )
         assertTrue(lifecycle.beginSession())
-        assertTrue(coordinator.beginSession(initial))
+        assertTrue(
+            coordinator.beginSession(
+                snapshot = initial,
+                activeUnderlay = UnderlayNetworkFingerprint(networkHandle = 100),
+            ),
+        )
         coordinator.onSessionActive(initial)
         coordinator.onNetworkChanged(
             UnderlayNetworkSnapshot(
