@@ -66,10 +66,11 @@ internal class AlwaysOnRestoreRetryPolicy {
 }
 
 /**
- * Service-owned session handoff. It deliberately knows nothing about saved
- * passwords or UI prompts: a prompt, including an expired SID, becomes a
- * waiting result and preserves the encrypted client context for the foreground
- * Activity. The Go flow is then cancelled without background credential use.
+ * Service-owned background session handoff for Always-on and Quick Settings.
+ * It deliberately knows nothing about saved passwords or UI prompts: a prompt,
+ * including an expired SID, becomes a waiting result and preserves the encrypted
+ * client context for the foreground Activity. The Go flow is then cancelled
+ * without background credential use.
  */
 internal class AlwaysOnSessionRestorer(
     private val sessionStore: AuthSessionStore,

@@ -27,9 +27,10 @@ The Go bridge remains deliberately small and does not become a mobility layer.
 The client targets the current Zhejiang University aTrust service only. It does
 not include the legacy EasyConnect protocol, WebVPN, multiple accounts, port
 forwarding, a local proxy, or complex advanced configuration. The production
-`RealVpnService` supports both the normal explicit app start and optional
-Android Always-on VPN selected by the user in system settings. The app never
-enables Always-on or lockdown by itself.
+`RealVpnService` supports the normal explicit app start, a user-added Quick
+Settings tile, and optional Android Always-on VPN selected by the user in
+system settings. The app never enables Always-on or lockdown by itself, and it
+does not add the tile automatically.
 
 Keep the Android app as a single `app` module. Split out Go or API modules only
 when the binding build or ownership boundary creates a demonstrated need.
@@ -37,25 +38,25 @@ when the binding build or ownership boundary creates a demonstrated need.
 ## Layers
 
 ```text
-Compose UI
-    ↓
-ConnectionViewModel / ConnectionUiState / StateFlow
-    ├── AuthSessionStore / AccountStore
-    ├── GoCoreBridge → zju-connect
-    └── ConnectionEffect
-            ↓
-       MainActivity
-            ↓
-       RealVpnService / RealVpnStateStore
-            ├── manual start (MainActivity)
-            └── Always-on start (Android system)
-            ↓
-       Android TUN + Go data plane
+Compose UI → ConnectionViewModel → MainActivity
+    │                                │
+    │                                └── manual start
+    └── AuthSessionStore / AccountStore
+
+Quick Settings Tile ── tile start / foreground handoff ──┐
+Android system ─────── Always-on start ──────────────────┤
+                                                         ↓
+                                      RealVpnService / RealVpnStateStore
+                                                         ↓
+                                           Android TUN + Go data plane
 ```
 
 - UI renders state and collects user input; it does not directly control TUN or Go objects.
 - The ViewModel owns one explicit connection state machine.
 - `MainActivity` handles Android VPN permission and service dispatch from one-shot effects.
+- The active Quick Settings tile maps the service state to one direct action.
+  A small process-local entry lease only serializes Tile and Activity starts;
+  it does not duplicate authentication or VPN lifecycle state.
 - Session and remembered-account storage are private Android implementation details owned by the ViewModel flow.
 - `VpnService` owns the Android TUN, foreground service, and socket protection boundary.
 - The Go core owns aTrust protocol handling, resource parsing, routing, and the data plane.
@@ -136,13 +137,16 @@ last server-confirmed username in private preferences for display and login
 prefill; resources and username are refreshed after session validation, and
 connection-scoped identifiers are regenerated.
 
-The optional Always-on path performs this same validation from
-`RealVpnService`, without starting an Activity or reading saved passwords. A
-missing or invalid snapshot, or a server response that requires interactive
-authentication, leaves the service in a low-CPU foreground waiting state. Its
-notification opens the existing Activity login flow; a successful foreground
-authentication then wakes the waiting service through the existing explicit
-start effect.
+The optional Always-on and Quick Settings paths perform session validation from
+`RealVpnService`, without starting an Activity or reading saved passwords. The
+tile first reuses an in-process authenticated result when available, then falls
+back only to the encrypted session snapshot. A missing or invalid snapshot, a
+stale session, or any server response requiring interactive authentication
+leaves the service in a low-CPU foreground waiting state. Its notification and
+the tile open the existing Activity, where the user continues through the
+existing connection entry and explicit start effect. Only a structurally invalid
+session clears the encrypted snapshot; network and TLS failures retain it for
+retry.
 
 Required security properties:
 
@@ -171,10 +175,11 @@ Once Android creates a TUN, the Go core's control/data connection to the VPN ser
 `RealVpnService` installs this boundary after Android establishes the TUN. Its
 validation must cover Wi-Fi and mobile networks, network switching, failed
 connection cleanup, and release of the TUN file descriptor, sockets, goroutines,
-and foreground service. A manual start remains `START_NOT_STICKY`; an Android
-Always-on start is identified by the absence of the app's explicit start marker
-and uses `START_STICKY` only as a lifecycle aid. Android system VPN settings,
-not an app preference, remain the source of truth for Always-on.
+and foreground service. Manual and Quick Settings starts carry distinct
+explicit markers and remain `START_NOT_STICKY`; an Android Always-on start is
+identified by the absence of an app marker and uses `START_STICKY` only as a
+lifecycle aid. Android system VPN settings, not an app preference, remain the
+source of truth for Always-on.
 
 The service observes all non-VPN networks with Internet capability instead of
 the application's default network, which can be the VPN itself. An opaque,
@@ -279,10 +284,14 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
   is requested only when the user first reaches the real VPN start step; a
   denial does not block the VPN attempt.
 - In manual mode, `MainActivity` sends an explicit `manual` start marker and the
-  service is `START_NOT_STICKY`. In Always-on mode, Android sends an unmarked
-  VPN service start, the service restores the encrypted session itself, and a
-  `需要打开 App 完成登录` notification opens the same Activity only when
-  interactive authentication is required.
+  service is `START_NOT_STICKY`. A user-added Quick Settings tile sends its
+  own explicit marker, checks VPN authorization before starting the foreground
+  service, and performs only reusable-result or encrypted-session recovery in
+  the background. If foreground input is required, its one-shot notification
+  and inactive tile open the same Activity; the user continues from the existing
+  connection entry instead of treating that action as a disconnect. In
+  Always-on mode, Android sends an unmarked VPN service start and uses the same
+  session-only recovery boundary.
 - While Always-on owns the VPN, the existing disconnect action remains visible
   but is guarded by `VpnService.isAlwaysOn()`. It leaves the connection running
   and posts a one-shot notification that opens Android VPN settings; after the

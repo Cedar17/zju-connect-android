@@ -5,7 +5,7 @@ import org.junit.Test
 
 class RealVpnStartPolicyTest {
     @Test
-    fun onlyExplicitManualMarkerIsManual() {
+    fun onlyExplicitAppMarkersSelectManualOrTileStarts() {
         assertEquals(
             RealVpnStartMode.MANUAL,
             classifyRealVpnStart(
@@ -15,11 +15,27 @@ class RealVpnStartPolicyTest {
             ),
         )
         assertEquals(
+            RealVpnStartMode.TILE,
+            classifyRealVpnStart(
+                action = "manual-action",
+                manualStartAction = "manual-action",
+                startSource = REAL_VPN_START_SOURCE_TILE,
+            ),
+        )
+        assertEquals(
             RealVpnStartMode.ALWAYS_ON,
             classifyRealVpnStart(
                 action = "android.net.VpnService",
                 manualStartAction = "manual-action",
                 startSource = null,
+            ),
+        )
+        assertEquals(
+            RealVpnStartMode.ALWAYS_ON,
+            classifyRealVpnStart(
+                action = "android.net.VpnService",
+                manualStartAction = "manual-action",
+                startSource = REAL_VPN_START_SOURCE_TILE,
             ),
         )
         assertEquals(
@@ -37,6 +53,10 @@ class RealVpnStartPolicyTest {
         assertEquals(
             RealVpnRestartPolicy.START_NOT_STICKY,
             realVpnRestartPolicy(RealVpnStartMode.MANUAL),
+        )
+        assertEquals(
+            RealVpnRestartPolicy.START_NOT_STICKY,
+            realVpnRestartPolicy(RealVpnStartMode.TILE),
         )
         assertEquals(
             RealVpnRestartPolicy.START_STICKY,

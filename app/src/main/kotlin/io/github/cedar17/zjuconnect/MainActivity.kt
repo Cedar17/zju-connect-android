@@ -155,6 +155,8 @@ class MainActivity : ComponentActivity() {
                         REAL_VPN_START_SOURCE_MANUAL,
                     ),
             )
+        }.onSuccess {
+            connectionViewModel.onVpnServiceStartDispatched(effect)
         }.onFailure { error ->
             Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
             connectionViewModel.onVpnServiceDispatchFailed(effect)

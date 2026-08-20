@@ -2,6 +2,14 @@
 <resources>
     <string name="app_name">ZJU Connect</string>
     <string name="app_tagline">Zhejiang University VPN</string>
+    <string name="quick_settings_tile_label">ZJU Connect</string>
+    <string name="quick_settings_tile_status_disconnected">Not connected</string>
+    <string name="quick_settings_tile_status_connecting">Connecting…</string>
+    <string name="quick_settings_tile_status_connected">Connected</string>
+    <string name="quick_settings_tile_status_recovering">Recovering connection</string>
+    <string name="quick_settings_tile_status_open_app">Open app to finish login</string>
+    <string name="quick_settings_tile_status_always_on">Disable Always-on VPN in system settings</string>
+    <string name="quick_settings_tile_content_description">%1$s: %2$s</string>
     <string name="menu_overflow">More actions</string>
     <string name="menu_diagnostics">Diagnostics</string>
     <string name="menu_about">About</string>

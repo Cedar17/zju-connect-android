@@ -59,6 +59,8 @@ internal class RealVpnLifecycle {
         return true
     }
 
+    fun hasActiveSession(): Boolean = sessionStarted
+
     fun acceptsProgress(): Boolean = terminalFailure == null && !userStopRequested
 
     fun terminalOutcome(): RealVpnTerminalOutcome? = when {
