@@ -93,9 +93,9 @@ presentations.
 
 The gomobile surface should expose simple types, `String`, `ByteArray`, and callback interfaces. Complex control-plane objects should use versioned JSON at the boundary; packet data must continue to use file descriptors rather than JSON serialization.
 
-The control-plane bridge now implements `GetBuildInfo`, `EmitBuildInfo`,
-credential-free `FetchAuthInfo`, and a single in-memory aTrust authentication
-flow. Its exact contract and security limits are authoritative in
+The control-plane bridge implements a single in-memory aTrust authentication
+flow and the real VPN lifecycle. Its exact contract and security limits are
+authoritative in
 [gomobile-bridge.md](gomobile-bridge.md).
 
 The implemented authentication interface is:
@@ -137,16 +137,11 @@ last server-confirmed username in private preferences for display and login
 prefill; resources and username are refreshed after session validation, and
 connection-scoped identifiers are regenerated.
 
-The optional Always-on and Quick Settings paths perform session validation from
-`RealVpnService`, without starting an Activity or reading saved passwords. The
-tile first reuses an in-process authenticated result when available, then falls
-back only to the encrypted session snapshot. A missing or invalid snapshot, a
-stale session, or any server response requiring interactive authentication
-leaves the service in a low-CPU foreground waiting state. Its notification and
-the tile open the existing Activity, where the user continues through the
-existing connection entry and explicit start effect. Only a structurally invalid
-session clears the encrypted snapshot; network and TLS failures retain it for
-retry.
+`RealVpnService` owns service-side session validation for the optional Always-on
+and Quick Settings paths without starting an Activity or reading saved
+passwords. The recovery ladder, invalidation rules (including
+`sessionExpired != invalidSession`), and foreground handoff are authoritative
+in [authentication-recovery.md](authentication-recovery.md).
 
 Required security properties:
 
@@ -166,7 +161,6 @@ Required security properties:
   bounded event history, environment header, and counters. Consecutive equal
   display states (including counter-only changes) are grouped only in the
   display projection; persisted records remain unchanged for public problem reports.
-- When a snapshot is invalid or expired, fall back clearly to re-authentication instead of silently retrying forever.
 
 ## VpnService and socket protection
 
@@ -261,13 +255,9 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
 
 ### Encrypted session recovery
 
-- Successful authentication exports only cookies plus the exact device ID.
-- Android encrypts the snapshot with Keystore-backed AES-GCM in
-  `noBackupFilesDir`.
-- Recovery validates the snapshot with the server and refreshes username and
-  resources after process death.
-- Explicitly invalid or locally unreadable snapshots are deleted; transient
-  network and TLS failures retain the snapshot for a later retry.
+The snapshot composition and Android storage boundary are described above. The
+recovery ladder, invalidation rules, and credential policy are authoritative in
+[authentication-recovery.md](authentication-recovery.md).
 
 ### Daily connection experience
 
@@ -285,14 +275,11 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
   Android 13+ notification permission is requested from a user-initiated VPN
   start after the service is dispatched; a denial does not block the VPN attempt.
 - In manual mode, `MainActivity` sends an explicit `manual` start marker and the
-  service is `START_NOT_STICKY`. A user-added Quick Settings tile sends its
-  own explicit marker, checks VPN authorization before starting the foreground
-  service, and performs only reusable-result or encrypted-session recovery in
-  the background. If foreground input is required, its one-shot notification
-  and inactive tile open the same Activity; the user continues from the existing
-  connection entry instead of treating that action as a disconnect. In
-  Always-on mode, Android sends an unmarked VPN service start and uses the same
-  session-only recovery boundary.
+  service is `START_NOT_STICKY`. A user-added Quick Settings tile sends its own
+  marker and verifies VPN authorization before dispatching the foreground
+  service. Its recovery and foreground-handoff semantics, together with the
+  equivalent boundary for Android's unmarked Always-on start, are defined in
+  [authentication-recovery.md](authentication-recovery.md).
 - While Always-on owns the VPN, the existing disconnect action remains visible
   but is guarded by `VpnService.isAlwaysOn()`. It leaves the connection running
   and posts a one-shot notification that opens Android VPN settings; after the
@@ -304,9 +291,6 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
 - `auth/psw` with the `Radius` login domain is selected automatically when
   advertised. Another method is selected only when it is the sole method the
   mobile bridge supports.
-- Definite session invalidation deletes only the encrypted authentication
-  snapshot and retains the remembered username. Cancellation and disconnection
-  retain the snapshot; passwords and verification input are never persisted.
 - The Material 3 home surface provides one context-sensitive primary action, a
   disconnected-only account switch, IME-safe authentication forms, and a
   non-exported redacted diagnostics Activity. The Activity stores at most 100

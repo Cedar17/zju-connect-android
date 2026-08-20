@@ -12,7 +12,7 @@ The authoritative machine-readable record is
 | Input | Pinned value |
 | --- | --- |
 | zju-connect upstream base | **1b6ad138737547782dcfc09def2a950738a67188** |
-| Android real-VPN fork | **Cedar17/zju-connect** at **1a736c5355b8a2bcafee7827ccf147ea38ab0a32** |
+| Android real-VPN fork | **Cedar17/zju-connect** at **7b54744a2d27bcaac1f75543ba9be582ae661754** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -62,19 +62,10 @@ tests above.
 ## Kotlin–Go contract
 
 The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
-`ByteArray`, and one callback interface:
-
-- GetBuildInfo() String returns a deterministic versioned JSON event.
-- EmitBuildInfo(BridgeListener) delivers that event through onEvent(String).
-- FetchAuthInfo(requestJson) String calls the upstream public
-  atrust.GetAuthInfoList API and returns a redacted JSON response. Its request
-  is limited to server and port; it never accepts credentials.
-
-[GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt) owns
-the generated Java API. Build-info and credential-free discovery functions
-remain validation surfaces, but the production home screen neither calls nor
-displays them. `ConnectionViewModel` uses the same wrapper for the single active
-authentication flow, beginning network work only after the user taps Connect.
+`ByteArray`, and one callback interface. [GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt)
+owns the generated Java API. `ConnectionViewModel` uses the wrapper for the
+single active authentication flow, beginning network work only after the user
+taps Connect.
 
 All event payloads contain schemaVersion and type. Future callback events must
 preserve this versioned JSON boundary and must not contain passwords, cookies,
@@ -108,9 +99,9 @@ those bytes with Android Keystore AES-GCM and atomically stores the envelope in
 `noBackupFilesDir`. After a process restart, the user's Connect action asks Go
 to validate the restored cookies with the server and refetch username and
 resources before recreating the in-memory result. App startup itself does not
-read or validate the snapshot. An explicit session expiry clears only the
-cookie snapshot and continues with the same device identity; transport and TLS
-failures retain cookies and saved credentials for retry.
+read or validate the snapshot. The recovery ladder and invalidation policy,
+including `sessionExpired != invalidSession`, are authoritative in
+[authentication-recovery.md](authentication-recovery.md).
 
 The bridge keeps a separate copy of a complete authenticated result while the
 process remains alive. `CancelAuthentication()` cancels only the active
@@ -123,18 +114,14 @@ result still held by the active flow.
 starts the app in Always-on mode without an Activity. The service reads only the
 Keystore-protected snapshot and the current device identity, zeroes the
 decrypted bytes after the bridge call, and never supplies `SavedCredentialStore`
-data. If the restored session reaches a password, phone, SMS, token, or CAPTCHA
-prompt, the service cancels that background flow and stays in a low-CPU
-foreground waiting state until the user opens the existing Activity and
-completes authentication.
+data. The foreground and service-side recovery boundary is defined in
+[authentication-recovery.md](authentication-recovery.md).
 
 Android derives a stable 32-character aTrust device ID from its app-scoped
 `ANDROID_ID` and supplies it to both start and resume calls. A restored legacy
-snapshot cannot replace that identity. When cookies expire, the same flow
-returns to the server-advertised authentication method instead of discarding
-the device identity. Password credentials are encrypted separately with a
-dedicated Android Keystore AES-GCM key, are written only after successful
-authentication, and are removed when the server explicitly rejects them.
+snapshot cannot replace that identity. Saved-credential storage, reuse, and
+invalidation rules are defined in
+[authentication-recovery.md](authentication-recovery.md).
 
 The bridge exposes `PrepareRealVpn()`, which prepares an
 `atrust.Client` and returns a versioned event containing only the assigned IPv4

@@ -60,7 +60,7 @@
             </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Issue #11 real ZJU aTrust VPN validation" />
+                android:value="Maintains the ZJU aTrust VPN connection" />
         </service>
     </application>
 
