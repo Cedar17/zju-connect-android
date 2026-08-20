@@ -644,9 +644,21 @@ class RealVpnService : VpnService() {
                 REAL_VPN_LOG_TAG,
                 "prepared state=${config.state} code=${config.code.ifBlank { "none" }} " +
                     "stage=${config.stage.ifBlank { "none" }} cause=${config.cause.ifBlank { "none" }} " +
-                    "routes=${config.routes.size} mtu=${config.mtu}",
+                    "durationMs=${config.durationMillis} routes=${config.routes.size} mtu=${config.mtu}",
             )
+            if (!acceptsStartProgress()) {
+                goCoreBridge.stopRealVpn()
+                return
+            }
             if (config.state == "error") {
+                RedactedDiagnostics.recordVpnServiceState(
+                    context = applicationContext,
+                    state = "error",
+                    code = config.code.ifBlank { "vpnSetupFailed" },
+                    stage = config.stage,
+                    cause = config.cause,
+                    durationMillis = config.durationMillis,
+                )
                 throw RealVpnStartFailure(
                     code = config.code.ifBlank { "vpnSetupFailed" },
                     stage = config.stage.ifBlank { "prepare" },

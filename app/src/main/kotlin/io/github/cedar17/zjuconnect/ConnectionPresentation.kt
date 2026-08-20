@@ -93,7 +93,7 @@ internal fun connectionErrorText(code: String): UiText = UiText.Resource(
     "vpnStopDispatchFailed" -> R.string.error_vpn_stop_dispatch
     "vpnStartDispatchFailed" -> R.string.error_vpn_start_dispatch
     "networkMonitorUnavailable" -> R.string.error_network_monitor
-    "vpnSetupFailed", "vpnAddressUnavailable", "vpnRoutesUnavailable" -> R.string.error_vpn_setup
+    "vpnSetupFailed", "vpnPrepareTimeout", "vpnAddressUnavailable", "vpnRoutesUnavailable" -> R.string.error_vpn_setup
     "tunEstablishFailed", "tunEstablishTimeout", "tunInitializationFailed" -> R.string.error_tun_establish
     "vpnTunReadFailed", "vpnTunWriteFailed", "vpnServerReadFailed", "vpnServerWriteFailed", "stopTimeout" ->
         R.string.error_vpn_interrupted

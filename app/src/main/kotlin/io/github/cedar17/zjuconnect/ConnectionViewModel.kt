@@ -290,6 +290,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingCredential = null
         savedCredentialAttempted = true
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
+        bridge.cancelPreparingRealVpn()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         invalidateReusableAuthentication()
@@ -327,6 +328,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
+        bridge.cancelPreparingRealVpn()
         bridge.discardPreparedRealVpn()
 
         // A normal disconnect is the boundary for the next one-tap reconnect,
@@ -426,6 +428,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
+        bridge.cancelPreparingRealVpn()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
@@ -525,6 +528,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 code = code,
                 diagnosticStage = config.stage,
                 diagnosticCause = config.cause,
+                diagnosticDurationMillis = config.durationMillis,
             )
         }
     }
@@ -1154,6 +1158,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         attempts.invalidate()
         pendingVpnPermission = null
+        bridge.cancelPreparingRealVpn()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         pendingCredential = null

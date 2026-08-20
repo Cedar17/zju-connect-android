@@ -1,5 +1,6 @@
 package io.github.cedar17.zjuconnect
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
@@ -124,6 +125,8 @@ class QuickSettingsTileService : TileService() {
         requestRefresh(this)
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
+    @Suppress("DEPRECATION")
     private fun openAppForConnection() {
         val intent = Intent(this, MainActivity::class.java).addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -140,7 +143,6 @@ class QuickSettingsTileService : TileService() {
                 )
                 startActivityAndCollapse(pendingIntent)
             } else {
-                @Suppress("DEPRECATION")
                 startActivityAndCollapse(intent)
             }
         }.onFailure { error ->

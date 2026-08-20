@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,8 @@ import (
 )
 
 const (
-	realVpnMTU = int(tun.MTU)
+	realVpnMTU            = int(tun.MTU)
+	realVpnPrepareTimeout = 30 * time.Second
 	// l3Conn implements io.Reader by copying one complete server packet into
 	// the caller's buffer. A buffer limited to the interface MTU silently
 	// truncates any larger packet because that reader cannot report
@@ -36,18 +38,19 @@ type realVpnRoute struct {
 }
 
 type realVpnPreparedEvent struct {
-	SchemaVersion int                         `json:"schemaVersion"`
-	Type          string                      `json:"type"`
-	State         string                      `json:"state"`
-	Code          string                      `json:"code,omitempty"`
-	Stage         string                      `json:"stage,omitempty"`
-	Cause         string                      `json:"cause,omitempty"`
-	Message       string                      `json:"message"`
-	Address       string                      `json:"address,omitempty"`
-	MTU           int                         `json:"mtu,omitempty"`
-	Routes        []realVpnRoute              `json:"routes,omitempty"`
-	Diagnostics   *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
-	Packet        *realVpnPacketMetadata      `json:"packet,omitempty"`
+	SchemaVersion  int                         `json:"schemaVersion"`
+	Type           string                      `json:"type"`
+	State          string                      `json:"state"`
+	Code           string                      `json:"code,omitempty"`
+	Stage          string                      `json:"stage,omitempty"`
+	Cause          string                      `json:"cause,omitempty"`
+	DurationMillis int64                       `json:"durationMs,omitempty"`
+	Message        string                      `json:"message"`
+	Address        string                      `json:"address,omitempty"`
+	MTU            int                         `json:"mtu,omitempty"`
+	Routes         []realVpnRoute              `json:"routes,omitempty"`
+	Diagnostics    *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
+	Packet         *realVpnPacketMetadata      `json:"packet,omitempty"`
 }
 
 type realVpnSession struct {
@@ -70,8 +73,9 @@ type preparedRealVpn struct {
 
 var realVpnState struct {
 	sync.Mutex
-	prepared *preparedRealVpn
-	active   *realVpnSession
+	prepared    *preparedRealVpn
+	active      *realVpnSession
+	preparation realVpnPreparationOwnership
 }
 
 // PrepareRealVpn consumes the reusable authenticated result held in process
@@ -88,15 +92,11 @@ func PrepareRealVpn() string {
 	if realVpnState.prepared != nil {
 		prepared := realVpnState.prepared
 		realVpnState.Unlock()
-		return marshal(realVpnPreparedEvent{
-			SchemaVersion: schemaVersion,
-			Type:          "vpnPrepared",
-			State:         "prepared",
-			Message:       "Real VPN is ready for Android TUN setup",
-			Address:       prepared.address,
-			MTU:           realVpnMTU,
-			Routes:        append([]realVpnRoute(nil), prepared.routes...),
-		})
+		return realVpnPreparedResponse(prepared, "", 0)
+	}
+	if realVpnState.preparation.current != nil {
+		realVpnState.Unlock()
+		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN preparation is already active")
 	}
 	realVpnState.Unlock()
 
@@ -113,7 +113,31 @@ func PrepareRealVpn() string {
 
 	vpnClient := atrust.NewClient(result.Username, result.SID, clientAuthData.DeviceID, "")
 	vpnClient.SetNodeTLSConfig(zjuAtrustNodeTLSConfig())
-	if _, err := vpnClient.Setup(
+	owner := newRealVpnPreparationOwner(vpnClient.Close)
+	realVpnState.Lock()
+	if realVpnState.active != nil {
+		realVpnState.Unlock()
+		owner.cancel()
+		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN session is already active")
+	}
+	if realVpnState.prepared != nil {
+		prepared := realVpnState.prepared
+		realVpnState.Unlock()
+		owner.cancel()
+		return realVpnPreparedResponse(prepared, "", 0)
+	}
+	if !realVpnState.preparation.begin(owner) {
+		realVpnState.Unlock()
+		owner.cancel()
+		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN preparation is already active")
+	}
+	realVpnState.Unlock()
+
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), realVpnPrepareTimeout)
+	defer cancelSetup()
+	vpnClient.SetSetupStageReporter(owner.setStage)
+	if _, err := vpnClient.SetupContext(
+		setupCtx,
 		zjuAtrustServer,
 		zjuAtrustServerPort,
 		"", "", "", "", "", "", "", "", "",
@@ -123,25 +147,29 @@ func PrepareRealVpn() string {
 		"",
 		false,
 	); err != nil {
-		vpnClient.Close()
-		cause := classifyRealVpnSetupError(err)
-		return realVpnErrorWithCause(
-			"vpnSetupFailed",
-			"prepare.setup",
-			cause,
-			"Unable to prepare the authenticated aTrust VPN",
-		)
+		return realVpnSetupFailure(owner, setupCtx, err)
+	}
+	if err := setupCtx.Err(); err != nil {
+		return realVpnSetupFailure(owner, setupCtx, err)
 	}
 
 	address, err := vpnClient.IP()
 	if err != nil || address == nil || address.To4() == nil {
-		vpnClient.Close()
-		return realVpnErrorAt("vpnAddressUnavailable", "prepare.address", "The aTrust server did not provide a VPN address")
+		return realVpnPreparationFailure(
+			owner,
+			"vpnAddressUnavailable",
+			"",
+			"The aTrust server did not provide a VPN address",
+		)
 	}
 	ipSet, err := vpnClient.IPSet()
 	if err != nil || ipSet == nil {
-		vpnClient.Close()
-		return realVpnErrorAt("vpnRoutesUnavailable", "prepare.routes", "The aTrust server did not provide VPN routes")
+		return realVpnPreparationFailure(
+			owner,
+			"vpnRoutesUnavailable",
+			"",
+			"The aTrust server did not provide VPN routes",
+		)
 	}
 
 	routes := make([]realVpnRoute, 0)
@@ -155,8 +183,12 @@ func PrepareRealVpn() string {
 		})
 	}
 	if len(routes) == 0 {
-		vpnClient.Close()
-		return realVpnErrorAt("vpnRoutesUnavailable", "prepare.routes", "The aTrust server returned no IPv4 VPN routes")
+		return realVpnPreparationFailure(
+			owner,
+			"vpnRoutesUnavailable",
+			"",
+			"The aTrust server returned no IPv4 VPN routes",
+		)
 	}
 
 	prepared := &preparedRealVpn{
@@ -164,24 +196,89 @@ func PrepareRealVpn() string {
 		address: address.To4().String(),
 		routes:  routes,
 	}
+	stage, durationMillis := owner.snapshot()
 	realVpnState.Lock()
-	if realVpnState.active != nil || realVpnState.prepared != nil {
-		realVpnState.Unlock()
-		vpnClient.Close()
-		return realVpnErrorAt("alreadyRunning", "prepare.lifecycle", "A real VPN session is already active")
+	owned := realVpnState.preparation.complete(owner)
+	canPublish := owned && realVpnState.active == nil && realVpnState.prepared == nil
+	if canPublish {
+		realVpnState.prepared = prepared
 	}
-	realVpnState.prepared = prepared
 	realVpnState.Unlock()
+	if !canPublish {
+		owner.cancel()
+		return realVpnPreparationCancelled(stage, durationMillis)
+	}
 
+	return realVpnPreparedResponse(prepared, stage, durationMillis)
+}
+
+func realVpnPreparedResponse(prepared *preparedRealVpn, stage string, durationMillis int64) string {
 	return marshal(realVpnPreparedEvent{
-		SchemaVersion: schemaVersion,
-		Type:          "vpnPrepared",
-		State:         "prepared",
-		Message:       "Real VPN is ready for Android TUN setup",
-		Address:       prepared.address,
-		MTU:           realVpnMTU,
-		Routes:        append([]realVpnRoute(nil), prepared.routes...),
+		SchemaVersion:  schemaVersion,
+		Type:           "vpnPrepared",
+		State:          "prepared",
+		Stage:          stage,
+		DurationMillis: durationMillis,
+		Message:        "Real VPN is ready for Android TUN setup",
+		Address:        prepared.address,
+		MTU:            realVpnMTU,
+		Routes:         append([]realVpnRoute(nil), prepared.routes...),
 	})
+}
+
+func releaseRealVpnPreparation(owner *realVpnPreparationOwner) bool {
+	realVpnState.Lock()
+	owned := realVpnState.preparation.complete(owner)
+	realVpnState.Unlock()
+	return owned
+}
+
+func realVpnSetupFailure(owner *realVpnPreparationOwner, setupCtx context.Context, err error) string {
+	stage, durationMillis := owner.snapshot()
+	owned := releaseRealVpnPreparation(owner)
+	owner.cancel()
+	if !owned || errors.Is(setupCtx.Err(), context.Canceled) {
+		return realVpnPreparationCancelled(stage, durationMillis)
+	}
+	if errors.Is(setupCtx.Err(), context.DeadlineExceeded) {
+		return realVpnPreparationEvent(
+			"error",
+			"vpnPrepareTimeout",
+			stage,
+			"timeout",
+			durationMillis,
+			"Timed out while preparing the authenticated aTrust VPN",
+		)
+	}
+	return realVpnPreparationEvent(
+		"error",
+		"vpnSetupFailed",
+		stage,
+		classifyRealVpnSetupError(err),
+		durationMillis,
+		"Unable to prepare the authenticated aTrust VPN",
+	)
+}
+
+func realVpnPreparationFailure(owner *realVpnPreparationOwner, code, cause, message string) string {
+	stage, durationMillis := owner.snapshot()
+	owned := releaseRealVpnPreparation(owner)
+	owner.cancel()
+	if !owned {
+		return realVpnPreparationCancelled(stage, durationMillis)
+	}
+	return realVpnPreparationEvent("error", code, stage, cause, durationMillis, message)
+}
+
+func realVpnPreparationCancelled(stage string, durationMillis int64) string {
+	return realVpnPreparationEvent(
+		"cancelled",
+		"vpnPrepareCancelled",
+		stage,
+		"cancelled",
+		durationMillis,
+		"Real VPN preparation was cancelled",
+	)
 }
 
 // StartRealVpn attaches an Android TUN to the prepared authenticated client.
@@ -259,15 +356,27 @@ func DiscardPreparedRealVpn() {
 	}
 }
 
-// StopRealVpn is idempotent and releases the prepared client, TUN, underlay
-// sockets, and L3 reader goroutines.
+// CancelPreparingRealVpn releases an in-flight pre-TUN client without
+// changing the semantics of DiscardPreparedRealVpn for already prepared
+// clients. It is used by foreground UI attempts that have no service yet.
+func CancelPreparingRealVpn() {
+	realVpnState.Lock()
+	owner := realVpnState.preparation.cancel()
+	realVpnState.Unlock()
+	owner.cancel()
+}
+
+// StopRealVpn is idempotent and releases an in-flight preparation, prepared
+// client, TUN, underlay sockets, and L3 reader goroutines.
 func StopRealVpn() {
 	realVpnState.Lock()
+	owner := realVpnState.preparation.cancel()
 	prepared := realVpnState.prepared
 	realVpnState.prepared = nil
 	session := realVpnState.active
 	realVpnState.Unlock()
 
+	owner.cancel()
 	if prepared != nil {
 		prepared.client.Close()
 	}
@@ -604,8 +713,10 @@ func classifyRealVpnSetupError(err error) string {
 	}
 	errText := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(errText, "timeout") || strings.Contains(errText, "deadline exceeded"):
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(errText, "timeout") || strings.Contains(errText, "deadline exceeded"):
 		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
 	case strings.Contains(errText, "no route to host") ||
 		strings.Contains(errText, "network is unreachable") ||
 		strings.Contains(errText, "connection refused") ||

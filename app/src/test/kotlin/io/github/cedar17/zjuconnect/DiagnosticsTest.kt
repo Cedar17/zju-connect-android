@@ -7,6 +7,24 @@ import org.junit.Test
 
 class DiagnosticsTest {
     @Test
+    fun preparationTimeoutKeepsOnlyItsFixedStageAndDuration() {
+        val event = RedactedDiagnosticEvent(
+            timestampMillis = 42,
+            category = "connection",
+            state = "error",
+            code = "vpnPrepareTimeout",
+            stage = "prepare.nodeProbe",
+            cause = "timeout",
+            durationMillis = 30_000,
+        ).redacted()
+
+        assertEquals("vpnPrepareTimeout", event.code)
+        assertEquals("prepare.nodeProbe", event.stage)
+        assertEquals("timeout", event.cause)
+        assertEquals(30_000L, event.durationMillis)
+    }
+
+    @Test
     fun ringBufferRetainsOnlyTheMostRecentOneHundredEvents() {
         val ring = RedactedDiagnosticRingBuffer()
 
