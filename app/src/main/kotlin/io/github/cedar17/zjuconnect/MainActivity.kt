@@ -79,16 +79,10 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
-private const val NOTIFICATION_PREFERENCES = "notification_preferences"
-private const val NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
 private val CONNECTION_STATUS_CARD_HEIGHT = 96.dp
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
-    private val notificationPreferences by lazy {
-        getSharedPreferences(NOTIFICATION_PREFERENCES, MODE_PRIVATE)
-    }
-    private var pendingVpnStart: ConnectionEffect.StartVpnService? = null
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -97,9 +91,7 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            val pendingStart = pendingVpnStart
-            pendingVpnStart = null
-            pendingStart?.let(::startVpnService)
+            RealVpnService.refreshNotificationIfRunning()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,27 +117,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
-        if (!connectionViewModel.canHandleEffect(effect)) return
-        if (shouldRequestNotificationPermission()) {
-            pendingVpnStart = effect
-            notificationPreferences.edit()
-                .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
-                .apply()
+        if (startVpnService(effect) && shouldRequestNotificationPermission()) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            startVpnService(effect)
         }
     }
 
     private fun shouldRequestNotificationPermission(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED &&
-            !notificationPreferences.getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)
+            PackageManager.PERMISSION_GRANTED
 
-    private fun startVpnService(effect: ConnectionEffect.StartVpnService) {
-        if (!connectionViewModel.canHandleEffect(effect)) return
-        runCatching {
+    private fun startVpnService(effect: ConnectionEffect.StartVpnService): Boolean {
+        if (!connectionViewModel.canHandleEffect(effect)) return false
+        return runCatching {
             ContextCompat.startForegroundService(
                 this,
                 Intent(this, RealVpnService::class.java)
@@ -160,7 +144,7 @@ class MainActivity : ComponentActivity() {
         }.onFailure { error ->
             Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
             connectionViewModel.onVpnServiceDispatchFailed(effect)
-        }
+        }.isSuccess
     }
 
     private fun handleConnectionEffect(effect: ConnectionEffect) {

@@ -13,6 +13,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.annotation.StringRes
 import io.github.cedar17.zjuconnect.gocore.core.SocketProtector
 import java.net.Inet4Address
 import java.util.concurrent.ExecutorService
@@ -25,7 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-private const val REAL_VPN_CHANNEL = "zju_connect_real_vpn"
+private const val VPN_STATUS_CHANNEL = "zju_connect_vpn_status"
+private const val LEGACY_REAL_VPN_CHANNEL = "zju_connect_real_vpn"
 private const val REAL_VPN_NOTIFICATION_ID = 1002
 private const val ALWAYS_ON_GUIDANCE_NOTIFICATION_ID = 1003
 private const val REAL_VPN_LOG_TAG = "ZjuConnectRealVpn"
@@ -64,7 +66,8 @@ class RealVpnService : VpnService() {
     private lateinit var underlayNetworkMonitor: UnderlayNetworkMonitor
     private var underlayMonitorFailure: Throwable? = null
     @Volatile
-    private var currentNotificationKind = RealVpnNotificationKind.CONNECTING
+    @StringRes
+    private var currentNotificationTextRes = R.string.notification_connecting
     private var recoveryDebounce: ScheduledFuture<*>? = null
     private var l3RecoveryActive = false
     private var publishedRecoveryPresentation = RealVpnRecoveryPresentation.NONE
@@ -135,7 +138,7 @@ class RealVpnService : VpnService() {
                 RealVpnStateStore.update(event)
                 QuickSettingsTileService.requestRefresh(applicationContext)
                 if (event.state == "active") {
-                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
+                    startForegroundCompat(R.string.notification_connected)
                     val commands = synchronized(recoveryLock) {
                         l3RecoveryActive = false
                         recoveryCoordinator.onSessionActive(underlaySnapshot())
@@ -262,7 +265,7 @@ class RealVpnService : VpnService() {
             return
         }
         alwaysOnWaiting = true
-        startForegroundCompat(RealVpnNotificationKind.CONNECTING)
+        startForegroundCompat(R.string.notification_connecting)
         setStatus("preparing")
         scheduleAlwaysOnRestoreForNetwork(
             snapshot = underlaySnapshot(),
@@ -286,7 +289,7 @@ class RealVpnService : VpnService() {
 
         try {
             claimServiceEntry(ConnectionEntryOwner.TILE_SERVICE)
-            startForegroundCompat(RealVpnNotificationKind.CONNECTING)
+            startForegroundCompat(R.string.notification_connecting)
             setStatus("preparing")
             if (goCoreBridge.hasReusableAuthenticatedResult()) {
                 startPreparedInternal(RealVpnStartMode.TILE)
@@ -453,13 +456,13 @@ class RealVpnService : VpnService() {
     private fun enterAlwaysOnWaitingForNetwork() {
         alwaysOnWaiting = true
         setStatus("waitingForNetwork")
-        updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
+        startForegroundCompat(R.string.notification_waiting_network)
     }
 
     private fun enterAlwaysOnWaitingForAuthentication() {
         alwaysOnWaiting = true
         setStatus("waitingForAuthentication")
-        updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION)
+        startForegroundCompat(R.string.notification_waiting_authentication)
     }
 
     private fun handleTileSessionRestoreResult(result: AlwaysOnSessionRestoreResult) {
@@ -492,7 +495,7 @@ class RealVpnService : VpnService() {
                 }
                 releaseServiceEntry(ConnectionEntryOwner.TILE_SERVICE)
                 setStatus("waitingForAuthentication")
-                updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION)
+                startForegroundCompat(R.string.notification_waiting_authentication)
             }
             AlwaysOnSessionRestoreOutcome.TransientFailure -> {
                 releaseServiceEntry(ConnectionEntryOwner.TILE_SERVICE)
@@ -631,9 +634,9 @@ class RealVpnService : VpnService() {
             }
             startForegroundCompat(
                 if (recovering) {
-                    RealVpnNotificationKind.RECOVERING
+                    R.string.notification_recovering
                 } else {
-                    RealVpnNotificationKind.CONNECTING
+                    R.string.notification_connecting
                 },
             )
             val config = goCoreBridge.prepareRealVpn()
@@ -896,16 +899,16 @@ class RealVpnService : VpnService() {
             RealVpnRecoveryPresentation.NONE -> {
                 if (previous != RealVpnRecoveryPresentation.NONE && acceptsStartProgress()) {
                     setStatus("active")
-                    updateForegroundNotification(RealVpnNotificationKind.CONNECTED)
+                    startForegroundCompat(R.string.notification_connected)
                 }
             }
             RealVpnRecoveryPresentation.RECOVERING -> {
                 setStatus("recovering")
-                updateForegroundNotification(RealVpnNotificationKind.RECOVERING)
+                startForegroundCompat(R.string.notification_recovering)
             }
             RealVpnRecoveryPresentation.WAITING_FOR_NETWORK -> {
                 setStatus("waitingForNetwork")
-                updateForegroundNotification(RealVpnNotificationKind.WAITING_FOR_NETWORK)
+                startForegroundCompat(R.string.notification_waiting_network)
             }
         }
     }
@@ -976,7 +979,7 @@ class RealVpnService : VpnService() {
 
     private fun publishAlwaysOnDisconnectBlocked() {
         setStatus("alwaysOnDisconnectBlocked")
-        val notification = Notification.Builder(this, REAL_VPN_CHANNEL)
+        val notification = Notification.Builder(this, VPN_STATUS_CHANNEL)
             .setContentTitle(getString(R.string.notification_always_on_title))
             .setContentText(getString(R.string.notification_always_on_text))
             .setSmallIcon(R.drawable.ic_stat_cedar)
@@ -1002,24 +1005,22 @@ class RealVpnService : VpnService() {
     ) : IllegalStateException(message)
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                REAL_VPN_CHANNEL,
-                getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = getString(R.string.notification_channel_description)
-                setSound(null, null)
-                enableVibration(false)
-                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-            }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            VPN_STATUS_CHANNEL,
+            getString(R.string.notification_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = getString(R.string.notification_channel_description)
+        }
+        getSystemService(NotificationManager::class.java).apply {
+            createNotificationChannel(channel)
+            deleteNotificationChannel(LEGACY_REAL_VPN_CHANNEL)
         }
     }
 
-    private fun startForegroundCompat(kind: RealVpnNotificationKind) {
-        currentNotificationKind = kind
-        val notification = buildVpnNotification(kind)
+    private fun startForegroundCompat(@StringRes textRes: Int) {
+        currentNotificationTextRes = textRes
+        val notification = buildVpnNotification(textRes)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -1032,10 +1033,10 @@ class RealVpnService : VpnService() {
         }
     }
 
-    private fun buildVpnNotification(kind: RealVpnNotificationKind): Notification {
-        val builder = Notification.Builder(this, REAL_VPN_CHANNEL)
+    private fun buildVpnNotification(@StringRes textRes: Int): Notification {
+        val builder = Notification.Builder(this, VPN_STATUS_CHANNEL)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(realVpnNotificationTextRes(kind)))
+            .setContentText(getString(textRes))
             .setSmallIcon(R.drawable.ic_stat_cedar)
             .setContentIntent(openAppPendingIntent())
             .setOngoing(true)
@@ -1062,13 +1063,9 @@ class RealVpnService : VpnService() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun updateForegroundNotification(kind: RealVpnNotificationKind) {
-        startForegroundCompat(kind)
-    }
-
     private fun refreshCurrentNotification() {
         if (synchronized(stateLock) { lifecycle.acceptsProgress() }) {
-            updateForegroundNotification(currentNotificationKind)
+            startForegroundCompat(currentNotificationTextRes)
         }
     }
 
@@ -1077,12 +1074,7 @@ class RealVpnService : VpnService() {
             getSystemService(NotificationManager::class.java)
                 .cancel(ALWAYS_ON_GUIDANCE_NOTIFICATION_ID)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 }
 
