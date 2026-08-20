@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 )
 
@@ -26,9 +25,6 @@ const (
 	schemaVersion                       = 1
 	authenticationSnapshotSchemaVersion = 1
 	maxAuthenticationSnapshotSize       = 64 * 1024
-	upstreamCommit                      = "1b6ad138737547782dcfc09def2a950738a67188"
-	forkCommit                          = "1a736c5355b8a2bcafee7827ccf147ea38ab0a32"
-	upstreamModule                      = "github.com/mythologyli/zju-connect"
 	zjuAtrustServer                     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort                 = 443
 )
@@ -37,19 +33,6 @@ const (
 // so later Go changes do not leak complex Go types across the mobile boundary.
 type BridgeListener interface {
 	OnEvent(eventJSON string)
-}
-
-type event struct {
-	SchemaVersion  int    `json:"schemaVersion"`
-	Type           string `json:"type"`
-	Message        string `json:"message"`
-	UpstreamModule string `json:"upstreamModule"`
-	UpstreamCommit string `json:"upstreamCommit"`
-}
-
-type authInfoRequest struct {
-	Server string `json:"server"`
-	Port   int    `json:"port"`
 }
 
 type authInfoResponse struct {
@@ -192,53 +175,6 @@ func currentAuthenticatedResult() (auth.InteractiveResult, bool) {
 		return auth.InteractiveResult{}, false
 	}
 	return flow.Result()
-}
-
-// GetBuildInfo returns a deterministic structured result. It is the smoke-test
-// API: calling it proves that Kotlin entered Go code linked with the pinned
-// zju-connect source without starting a network connection.
-func GetBuildInfo() string {
-	return marshal(event{
-		SchemaVersion:  schemaVersion,
-		Type:           "bridgeReady",
-		Message:        "Go bridge response received",
-		UpstreamModule: upstreamModule,
-		UpstreamCommit: upstreamCommit,
-	})
-}
-
-// EmitBuildInfo verifies the gomobile callback direction using the same stable
-// event schema as future asynchronous authentication events.
-func EmitBuildInfo(listener BridgeListener) {
-	if listener != nil {
-		listener.OnEvent(GetBuildInfo())
-	}
-}
-
-// FetchAuthInfo obtains the server's advertised aTrust authentication methods.
-// It deliberately accepts no credentials and returns only a redacted structured
-// result. Password, SMS, CAPTCHA, session persistence, TUN, and socket
-// protection are exposed only through their dedicated lifecycle APIs.
-func FetchAuthInfo(requestJSON string) string {
-	var request authInfoRequest
-	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
-		return authError("invalidRequest", "Authentication-info request is not valid JSON")
-	}
-	if strings.TrimSpace(request.Server) == "" || request.Port < 1 || request.Port > 65535 {
-		return authError("invalidRequest", "Authentication-info request requires a server and valid port")
-	}
-
-	methods, err := atrust.GetAuthInfoList(request.Server, request.Port, "", false)
-	if err != nil {
-		return authError("authInfoUnavailable", "Unable to retrieve authentication methods")
-	}
-
-	return marshal(authInfoResponse{
-		SchemaVersion: schemaVersion,
-		Type:          "authInfo",
-		Message:       "Authentication methods retrieved",
-		AuthMethods:   methods,
-	})
 }
 
 // StartAuthentication begins a single in-memory aTrust authentication session.

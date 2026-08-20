@@ -62,19 +62,10 @@ tests above.
 ## Kotlin–Go contract
 
 The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
-`ByteArray`, and one callback interface:
-
-- GetBuildInfo() String returns a deterministic versioned JSON event.
-- EmitBuildInfo(BridgeListener) delivers that event through onEvent(String).
-- FetchAuthInfo(requestJson) String calls the upstream public
-  atrust.GetAuthInfoList API and returns a redacted JSON response. Its request
-  is limited to server and port; it never accepts credentials.
-
-[GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt) owns
-the generated Java API. Build-info and credential-free discovery functions
-remain validation surfaces, but the production home screen neither calls nor
-displays them. `ConnectionViewModel` uses the same wrapper for the single active
-authentication flow, beginning network work only after the user taps Connect.
+`ByteArray`, and one callback interface. [GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt)
+owns the generated Java API. `ConnectionViewModel` uses the wrapper for the
+single active authentication flow, beginning network work only after the user
+taps Connect.
 
 All event payloads contain schemaVersion and type. Future callback events must
 preserve this versioned JSON boundary and must not contain passwords, cookies,

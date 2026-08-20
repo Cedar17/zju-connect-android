@@ -70,7 +70,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation(files("libs/zju-connect-core.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

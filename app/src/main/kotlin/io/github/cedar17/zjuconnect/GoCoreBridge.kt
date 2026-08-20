@@ -13,18 +13,6 @@ import org.json.JSONObject
  * keeps future authentication and VPN lifecycle changes isolated here.
  */
 class GoCoreBridge {
-    fun readBuildInfo(): GoBridgeEvent = parseEvent(Core.getBuildInfo())
-
-    fun emitBuildInfo(onEvent: (GoBridgeEvent) -> Unit) {
-        Core.emitBuildInfo(
-            object : BridgeListener {
-                override fun onEvent(eventJson: String) {
-                    onEvent(parseEvent(eventJson))
-                }
-            },
-        )
-    }
-
     fun prepareRealVpn(): GoVpnPrepared = parseVpnPrepared(Core.prepareRealVpn())
 
     fun startRealVpn(
@@ -94,21 +82,6 @@ class GoCoreBridge {
                 onEvent(parseAuthEvent(eventJson))
             }
         }
-
-    private fun parseEvent(eventJson: String): GoBridgeEvent = runCatching {
-        val event = JSONObject(eventJson)
-        GoBridgeEvent(
-            type = event.optString("type", "unknown"),
-            upstreamCommit = event.optString("upstreamCommit", "unknown"),
-            message = event.optString("message", "Go bridge response received"),
-        )
-    }.getOrElse {
-        GoBridgeEvent(
-            type = "invalidEvent",
-            upstreamCommit = "unknown",
-            message = "Go bridge returned an invalid structured event",
-        )
-    }
 
     private fun parseVpnPrepared(eventJson: String): GoVpnPrepared = runCatching {
         val event = JSONObject(eventJson)
@@ -261,15 +234,6 @@ class GoCoreBridge {
         const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
         const val ZJU_ATRUST_PORT = 443
     }
-}
-
-data class GoBridgeEvent(
-    val type: String,
-    val upstreamCommit: String,
-    val message: String,
-) {
-    val displayText: String
-        get() = "${message} (upstream ${upstreamCommit.take(12)})"
 }
 
 data class GoVpnRoute(

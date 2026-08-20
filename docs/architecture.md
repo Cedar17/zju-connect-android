@@ -93,9 +93,9 @@ presentations.
 
 The gomobile surface should expose simple types, `String`, `ByteArray`, and callback interfaces. Complex control-plane objects should use versioned JSON at the boundary; packet data must continue to use file descriptors rather than JSON serialization.
 
-The control-plane bridge now implements `GetBuildInfo`, `EmitBuildInfo`,
-credential-free `FetchAuthInfo`, and a single in-memory aTrust authentication
-flow. Its exact contract and security limits are authoritative in
+The control-plane bridge implements a single in-memory aTrust authentication
+flow and the real VPN lifecycle. Its exact contract and security limits are
+authoritative in
 [gomobile-bridge.md](gomobile-bridge.md).
 
 The implemented authentication interface is:
