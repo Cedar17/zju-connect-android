@@ -189,6 +189,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private var pendingCredential: PendingCredential? = null
     private var savedCredentialAttempted = false
     private var pendingVpnPermission: PendingVpnPermission? = null
+    private var connectionEntryReserved = false
 
     init {
         // Observing an in-process service state is local-only. Session files and
@@ -242,6 +243,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Opens a foreground connection flow without treating an active VPN as a toggle. */
+    fun onQuickSettingsConnectRequested() {
+        when (_state.value.phase) {
+            ConnectionPhase.DISCONNECTED -> beginConnection()
+            ConnectionPhase.ERROR -> {
+                if (_state.value.internalCode != "accountSwitchClearFailed") {
+                    beginConnection()
+                }
+            }
+            else -> Unit
+        }
+    }
+
     fun updateUsername(username: String) = _state.update { it.copy(username = username) }
 
     fun updatePassword(password: String) = _state.update { it.copy(password = password) }
@@ -281,6 +295,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun beginAccountSwitch() {
+        RealVpnService.prepareForForegroundAuthentication()
+        if (!reserveConnectionEntry()) return
         val attemptId = attempts.invalidate()
         pendingVpnPermission = null
         restoringStoredSession = false
@@ -343,12 +359,14 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             effectChannel.trySend(ConnectionEffect.StopVpnService(stopAttemptId))
         } else {
             RealVpnStateStore.reset()
+            QuickSettingsTileService.requestRefresh(appContext)
             _state.update {
                 it.withoutSensitiveInputs().copy(
                     phase = ConnectionPhase.DISCONNECTED,
                     internalCode = "",
                 )
             }
+            releaseConnectionEntry()
         }
     }
 
@@ -408,12 +426,13 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun beginConnection() {
+        RealVpnService.prepareForForegroundAuthentication()
+        if (!reserveConnectionEntry()) return
         val attemptId = attempts.begin()
         pendingVpnPermission = null
         restoringStoredSession = false
         pendingCredential = null
         savedCredentialAttempted = false
-        RealVpnService.prepareForForegroundAuthentication()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
@@ -422,6 +441,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         RealVpnStateStore.reset()
+        QuickSettingsTileService.requestRefresh(appContext)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.RESTORING_SESSION,
@@ -768,6 +788,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             )
                         }
                     }
+                    releaseConnectionEntry()
                 }
                 "authenticationStarted", "retryStarted" -> {
                     if (_state.value.phase !in AUTH_INPUT_PHASES) {
@@ -1035,6 +1056,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             internalCode = "",
                         )
                     }
+                    forgetConnectionEntryReservation()
                 }
             }
             "error" -> {
@@ -1047,7 +1069,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             cause = AuthenticationInvalidationCause.REUSABLE_RESULT_REJECTED,
                         )
                     }
-                    showError(vpnState.code)
+                    forgetConnectionEntryReservation()
+                    showError(vpnState.code, releaseConnectionEntry = false)
                 }
             }
         }
@@ -1118,6 +1141,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         diagnosticStage: String = "",
         diagnosticCause: String = "",
         diagnosticDurationMillis: Long = 0,
+        releaseConnectionEntry: Boolean = true,
     ) {
         pendingVpnPermission = null
         pendingCredential = null
@@ -1130,6 +1154,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 diagnosticDurationMillis = diagnosticDurationMillis,
             )
         }
+        if (releaseConnectionEntry) {
+            releaseConnectionEntry()
+        }
     }
 
     override fun onCleared() {
@@ -1138,7 +1165,36 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         pendingCredential = null
+        if (_state.value.phase !in VPN_PHASES) {
+            releaseConnectionEntry()
+        } else {
+            forgetConnectionEntryReservation()
+        }
         super.onCleared()
+    }
+
+    private fun reserveConnectionEntry(): Boolean {
+        if (
+            connectionEntryReserved ||
+                !ConnectionEntryArbiter.tryBegin(ConnectionEntryOwner.ACTIVITY)
+        ) {
+            return false
+        }
+        connectionEntryReserved = true
+        QuickSettingsTileService.requestRefresh(appContext)
+        return true
+    }
+
+    private fun releaseConnectionEntry() {
+        if (!connectionEntryReserved) return
+        connectionEntryReserved = false
+        ConnectionEntryArbiter.finish(ConnectionEntryOwner.ACTIVITY)
+        QuickSettingsTileService.requestRefresh(appContext)
+    }
+
+    /** The service has taken responsibility for releasing the process-wide lease. */
+    private fun forgetConnectionEntryReservation() {
+        connectionEntryReserved = false
     }
 }
 

@@ -117,11 +117,25 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        consumeQuickSettingsConnectIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeQuickSettingsConnectIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
         RealVpnService.refreshNotificationIfRunning()
+    }
+
+    private fun consumeQuickSettingsConnectIntent(launchIntent: Intent?) {
+        if (launchIntent?.action != ACTION_CONNECT_FROM_QUICK_SETTINGS) return
+        // Avoid replaying the one-shot request after a configuration change.
+        launchIntent.action = null
+        connectionViewModel.onQuickSettingsConnectRequested()
     }
 
     private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
