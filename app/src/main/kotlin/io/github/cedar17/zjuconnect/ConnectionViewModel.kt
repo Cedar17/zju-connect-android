@@ -243,19 +243,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    /** Opens a foreground connection flow without treating an active VPN as a toggle. */
-    fun onQuickSettingsConnectRequested() {
-        when (_state.value.phase) {
-            ConnectionPhase.DISCONNECTED -> beginConnection()
-            ConnectionPhase.ERROR -> {
-                if (_state.value.internalCode != "accountSwitchClearFailed") {
-                    beginConnection()
-                }
-            }
-            else -> Unit
-        }
-    }
-
     fun updateUsername(username: String) = _state.update { it.copy(username = username) }
 
     fun updatePassword(password: String) = _state.update { it.copy(password = password) }
@@ -409,6 +396,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             is ConnectionEffect.StopVpnService ->
                 _state.value.phase == ConnectionPhase.DISCONNECTING
         }
+    }
+
+    /** The successful foreground-service dispatch transfers lease cleanup to the service. */
+    fun onVpnServiceStartDispatched(effect: ConnectionEffect.StartVpnService) {
+        if (!attempts.accepts(effect.attemptId)) return
+        connectionEntryReserved = false
     }
 
     fun onVpnServiceDispatchFailed(effect: ConnectionEffect) {
@@ -1056,8 +1049,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             internalCode = "",
                         )
                     }
-                    forgetConnectionEntryReservation()
                 }
+                releaseConnectionEntry()
             }
             "error" -> {
                 if (_state.value.phase !in AUTHENTICATION_PHASES) {
@@ -1069,8 +1062,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             cause = AuthenticationInvalidationCause.REUSABLE_RESULT_REJECTED,
                         )
                     }
-                    forgetConnectionEntryReservation()
-                    showError(vpnState.code, releaseConnectionEntry = false)
+                    showError(vpnState.code)
                 }
             }
         }
@@ -1165,11 +1157,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
         pendingCredential = null
-        if (_state.value.phase !in VPN_PHASES) {
-            releaseConnectionEntry()
-        } else {
-            forgetConnectionEntryReservation()
-        }
+        releaseConnectionEntry()
         super.onCleared()
     }
 
@@ -1192,10 +1180,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         QuickSettingsTileService.requestRefresh(appContext)
     }
 
-    /** The service has taken responsibility for releasing the process-wide lease. */
-    private fun forgetConnectionEntryReservation() {
-        connectionEntryReserved = false
-    }
 }
 
 private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy(

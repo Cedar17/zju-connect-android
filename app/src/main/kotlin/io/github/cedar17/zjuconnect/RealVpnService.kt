@@ -1023,7 +1023,7 @@ class RealVpnService : VpnService() {
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(realVpnNotificationTextRes(kind)))
             .setSmallIcon(R.drawable.ic_stat_cedar)
-            .setContentIntent(openAppPendingIntent(kind))
+            .setContentIntent(openAppPendingIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -1032,22 +1032,14 @@ class RealVpnService : VpnService() {
         return builder.build()
     }
 
-    private fun openAppPendingIntent(kind: RealVpnNotificationKind): PendingIntent {
-        val openTileAuthentication =
-            kind == RealVpnNotificationKind.WAITING_FOR_AUTHENTICATION &&
-                synchronized(alwaysOnRestoreLock) { tileWaitingForAuthentication }
-        return PendingIntent.getActivity(
-            this,
-            if (openTileAuthentication) QUICK_SETTINGS_CONNECT_REQUEST_CODE else 0,
-            Intent(this, MainActivity::class.java).apply {
-                if (openTileAuthentication) {
-                    action = ACTION_CONNECT_FROM_QUICK_SETTINGS
-                }
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
+    private fun openAppPendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     private fun openVpnSettingsPendingIntent(): PendingIntent = PendingIntent.getActivity(
         this,

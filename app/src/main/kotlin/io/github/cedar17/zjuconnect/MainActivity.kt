@@ -117,25 +117,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        consumeQuickSettingsConnectIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        consumeQuickSettingsConnectIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
         RealVpnService.refreshNotificationIfRunning()
-    }
-
-    private fun consumeQuickSettingsConnectIntent(launchIntent: Intent?) {
-        if (launchIntent?.action != ACTION_CONNECT_FROM_QUICK_SETTINGS) return
-        // Avoid replaying the one-shot request after a configuration change.
-        launchIntent.action = null
-        connectionViewModel.onQuickSettingsConnectRequested()
     }
 
     private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
@@ -169,6 +155,8 @@ class MainActivity : ComponentActivity() {
                         REAL_VPN_START_SOURCE_MANUAL,
                     ),
             )
+        }.onSuccess {
+            connectionViewModel.onVpnServiceStartDispatched(effect)
         }.onFailure { error ->
             Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start VPN service", error)
             connectionViewModel.onVpnServiceDispatchFailed(effect)

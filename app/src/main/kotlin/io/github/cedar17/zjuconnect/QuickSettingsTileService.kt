@@ -12,11 +12,7 @@ import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.content.ContextCompat
 
-internal const val ACTION_CONNECT_FROM_QUICK_SETTINGS =
-    "io.github.cedar17.zjuconnect.action.CONNECT_FROM_QUICK_SETTINGS"
-
 private const val QUICK_SETTINGS_TILE_LOG_TAG = "ZjuConnectTile"
-internal const val QUICK_SETTINGS_CONNECT_REQUEST_CODE = 1004
 
 /**
  * Direct VPN controls for a user-added Quick Settings tile. The service never
@@ -66,7 +62,7 @@ class QuickSettingsTileService : TileService() {
         when (currentPresentation().action) {
             QuickSettingsTileAction.CONNECT -> beginTileConnection()
             QuickSettingsTileAction.DISCONNECT -> requestDisconnect()
-            QuickSettingsTileAction.OPEN_APP -> openAppForQuickSettingsConnect()
+            QuickSettingsTileAction.OPEN_APP -> openAppForConnection()
             QuickSettingsTileAction.NONE -> renderTile()
         }
     }
@@ -95,7 +91,7 @@ class QuickSettingsTileService : TileService() {
             ConnectionEntryArbiter.finish(ConnectionEntryOwner.TILE_SERVICE)
             renderTile()
             requestRefresh(this)
-            openAppForQuickSettingsConnect()
+            openAppForConnection()
             return
         }
 
@@ -133,19 +129,17 @@ class QuickSettingsTileService : TileService() {
         requestRefresh(this)
     }
 
-    private fun openAppForQuickSettingsConnect() {
-        val intent = Intent(this, MainActivity::class.java)
-            .setAction(ACTION_CONNECT_FROM_QUICK_SETTINGS)
-            .addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
-            )
+    private fun openAppForConnection() {
+        val intent = Intent(this, MainActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP,
+        )
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 val pendingIntent = PendingIntent.getActivity(
                     this,
-                    QUICK_SETTINGS_CONNECT_REQUEST_CODE,
+                    0,
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )

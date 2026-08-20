@@ -143,10 +143,10 @@ tile first reuses an in-process authenticated result when available, then falls
 back only to the encrypted session snapshot. A missing or invalid snapshot, a
 stale session, or any server response requiring interactive authentication
 leaves the service in a low-CPU foreground waiting state. Its notification and
-the tile open the existing Activity login flow; foreground authentication then
-continues through the existing explicit start effect. Only a structurally
-invalid session clears the encrypted snapshot; network and TLS failures retain
-it for retry.
+the tile open the existing Activity, where the user continues through the
+existing connection entry and explicit start effect. Only a structurally invalid
+session clears the encrypted snapshot; network and TLS failures retain it for
+retry.
 
 Required security properties:
 
@@ -288,9 +288,10 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
   own explicit marker, checks VPN authorization before starting the foreground
   service, and performs only reusable-result or encrypted-session recovery in
   the background. If foreground input is required, its one-shot notification
-  and inactive tile open the same Activity connection flow instead of treating
-  that action as a disconnect. In Always-on mode, Android sends an unmarked VPN
-  service start and uses the same session-only recovery boundary.
+  and inactive tile open the same Activity; the user continues from the existing
+  connection entry instead of treating that action as a disconnect. In
+  Always-on mode, Android sends an unmarked VPN service start and uses the same
+  session-only recovery boundary.
 - While Always-on owns the VPN, the existing disconnect action remains visible
   but is guarded by `VpnService.isAlwaysOn()`. It leaves the connection running
   and posts a one-shot notification that opens Android VPN settings; after the
