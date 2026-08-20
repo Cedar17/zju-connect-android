@@ -277,12 +277,13 @@ cellular data has also been manually verified on a OnePlus Ace 3V.
 - The Connect action owns one closed Android state machine that restores a
   session, requests only required authentication input, obtains Android VPN
   permission, and starts the real VPN.
-- `RealVpnService` owns one low-importance, silent, ongoing notification for
-  the lifetime of the connection. It starts as `正在连接`, updates through
-  recovery states and `已连接`, opens `MainActivity` when tapped, and is
-  removed when the service stops or fails. Android 13+ notification permission
-  is requested only when the user first reaches the real VPN start step; a
-  denial does not block the VPN attempt.
+- `RealVpnService` owns one ongoing VPN status notification for the lifetime of
+  the connection. The app declares a normal/default notification channel; the
+  user controls its final alert behavior in Android system settings. It starts
+  as `正在连接`, updates through recovery states and `已连接`, opens
+  `MainActivity` when tapped, and is removed when the service stops or fails.
+  Android 13+ notification permission is requested from a user-initiated VPN
+  start after the service is dispatched; a denial does not block the VPN attempt.
 - In manual mode, `MainActivity` sends an explicit `manual` start marker and the
   service is `START_NOT_STICKY`. A user-added Quick Settings tile sends its
   own explicit marker, checks VPN authorization before starting the foreground
