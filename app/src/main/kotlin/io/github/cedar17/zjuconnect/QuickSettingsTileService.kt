@@ -33,11 +33,6 @@ class QuickSettingsTileService : TileService() {
         }
     }
 
-    override fun onTileAdded() {
-        super.onTileAdded()
-        renderTile()
-    }
-
     override fun onStartListening() {
         super.onStartListening()
         renderTile()
