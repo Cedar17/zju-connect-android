@@ -25,19 +25,22 @@ android {
         }
     }
 
+    val releaseKeystore = file("release.jks")
     signingConfigs {
-        create("release") {
-            storeFile = file("release.jks")
-            storeType = "JKS"
-            storePassword = "release"
-            keyAlias = "release"
-            keyPassword = "release"
+        if (releaseKeystore.isFile) {
+            create("release") {
+                storeFile = releaseKeystore
+                storeType = "JKS"
+                storePassword = "release"
+                keyAlias = "release"
+                keyPassword = "release"
+            }
         }
     }
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 
