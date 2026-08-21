@@ -1,3 +1,6 @@
 * text=auto
 gradlew text eol=lf
 *.bat text eol=crlf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
