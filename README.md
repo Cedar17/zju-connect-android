@@ -6,70 +6,88 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 
 ## 项目定位
 
-浙江大学现有 Android 校外访问方案依赖深信服 aTrust。实际使用中可能需要重复完成账号密码、短信或图形验证码认证，同时闭源客户端的权限、本地数据和后台行为难以独立审计。
+`zju-connect-android` 是面向浙江大学 aTrust / RVPN 的非官方开源 Android 客户端，通过 Android `VpnService` 建立系统级校网访问隧道。
 
-`zju-connect-android` 希望提供一个更轻量、透明的开源替代方案。
+项目以 [zju-connect](https://github.com/Mythologyli/zju-connect) 作为 aTrust 协议与网络核心，目标是在服务端会话仍然有效时尽可能做到一键连接、一键断开；需要重新认证时，再清晰地完成服务端要求的认证流程。
 
-项目以 [zju-connect](https://github.com/Mythologyli/zju-connect) 作为 aTrust 协议与网络核心，通过 Android `VpnService` 建立系统级校网访问隧道。
+项目专注于浙江大学 Android 校外访问，不是通用 VPN、代理或网络工具箱。
 
-目标很简单：
+当前版本处于 **Public Beta** 阶段，支持 **Android 10+**，首版仅提供 **arm64-v8a** APK。
 
-> 在服务端会话仍然有效时，尽可能做到一键连接、一键断开；需要重新认证时，再清晰地完成服务端要求的认证流程。
+## 功能
 
-项目专注于浙江大学 aTrust Android 接入，而不是通用 VPN、代理或网络工具箱。
+- 浙江大学新版 aTrust / RVPN 登录与 VPN 连接；
+- 密码、短信、动态口令和图形验证码等交互式认证流程；
+- 加密保存并安全恢复登录 session，减少重复认证；
+- 一键连接与断开，并提供基础连接状态和错误反馈；
+- Wi-Fi、蜂窝和以太网等底层网络变化后的 VPN 自动恢复；
+- 用户手动添加的 Android Quick Settings VPN 磁贴；
+- 可选的 Android Always-on VPN；
+- 应用内脱敏 Diagnostics，可复制适合公开问题报告的诊断信息。
 
-## 目标体验
+## 下载与快速开始
 
-日常连接流程为：
+1. 从 [GitHub Releases](https://github.com/Cedar17/zju-connect-android/releases) 下载最新 `zju-connect-v*-arm64-v8a.apk`。
+2. 在 Android 设备上安装 APK。
+3. 打开 **ZJU Connect**，点击连接。
+4. 首次连接时允许 Android 创建 VPN 连接。
+5. 按服务端要求完成账号密码、短信、动态口令或图形验证码认证。
+6. 连接成功后即可访问校内资源。
+7. 后续服务端 session 仍有效时，通常可以直接恢复认证并一键连接。
 
-```text
-打开应用
-   ↓
-点击连接
-   ↓
-恢复已有会话
-   ├─ 进程内认证结果仍可复用 → 直接建立 VPN
-   ├─ 持久化会话有效 → 建立 VPN
-   └─ 需要重新认证 → 完成必要认证
-                    ↓
-                建立 VPN
-                    ↓
-               访问校内资源
-                    ↓
-                 一键断开
-```
+如果服务端要求重新认证，应用会回到对应认证流程，不会绕过验证码或其他安全要求。
 
-也可以在 Android 系统 VPN 设置中由用户主动选择 ZJU Connect 开启
-Always-on。该模式由 Android 负责在开机或服务进程重启时启动 VPN 服务，
-服务只恢复加密登录 session；需要账号、密码、短信或验证码时，会通过常驻
-通知让用户打开现有登录页面。应用不会默认开启 Always-on 或 Lockdown。
+## Quick Settings 与 Always-on
 
-也可以在系统快捷设置的编辑面板中手动添加 “ZJU Connect” 磁贴。已有
-可复用认证结果或有效加密 session 时，短按可直接连接或断开，不会启动主界面；
-缺少 VPN 授权或需要账号、密码、短信、动态口令、图形验证码等前台交互时，
-磁贴会收起面板并打开应用，由用户按现有连接入口继续流程。后台路径不会读取或提交保存密码，
-也不会自动处理任何验证挑战。
+### Quick Settings
 
-产品侧重点：
+可以在 Android 快捷设置编辑面板中手动添加 **ZJU Connect** 磁贴。
 
-* 明确展示未连接、连接中、需要认证、已连接和失败状态；
-* 会话有效时尽可能避免重复认证；
-* 服务端要求重新认证时自然进入对应流程；
-* 提供明确的一键连接与断开入口；
-* 支持用户手动添加的系统快捷设置 VPN 磁贴；
-* 将底层网络错误转换为用户可以理解和处理的反馈；
-* 尽量减少权限、后台行为和本地持久化状态。
+已有可复用认证结果或有效加密 session 时，短按磁贴可以直接连接或断开，不需要启动主界面。缺少 VPN 授权，或服务端需要账号、密码、短信、动态口令、图形验证码等前台交互时，应用会打开现有登录界面继续处理。
+
+后台路径只尝试恢复已有 session，不会读取或自动提交保存密码，也不会自动处理认证挑战。
+
+### Always-on VPN
+
+也可以在 Android 系统 VPN 设置中手动为 ZJU Connect 开启 Always-on。
+
+该模式由 Android 负责在开机或服务进程重启时启动 VPN 服务。服务只恢复已有加密 session；如果需要重新输入账号、密码或验证码，会提示用户回到应用完成认证。
+
+应用不会默认开启 Always-on 或 Lockdown。
+
+## 网络范围与已知限制
+
+应用主要用于通过校外 Wi-Fi 或蜂窝网络访问浙江大学校内资源，例如：
+
+- `cc98.org` 等校内网站；
+- 私有网段内的校内服务器地址。
+
+Active VPN 会监测非 VPN 的 Wi-Fi、蜂窝和以太网变化。底层网络发生变化后，应用会关闭旧 TUN / aTrust 会话并尝试基于当前认证状态重新建立 VPN；暂时没有可用网络时会等待网络恢复。
+
+该过程允许短暂中断，不承诺无缝漫游，也不包含无限自动重试或复杂选路策略。
+
+不同 Android 厂商对后台限制、电池策略和“活动应用”停止行为的处理不同。应用遵循 `VpnService` 与前台服务生命周期，但无法绕过系统强制停止、极端进程清理或厂商专属后台策略。
+
+## 问题反馈
+
+如果遇到连接、认证或网络恢复问题：
+
+1. 在应用中打开 **Diagnostics**；
+2. 复制脱敏后的诊断信息；
+3. 在 [GitHub Issues](https://github.com/Cedar17/zju-connect-android/issues) 中描述设备型号、Android 版本、网络环境和复现步骤，并附上诊断信息。
+
+请不要公开提交账号、密码、短信验证码、图形验证码或其他敏感凭据。
 
 ## 技术架构
 
 主要技术：
 
-* Kotlin
-* Jetpack Compose
-* Material 3
-* Android `VpnService`
-* Go / gomobile
-* [zju-connect](https://github.com/Mythologyli/zju-connect)
+- Kotlin
+- Jetpack Compose
+- Material 3
+- Android `VpnService`
+- Go / gomobile
+- [zju-connect](https://github.com/Mythologyli/zju-connect)
 
 整体结构：
 
@@ -93,70 +111,33 @@ Go 核心负责 aTrust 协议、认证状态、资源解析和 VPN 数据面。
 
 Kotlin–Go 接口保持尽可能小且结构化，避免在 Android UI 层重新实现协议逻辑。
 
-详细设计见：
-
-* [Architecture](docs/architecture.md)
-* [gomobile bridge](docs/gomobile-bridge.md)
-
 ## 安全与工程原则
 
 项目在减少重复认证的同时，不绕过服务端安全要求。
 
-主要原则：
+- 不默认永久保存用户密码；
+- 不绕过短信、图形验证码等服务端认证要求；
+- 不绕过 TLS 证书和主机名验证；
+- 会话恢复前由服务端重新验证其有效性；
+- 本地认证状态使用 Android Keystore 加密并排除系统云备份；
+- 不在正式日志中记录密码、Cookie、SID、验证码和设备标识等敏感信息；
+- 会话明确失效后回到正常认证流程，而不是无限重试；
+- 用户可以通过 Android 系统设置清除应用数据和本地认证状态；
+- 固定 Go、gomobile、Android SDK / NDK 和上游核心版本，保持构建可追踪和可复现；
+- 优先复用 `zju-connect`，不在 Android 层重复实现 aTrust 协议；
+- 不因为临时问题提前引入复杂架构。
 
-* 不默认永久保存用户密码；
-* 不绕过短信、图形验证码等服务端认证要求；
-* 不绕过 TLS 证书和主机名验证；
-* 会话恢复前由服务端重新验证其有效性；
-* 本地认证状态使用 Android Keystore 加密并排除系统云备份；
-* 不在正式日志中记录密码、Cookie、SID、验证码和设备标识等敏感信息；
-* 会话明确失效后回到正常认证流程，而不是无限重试；
-* 用户可以通过 Android 系统设置清除应用数据和本地认证状态；
-* 固定 Go、gomobile、Android SDK / NDK 和上游核心版本，保持构建可追踪和可复现；
-* 优先复用 `zju-connect`，不在 Android 层重复实现 aTrust 协议；
-* 不因为临时问题提前引入复杂架构。
+## 开发文档
 
-## 网络范围与已知限制
-
-应用使用 Android `VpnService`，主要用于通过校外 Wi-Fi 或蜂窝网络访问浙江大学校内资源，例如：
-
-* `cc98.org` 等校内网站；
-* 私有网段内的校内服务器地址。
-
-K40 上的一键连接、真实数据面、会话恢复和断开清理已经验证。OnePlus
-Ace 3V 蜂窝网络人工验收也已于 2026-08-10 通过。
-
-active VPN 会监测非 VPN 的 Wi-Fi、蜂窝和以太网变化。底层网络发生变化后，应用会完整关闭旧 TUN/aTrust 会话，并复用当前已认证结果自动重建；暂时没有可用网络时会保持前台服务并等待网络恢复。该过程允许短暂中断，不承诺无缝漫游，也不包含无限自动重试或复杂选路策略。
-
-Always-on 是 Android 系统设置中的高级选项，不会由应用自动打开。不同 OEM
-对后台限制、电池策略和“活动应用”停止行为的处理不同；应用可以遵循
-`VpnService` 与前台服务生命周期，但无法绕过系统强制停止、极端清理或厂商
-专属后台策略。
-
-网络切换恢复已分别通过 K40 的 Wi-Fi ↔ 以太网回归，以及 OnePlus Ace 3V 的 Wi-Fi ↔ 蜂窝人工验收。
-
-## 功能范围
-
-当前功能范围包括：
-
-* 浙江大学新版 aTrust / RVPN；
-* 密码、短信和图形验证码认证；
-* 安全会话恢复；
-* Android 系统 VPN；
-* 校内资源路由；
-* 一键连接与断开；
-* 仅在未连接且已有记住账号时提供的切换账号入口（不做多账号管理）；
-* 基础连接状态和错误反馈；
-* 应用内白名单脱敏诊断 Activity，可复制适合公开问题报告的内容；
-* Android 前台 VPN 生命周期管理；
-* 用户手动添加的 Quick Settings 直连/断开磁贴与 session-only 后台恢复；
-* 可选的 Android Always-on VPN 生命周期接管与服务侧 session 恢复。
+- [Architecture](docs/architecture.md) — Android 侧整体架构与主要边界；
+- [Authentication Recovery](docs/authentication-recovery.md) — 认证复用、持久化 session 与恢复状态；
+- [gomobile bridge](docs/gomobile-bridge.md) — Kotlin 与 Go core 之间的接口边界。
 
 ## 上游与参考
 
-* [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect) — aTrust 协议与网络核心
-* [Mythologyli/ZJU-Connect-for-Windows](https://github.com/Mythologyli/ZJU-Connect-for-Windows) — 桌面端产品体验参考
-* [Mythologyli/ZJUConnectForAndroid](https://github.com/Mythologyli/ZJUConnectForAndroid) — 历史 Android `VpnService` / gomobile 实现参考
+- [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect) — aTrust 协议与网络核心；
+- [Mythologyli/ZJU-Connect-for-Windows](https://github.com/Mythologyli/ZJU-Connect-for-Windows) — 桌面端产品体验参考；
+- [Mythologyli/ZJUConnectForAndroid](https://github.com/Mythologyli/ZJUConnectForAndroid) — 历史 Android `VpnService` / gomobile 实现参考。
 
 本项目采用 Kotlin、Jetpack Compose 和当前 aTrust 链路，不直接继承历史 Android 项目的旧 UI、认证接口或凭据存储方式。
 
