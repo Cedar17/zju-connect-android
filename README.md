@@ -27,13 +27,12 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 
 ## 下载与快速开始
 
-1. 从 [GitHub Releases](https://github.com/Cedar17/zju-connect-android/releases) 下载最新 `zju-connect-v*-arm64-v8a.apk`。
-2. 在 Android 设备上安装 APK。
-3. 打开 **ZJU Connect**，点击连接。
-4. 首次连接时允许 Android 创建 VPN 连接。
-5. 按服务端要求完成账号密码、短信、动态口令或图形验证码认证。
-6. 连接成功后即可访问校内资源。
-7. 后续服务端 session 仍有效时，通常可以直接恢复认证并一键连接。
+1. 从 [GitHub Releases](https://github.com/Cedar17/zju-connect-android/releases) 下载并安装最新 `zju-connect-v*-arm64-v8a.apk`。
+2. 打开 **ZJU Connect**，点击连接。
+3. 首次连接时允许 Android 创建 VPN 连接。
+4. 按服务端要求完成账号密码、短信、动态口令或图形验证码认证。
+5. 连接成功后即可访问校内资源。
+6. 后续服务端 session 仍有效时，通常可以直接恢复认证并一键连接。
 
 如果服务端要求重新认证，应用会回到对应认证流程，不会绕过验证码或其他安全要求。
 
@@ -41,26 +40,19 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 
 ### Quick Settings
 
-可以在 Android 快捷设置编辑面板中手动添加 **ZJU Connect** 磁贴。
-
-已有可复用认证结果或有效加密 session 时，短按磁贴可以直接连接或断开，不需要启动主界面。缺少 VPN 授权，或服务端需要账号、密码、短信、动态口令、图形验证码等前台交互时，应用会打开现有登录界面继续处理。
+可以在 Android 快捷设置编辑面板中手动添加 **ZJU Connect** 磁贴。已有可复用认证结果或有效加密 session 时，短按即可连接或断开；缺少 VPN 授权或需要前台认证时，应用会打开现有登录界面继续处理。
 
 后台路径只尝试恢复已有 session，不会读取或自动提交保存密码，也不会自动处理认证挑战。
 
 ### Always-on VPN
 
-也可以在 Android 系统 VPN 设置中手动为 ZJU Connect 开启 Always-on。
-
-该模式由 Android 负责在开机或服务进程重启时启动 VPN 服务。服务只恢复已有加密 session；如果需要重新输入账号、密码或验证码，会提示用户回到应用完成认证。
+可以在 Android 系统 VPN 设置中手动为 ZJU Connect 开启 Always-on。Android 会在开机或服务进程重启时启动 VPN 服务；服务只恢复已有加密 session，需要重新认证时会提示用户回到应用完成。
 
 应用不会默认开启 Always-on 或 Lockdown。
 
 ## 网络范围与已知限制
 
-应用主要用于通过校外 Wi-Fi 或蜂窝网络访问浙江大学校内资源，例如：
-
-- `cc98.org` 等校内网站；
-- 私有网段内的校内服务器地址。
+应用主要用于通过校外 Wi-Fi 或蜂窝网络访问浙江大学校内资源，例如 `cc98.org` 等校内网站和私有网段内的校内服务器地址。
 
 Active VPN 会监测非 VPN 的 Wi-Fi、蜂窝和以太网变化。底层网络发生变化后，应用会关闭旧 TUN / aTrust 会话并尝试基于当前认证状态重新建立 VPN；暂时没有可用网络时会等待网络恢复。
 
@@ -72,11 +64,10 @@ Active VPN 会监测非 VPN 的 Wi-Fi、蜂窝和以太网变化。底层网络�
 
 如果遇到连接、认证或网络恢复问题：
 
-1. 在应用中打开 **Diagnostics**；
-2. 复制脱敏后的诊断信息；
-3. 在 [GitHub Issues](https://github.com/Cedar17/zju-connect-android/issues) 中描述设备型号、Android 版本、网络环境和复现步骤，并附上诊断信息。
+1. 在应用中打开 **Diagnostics** 并复制脱敏诊断信息；
+2. 在 [GitHub Issues](https://github.com/Cedar17/zju-connect-android/issues) 中附上诊断信息，并补充网络环境和复现步骤。
 
-请不要公开提交账号、密码、短信验证码、图形验证码或其他敏感凭据。
+诊断报告已包含应用版本、设备型号和 Android 版本 / API，无需重复填写。请不要额外公开账号、密码、短信验证码、图形验证码或其他敏感凭据。
 
 ## 技术架构
 
@@ -105,9 +96,7 @@ zju-connect
 ZJU aTrust
 ```
 
-Android 负责用户交互、VPN 生命周期、安全存储和平台边界。
-
-Go 核心负责 aTrust 协议、认证状态、资源解析和 VPN 数据面。
+Android 负责用户交互、VPN 生命周期、安全存储和平台边界；Go 核心负责 aTrust 协议、认证状态、资源解析和 VPN 数据面。
 
 Kotlin–Go 接口保持尽可能小且结构化，避免在 Android UI 层重新实现协议逻辑。
 
@@ -143,9 +132,7 @@ Kotlin–Go 接口保持尽可能小且结构化，避免在 Android UI 层重�
 
 ## 许可证
 
-本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布。
-
-本项目基于 [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect) 构建，并遵循其 AGPL-3.0 许可证及相关版权声明。
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）发布，并遵循 [Mythologyli/zju-connect](https://github.com/Mythologyli/zju-connect) 的 AGPL-3.0 许可证及相关版权声明。
 
 ## 免责声明
 
