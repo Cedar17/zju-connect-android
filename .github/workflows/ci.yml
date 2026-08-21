@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Android SDK packages
+        shell: pwsh
+        run: |
+          & "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" `
+            "platforms;android-36.1" `
+            "build-tools;36.0.0"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bootstrap gomobile toolchain
+        shell: pwsh
+        run: ./scripts/bootstrap-gomobile-toolchain.ps1
+
+      - name: Build Go core AAR
+        shell: pwsh
+        run: ./scripts/build-gomobile-aar.ps1
+
+      - name: Run release unit tests
+        shell: pwsh
+        run: ./gradlew.bat testReleaseUnitTest --no-daemon
+
+      - name: Build unsigned release APK
+        shell: pwsh
+        run: ./gradlew.bat assembleRelease --no-daemon
