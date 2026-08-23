@@ -122,13 +122,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Unable to install pinned gomobile $($lock.gomobile.version)."
 }
 
-$gomobileExe = Join-Path $gopath "bin\gomobile.exe"
-& $gomobileExe init
+$gobindModule = $lock.gomobile.module -replace 'cmd/gomobile$', 'cmd/gobind'
+& $goExe install "$gobindModule@$($lock.gomobile.version)"
 if ($LASTEXITCODE -ne 0) {
-    throw "gomobile init failed."
+    throw "Unable to install pinned gobind $($lock.gomobile.version)."
 }
 
 Write-Host "Pinned gomobile toolchain is ready."
 Write-Host "Go: $goVersion"
 Write-Host "NDK: $($lock.android.ndkVersion)"
-Write-Host "gomobile: $(& $gomobileExe version)"
+Write-Host "gomobile: $(& (Join-Path $gopath "bin\gomobile.exe") version)"
