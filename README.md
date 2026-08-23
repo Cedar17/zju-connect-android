@@ -17,8 +17,9 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 ## 界面预览
 
 <p align="center">
-  <img src="docs/images/app-connected.png" width="300" alt="ZJU Connect 已连接界面">
-  <img src="docs/images/auth-captcha.png" width="300" alt="ZJU Connect 图形验证码认证界面">
+  <img src="docs/images/app-connected.png" width="240" alt="ZJU Connect 已连接界面">
+  <img src="docs/images/switch-account.png" width="240" alt="ZJU Connect 切换账号界面">
+  <img src="docs/images/auth-captcha.png" width="240" alt="ZJU Connect 图形验证码认证界面">
 </p>
 
 ## 功能
