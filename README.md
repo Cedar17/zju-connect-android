@@ -14,7 +14,12 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 
 项目专注于浙江大学 Android 校外访问，不是通用 VPN、代理或网络工具箱。
 
-当前版本处于 **Public Beta** 阶段，支持 **Android 10+**，首版仅提供 **arm64-v8a** APK。
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/app-connected.png" width="300" alt="ZJU Connect 已连接界面">
+  <img src="docs/images/auth-captcha.png" width="300" alt="ZJU Connect 图形验证码认证界面">
+</p>
 
 ## 功能
 
