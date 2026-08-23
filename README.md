@@ -4,6 +4,8 @@
 
 An open-source Android client for ZJU RVPN, with aTrust protocol support. Powered [zju-connect](https://github.com/Mythologyli/zju-connect).
 
+**Public Beta · Android 10+ · arm64-v8a · [GitHub Releases](https://github.com/Cedar17/zju-connect-android/releases)**
+
 ## 项目定位
 
 `zju-connect-android` 是面向浙江大学 aTrust / RVPN 的非官方开源 Android 客户端，通过 Android `VpnService` 建立系统级校网访问隧道。
@@ -12,7 +14,13 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 
 项目专注于浙江大学 Android 校外访问，不是通用 VPN、代理或网络工具箱。
 
-当前版本处于 **Public Beta** 阶段，支持 **Android 10+**，首版仅提供 **arm64-v8a** APK。
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/app-connected.png" width="240" alt="ZJU Connect 已连接界面">
+  <img src="docs/images/switch-account.png" width="240" alt="ZJU Connect 切换账号界面">
+  <img src="docs/images/auth-captcha.png" width="240" alt="ZJU Connect 图形验证码认证界面">
+</p>
 
 ## 功能
 
@@ -28,11 +36,16 @@ An open-source Android client for ZJU RVPN, with aTrust protocol support. Powere
 ## 下载与快速开始
 
 1. 从 [GitHub Releases](https://github.com/Cedar17/zju-connect-android/releases) 下载并安装最新 `zju-connect-v*-arm64-v8a.apk`。
-2. 打开 **ZJU Connect**，点击连接。
-3. 首次连接时允许 Android 创建 VPN 连接。
-4. 按服务端要求完成账号密码、短信、动态口令或图形验证码认证。
-5. 连接成功后即可访问校内资源。
-6. 后续服务端 session 仍有效时，通常可以直接恢复认证并一键连接。
+2. 如果 Android 提示不允许安装未知来源应用，请按系统提示临时允许当前浏览器或文件管理器安装该 APK。
+3. 打开 **ZJU Connect**，点击连接。
+4. 首次连接时允许 Android 创建 VPN 连接。
+5. 按服务端要求完成账号密码、短信、动态口令或图形验证码认证。
+6. 连接成功后即可访问校内资源。
+7. 后续服务端 session 仍有效时，通常可以直接恢复认证并一键连接。
+
+APK 由本仓库的 GitHub Actions 自动构建、测试并使用项目 Release 密钥签名；源代码和构建流程均公开。应用仅申请 VPN 运行所需的网络、前台服务和通知等权限。
+
+当前已在 **OnePlus Ace 3V / Android 15** 上完成安装与基本连接验证。项目兼容范围仍以 **Android 10+ / arm64-v8a** 为准。
 
 如果服务端要求重新认证，应用会回到对应认证流程，不会绕过验证码或其他安全要求。
 
