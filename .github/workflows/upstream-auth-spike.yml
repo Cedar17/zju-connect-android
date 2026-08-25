@@ -1,0 +1,30 @@
+name: Upstream auth spike
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "tools/upstream-auth-spike/**"
+      - ".github/workflows/upstream-auth-spike.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.6"
+      - name: Checkout upstream PR 141 branch
+        uses: actions/checkout@v4
+        with:
+          repository: Mythologyli/zju-connect
+          ref: refactor/auth-handler
+          path: upstream-zju-connect
+      - name: Compile Android-facing upstream auth API
+        working-directory: tools/upstream-auth-spike
+        run: |
+          go mod edit -replace=github.com/mythologyli/zju-connect=${GITHUB_WORKSPACE}/upstream-zju-connect
+          go mod tidy
+          go test ./...
