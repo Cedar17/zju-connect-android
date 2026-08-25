@@ -35,6 +35,21 @@ jobs:
         shell: pwsh
         run: ./scripts/bootstrap-gomobile-toolchain.ps1
 
+      - name: Checkout upstream auth-handler branch
+        uses: actions/checkout@v5
+        with:
+          repository: Mythologyli/zju-connect
+          ref: refactor/auth-handler
+          path: upstream-zju-connect
+
+      - name: Validate upstream auth API for Android
+        shell: pwsh
+        working-directory: tools/upstream-auth-spike
+        run: |
+          go mod edit "-replace=github.com/mythologyli/zju-connect=$env:GITHUB_WORKSPACE/upstream-zju-connect"
+          go mod tidy
+          go test ./...
+
       - name: Build Go core AAR
         shell: pwsh
         run: ./scripts/build-gomobile-aar.ps1
