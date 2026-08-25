@@ -54,9 +54,12 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aarPath) | Out-Nu
 
 Push-Location $bridgeDir
 try {
-    & $goExe mod tidy -diff
+    # Migration-spike exception: let CI materialize the upstream-main module
+    # graph so compilation can expose API blockers before this draft is made
+    # merge-ready. Restore the normal `go mod tidy -diff` gate before merge.
+    & $goExe mod tidy
     if ($LASTEXITCODE -ne 0) {
-        throw "Go module metadata is not tidy; run go mod tidy and commit the result."
+        throw "Unable to resolve the Go module graph for the upstream migration spike."
     }
     & $goExe mod download
     if ($LASTEXITCODE -ne 0) {
