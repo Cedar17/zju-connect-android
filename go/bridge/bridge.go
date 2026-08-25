@@ -6,11 +6,16 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net"
 	"strings"
@@ -19,6 +24,7 @@ import (
 	"time"
 
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
+	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
 
 const (
@@ -87,21 +93,35 @@ type authenticationSnapshot struct {
 	Cookies       []auth.Cookie `json:"cookies"`
 }
 
+type authenticatedResult struct {
+	Username     string
+	SID          string
+	AuthData     []byte
+	ResourceData []byte
+}
+
+type upstreamAuthSession interface {
+	GetAuthInfoList() ([]auth.AuthInfo, error)
+	Login(auth.LoginMethod, auth.LoginOptions) (auth.LoginResult, error)
+	ClientResource() ([]byte, error)
+}
+
+var newUpstreamAuthSession = func(server string) upstreamAuthSession {
+	// PR #141 reserves the second argument for TLS key logging. The Cedar
+	// compatibility base accepts the same nil value as an unused dialer.
+	return auth.NewSession(server, nil)
+}
+
 type authenticationSession struct {
 	mu                  sync.Mutex
-	flow                *auth.InteractiveFlow
-	listener            BridgeListener
-	server              string
-	port                int
-	deviceID            string
-	busy                bool
-	authenticatedResult *auth.InteractiveResult
+	coordinator         *authenticationCoordinator
+	authenticatedResult *authenticatedResult
 }
 
 var currentAuthentication authenticationSession
 
-func cloneInteractiveResult(result auth.InteractiveResult) auth.InteractiveResult {
-	return auth.InteractiveResult{
+func cloneAuthenticatedResult(result authenticatedResult) authenticatedResult {
+	return authenticatedResult{
 		Username:     result.Username,
 		SID:          result.SID,
 		AuthData:     append([]byte(nil), result.AuthData...),
@@ -109,7 +129,7 @@ func cloneInteractiveResult(result auth.InteractiveResult) auth.InteractiveResul
 	}
 }
 
-func clearInteractiveResult(result *auth.InteractiveResult) {
+func clearAuthenticatedResult(result *authenticatedResult) {
 	if result == nil {
 		return
 	}
@@ -121,60 +141,46 @@ func clearInteractiveResult(result *auth.InteractiveResult) {
 	result.ResourceData = nil
 }
 
-func isReusableInteractiveResult(result auth.InteractiveResult) bool {
+func isReusableAuthenticatedResult(result authenticatedResult) bool {
 	return result.SID != "" && len(result.AuthData) > 0 && len(result.ResourceData) > 0
 }
 
-func cacheAuthenticatedResult(result auth.InteractiveResult) {
-	cacheAuthenticatedResultForFlow(nil, nil, result)
+func cacheAuthenticatedResult(result authenticatedResult) {
+	cacheAuthenticatedResultForCoordinator(nil, result)
 }
 
-func cacheAuthenticatedResultForFlow(
-	flow *auth.InteractiveFlow,
-	listener BridgeListener,
-	result auth.InteractiveResult,
-) bool {
-	if !isReusableInteractiveResult(result) {
+func cacheAuthenticatedResultForCoordinator(coordinator *authenticationCoordinator, result authenticatedResult) bool {
+	if !isReusableAuthenticatedResult(result) {
 		return false
 	}
-	cached := cloneInteractiveResult(result)
+	cached := cloneAuthenticatedResult(result)
 	currentAuthentication.mu.Lock()
-	if flow != nil && (currentAuthentication.flow != flow || currentAuthentication.listener != listener) {
+	if coordinator != nil && currentAuthentication.coordinator != coordinator {
 		currentAuthentication.mu.Unlock()
-		clearInteractiveResult(&cached)
+		clearAuthenticatedResult(&cached)
 		return false
 	}
 	previous := currentAuthentication.authenticatedResult
 	currentAuthentication.authenticatedResult = &cached
 	currentAuthentication.mu.Unlock()
-	clearInteractiveResult(previous)
+	clearAuthenticatedResult(previous)
 	return true
 }
 
-func reusableAuthenticatedResult() (auth.InteractiveResult, bool) {
+func reusableAuthenticatedResult() (authenticatedResult, bool) {
 	currentAuthentication.mu.Lock()
 	cached := currentAuthentication.authenticatedResult
-	if cached == nil || !isReusableInteractiveResult(*cached) {
+	if cached == nil || !isReusableAuthenticatedResult(*cached) {
 		currentAuthentication.mu.Unlock()
-		return auth.InteractiveResult{}, false
+		return authenticatedResult{}, false
 	}
-	result := cloneInteractiveResult(*cached)
+	result := cloneAuthenticatedResult(*cached)
 	currentAuthentication.mu.Unlock()
 	return result, true
 }
 
-func currentAuthenticatedResult() (auth.InteractiveResult, bool) {
-	if result, ok := reusableAuthenticatedResult(); ok {
-		return result, true
-	}
-
-	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
-	currentAuthentication.mu.Unlock()
-	if flow == nil {
-		return auth.InteractiveResult{}, false
-	}
-	return flow.Result()
+func currentAuthenticatedResult() (authenticatedResult, bool) {
+	return reusableAuthenticatedResult()
 }
 
 // StartAuthentication begins a single in-memory aTrust authentication session.
@@ -195,27 +201,17 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
 
+	coordinator := newAuthenticationCoordinator(request.Server, request.Port, request.DeviceID, listener)
 	currentAuthentication.mu.Lock()
-	if currentAuthentication.flow != nil {
+	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
+		coordinator.cancel()
 		return authError("alreadyRunning", "An authentication session is already active")
 	}
-	flow, err := newAuthenticationFlow(request.Server, request.Port, request.DeviceID)
-	if err != nil {
-		currentAuthentication.mu.Unlock()
-		return authError("initializationFailed", "Unable to initialize authentication")
-	}
-	currentAuthentication.flow = flow
-	currentAuthentication.listener = listener
-	currentAuthentication.server = request.Server
-	currentAuthentication.port = request.Port
-	currentAuthentication.deviceID = request.DeviceID
-	currentAuthentication.busy = true
+	currentAuthentication.coordinator = coordinator
 	currentAuthentication.mu.Unlock()
 
-	go runAuthenticationOperation(flow, listener, "auth.config", func() (auth.InteractivePrompt, error) {
-		return flow.Begin()
-	})
+	go coordinator.fetchAuthMethods("")
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "authenticationStarted",
@@ -235,45 +231,38 @@ func SubmitAuthentication(responseJSON string) string {
 		return retryAuthentication()
 	}
 
-	flow, listener, ok := acquireAuthenticationOperation()
-	if !ok {
+	coordinator := currentAuthenticationCoordinator()
+	if coordinator == nil {
 		return authError("invalidState", "Authentication is not ready for another response")
 	}
-	var (
-		operation func() (auth.InteractivePrompt, error)
-		stage     = authenticationStage(response.Action)
-	)
+
+	var err error
 	switch response.Action {
 	case "selectMethod":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SelectMethod(response.AuthType, response.LoginDomain)
-		}
+		err = coordinator.selectMethod(response.AuthType, response.LoginDomain)
 	case "submitCredentials":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SubmitCredentials(response.Username, response.Password)
-		}
+		err = coordinator.submitLogin(auth.LoginMethodOptions{
+			AuthType: response.AuthType,
+			Username: response.Username,
+			Password: response.Password,
+		})
 	case "submitPhone":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SubmitPhone(response.Phone)
-		}
+		err = coordinator.submitLogin(auth.LoginMethodOptions{
+			AuthType: "auth/smsCheckCode",
+			Phone:    response.Phone,
+		})
 	case "submitSmsCode":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SubmitSMSCode(response.SMSCode)
-		}
+		err = coordinator.submitChallenge(response.Action, response.SMSCode)
 	case "submitCaptcha":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SubmitCaptcha(response.Captcha)
-		}
+		err = coordinator.submitChallenge(response.Action, response.Captcha)
 	case "submitToken":
-		operation = func() (auth.InteractivePrompt, error) {
-			return flow.SubmitToken(response.Token)
-		}
+		err = coordinator.submitChallenge(response.Action, response.Token)
 	default:
-		releaseAuthenticationOperation(flow)
 		return authError("invalidRequest", "Unknown authentication response")
 	}
-
-	go runAuthenticationOperation(flow, listener, stage, operation)
+	if err != nil {
+		return authError("invalidState", "Authentication is not ready for this response")
+	}
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "responseAccepted",
@@ -283,41 +272,27 @@ func SubmitAuthentication(responseJSON string) string {
 }
 
 // GetPendingCaptchaImage returns a copy of the current image bytes only while
-// the flow is awaiting a captcha response. It never writes a file.
+// the coordinator is awaiting a captcha response. It never writes a file.
 func GetPendingCaptchaImage() []byte {
-	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
-	currentAuthentication.mu.Unlock()
-	if flow == nil {
+	coordinator := currentAuthenticationCoordinator()
+	if coordinator == nil {
 		return nil
 	}
-	image, err := flow.PendingCaptchaImage()
-	if err != nil {
-		return nil
-	}
-	return image
+	return coordinator.pendingCaptchaImage()
 }
 
-// CancelAuthentication clears passwords, verification input, captcha bytes,
-// and the active interactive flow. A completed authenticated result remains
+// CancelAuthentication clears bridge-owned verification input, captcha bytes,
+// and the active coordinator. A completed authenticated result remains
 // reusable until ClearAuthenticatedResult is called or the process exits.
 // Repeating it is harmless.
 func CancelAuthentication() {
 	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
-	listener := currentAuthentication.listener
-	currentAuthentication.flow = nil
-	currentAuthentication.listener = nil
-	currentAuthentication.server = ""
-	currentAuthentication.port = 0
-	currentAuthentication.deviceID = ""
-	currentAuthentication.busy = false
+	coordinator := currentAuthentication.coordinator
+	currentAuthentication.coordinator = nil
 	currentAuthentication.mu.Unlock()
-	if flow != nil {
-		flow.Cancel()
-	}
-	if listener != nil {
-		emitAuthenticationEvent(listener, authenticationEvent{
+	if coordinator != nil {
+		coordinator.cancel()
+		emitAuthenticationEvent(coordinator.listener, authenticationEvent{
 			SchemaVersion: schemaVersion,
 			Type:          "cancelled",
 			State:         "cancelled",
@@ -333,23 +308,18 @@ func CancelAuthentication() {
 func HasReusableAuthenticatedResult() bool {
 	currentAuthentication.mu.Lock()
 	result := currentAuthentication.authenticatedResult
-	ok := result != nil && isReusableInteractiveResult(*result)
+	ok := result != nil && isReusableAuthenticatedResult(*result)
 	currentAuthentication.mu.Unlock()
 	return ok
 }
 
-// ClearAuthenticatedResult discards both the reusable result and any result
-// still held by the active interactive flow.
+// ClearAuthenticatedResult discards the reusable in-process result.
 func ClearAuthenticatedResult() {
 	currentAuthentication.mu.Lock()
-	flow := currentAuthentication.flow
 	result := currentAuthentication.authenticatedResult
 	currentAuthentication.authenticatedResult = nil
 	currentAuthentication.mu.Unlock()
-	clearInteractiveResult(result)
-	if flow != nil {
-		flow.ClearResult()
-	}
+	clearAuthenticatedResult(result)
 }
 
 // ExportAuthenticatedSession returns the minimum versioned state needed to
@@ -360,7 +330,7 @@ func ExportAuthenticatedSession() []byte {
 	if !ok {
 		return nil
 	}
-	defer clearInteractiveResult(&result)
+	defer clearAuthenticatedResult(&result)
 	encoded, err := encodeAuthenticationSnapshot(result.AuthData)
 	if err != nil {
 		return nil
@@ -369,7 +339,7 @@ func ExportAuthenticatedSession() []byte {
 }
 
 // ResumeAuthentication validates an encrypted-at-rest snapshot after Kotlin
-// decrypts it. The flow is restricted to ZJU's endpoint and emits only safe
+// decrypts it. The coordinator is restricted to ZJU's endpoint and emits only safe
 // lifecycle events; snapshot values never enter callback JSON.
 func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener BridgeListener) string {
 	if listener == nil {
@@ -383,25 +353,24 @@ func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener Bridge
 		return authError("invalidSession", "Saved authentication data is invalid")
 	}
 
+	var clientAuthData auth.ClientAuthData
+	if err := json.Unmarshal(authData, &clientAuthData); err != nil {
+		clear(authData)
+		return authError("invalidSession", "Saved authentication data is invalid")
+	}
+	clear(authData)
+
+	coordinator := newAuthenticationCoordinator(zjuAtrustServer, zjuAtrustServerPort, deviceID, listener)
 	currentAuthentication.mu.Lock()
-	if currentAuthentication.flow != nil {
+	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
+		coordinator.cancel()
 		return authError("alreadyRunning", "An authentication session is already active")
 	}
-	flow, err := newAuthenticationFlow(zjuAtrustServer, zjuAtrustServerPort, deviceID)
-	if err != nil {
-		currentAuthentication.mu.Unlock()
-		return authError("initializationFailed", "Unable to initialize session restoration")
-	}
-	currentAuthentication.flow = flow
-	currentAuthentication.listener = listener
-	currentAuthentication.server = zjuAtrustServer
-	currentAuthentication.port = zjuAtrustServerPort
-	currentAuthentication.deviceID = deviceID
-	currentAuthentication.busy = true
+	currentAuthentication.coordinator = coordinator
 	currentAuthentication.mu.Unlock()
 
-	go runSessionRestore(flow, listener, authData)
+	go coordinator.restore(clientAuthData.Cookies)
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "sessionRestoreStarted",
@@ -479,150 +448,493 @@ func validateDeviceID(deviceID string) error {
 	return nil
 }
 
-func newAuthenticationFlow(server string, port int, deviceID string) (*auth.InteractiveFlow, error) {
-	return auth.NewInteractiveFlowWithOptions(
-		net.JoinHostPort(server, fmt.Sprint(port)),
-		auth.InteractiveFlowOptions{DeviceID: deviceID, StrictTLS: true},
-	)
+var errAuthenticationCancelled = errors.New("authentication coordinator cancelled")
+
+type challengeResponse struct {
+	id      uint64
+	code    string
+	skip    bool
+	captcha authchallenge.ClickCaptchaResponse
 }
 
-func acquireAuthenticationOperation() (*auth.InteractiveFlow, BridgeListener, bool) {
+type pendingAuthenticationChallenge struct {
+	id        uint64
+	action    string
+	responses chan challengeResponse
+	ctx       context.Context
+	cancel    context.CancelFunc
+	image     []byte
+	submitted bool
+}
+
+type authenticationCoordinator struct {
+	mu        sync.Mutex
+	session   upstreamAuthSession
+	listener  BridgeListener
+	server    string
+	port      int
+	deviceID  string
+	ctx       context.Context
+	cancelCtx context.CancelFunc
+	methods   []auth.AuthInfo
+	selected  *auth.AuthInfo
+	running   bool
+	nextID    uint64
+	pending   *pendingAuthenticationChallenge
+}
+
+func newAuthenticationCoordinator(server string, port int, deviceID string, listener BridgeListener) *authenticationCoordinator {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &authenticationCoordinator{
+		session:   newUpstreamAuthSession(net.JoinHostPort(server, fmt.Sprint(port))),
+		listener:  listener,
+		server:    server,
+		port:      port,
+		deviceID:  deviceID,
+		ctx:       ctx,
+		cancelCtx: cancel,
+		running:   true,
+	}
+}
+
+func currentAuthenticationCoordinator() *authenticationCoordinator {
 	currentAuthentication.mu.Lock()
 	defer currentAuthentication.mu.Unlock()
-	if currentAuthentication.flow == nil || currentAuthentication.listener == nil || currentAuthentication.busy {
-		return nil, nil, false
-	}
-	currentAuthentication.busy = true
-	return currentAuthentication.flow, currentAuthentication.listener, true
+	return currentAuthentication.coordinator
 }
 
-func releaseAuthenticationOperation(flow *auth.InteractiveFlow) {
+func isCurrentAuthenticationCoordinator(coordinator *authenticationCoordinator) bool {
 	currentAuthentication.mu.Lock()
-	if currentAuthentication.flow == flow {
-		currentAuthentication.busy = false
+	defer currentAuthentication.mu.Unlock()
+	return currentAuthentication.coordinator == coordinator
+}
+
+func detachAuthenticationCoordinator(coordinator *authenticationCoordinator) {
+	currentAuthentication.mu.Lock()
+	if currentAuthentication.coordinator == coordinator {
+		currentAuthentication.coordinator = nil
 	}
 	currentAuthentication.mu.Unlock()
 }
 
-func isCurrentAuthenticationFlow(flow *auth.InteractiveFlow, listener BridgeListener) bool {
-	currentAuthentication.mu.Lock()
-	defer currentAuthentication.mu.Unlock()
-	return currentAuthentication.flow == flow && currentAuthentication.listener == listener
+func (c *authenticationCoordinator) cancel() {
+	c.cancelCtx()
+	c.mu.Lock()
+	if c.pending != nil {
+		c.pending.cancel()
+		clear(c.pending.image)
+		c.pending.image = nil
+	}
+	c.mu.Unlock()
 }
 
-func runAuthenticationOperation(
-	flow *auth.InteractiveFlow,
-	listener BridgeListener,
-	stage string,
-	operation func() (auth.InteractivePrompt, error),
-) {
+func (c *authenticationCoordinator) active() bool {
+	return c.ctx.Err() == nil && isCurrentAuthenticationCoordinator(c)
+}
+
+func (c *authenticationCoordinator) fetchAuthMethods(code string) {
 	started := time.Now()
-	prompt, err := operation()
+	methods, err := c.session.GetAuthInfoList()
 	duration := time.Since(started)
-	releaseAuthenticationOperation(flow)
-	if !isCurrentAuthenticationFlow(flow, listener) {
+
+	c.mu.Lock()
+	c.running = false
+	if err == nil {
+		c.methods = append([]auth.AuthInfo(nil), methods...)
+	}
+	c.mu.Unlock()
+	if !c.active() {
 		return
 	}
 	if err != nil {
-		emitAuthenticationEvent(listener, authenticationFailure(stage, duration, err))
+		emitAuthenticationEvent(c.listener, authenticationFailure("auth.config", duration, err))
 		return
 	}
-	runAuthenticationPrompt(flow, listener, prompt, stage, duration)
+	if len(methods) == 0 {
+		emitAuthenticationEvent(c.listener, authenticationFailure(
+			"auth.config",
+			duration,
+			fmt.Errorf("server did not advertise a supported authentication method"),
+		))
+		return
+	}
+	emitAuthenticationEvent(c.listener, authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "authMethodsReady",
+		State:         "awaitingMethod",
+		Code:          code,
+		Message:       "Choose an authentication method",
+		Stage:         "auth.config",
+		DurationMs:    boundedDurationMillis(duration),
+		AuthMethods:   append([]auth.AuthInfo(nil), methods...),
+	})
 }
 
-func runSessionRestore(flow *auth.InteractiveFlow, listener BridgeListener, authData []byte) {
-	defer clear(authData)
-	started := time.Now()
-	prompt, err := flow.Resume(authData)
-	duration := time.Since(started)
-	releaseAuthenticationOperation(flow)
-	if !isCurrentAuthenticationFlow(flow, listener) {
-		return
+func (c *authenticationCoordinator) selectMethod(authType, loginDomain string) error {
+	c.mu.Lock()
+	if c.ctx.Err() != nil || c.running || c.pending != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("authentication method is not expected")
 	}
-	if err != nil {
-		discardAuthenticationFlow(flow)
-		emitAuthenticationEvent(listener, sessionRestoreFailure(duration, err))
-		return
+	var selected *auth.AuthInfo
+	for index := range c.methods {
+		method := c.methods[index]
+		if method.AuthType == authType && method.LoginDomain == loginDomain {
+			selected = &method
+			break
+		}
 	}
-	runAuthenticationPrompt(flow, listener, prompt, "auth.session_restore", duration)
-}
+	if selected == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("selected authentication method was not advertised")
+	}
+	c.selected = selected
+	c.mu.Unlock()
 
-func runAuthenticationPrompt(
-	flow *auth.InteractiveFlow,
-	listener BridgeListener,
-	prompt auth.InteractivePrompt,
-	stage string,
-	duration time.Duration,
-) {
 	event := authenticationEvent{
 		SchemaVersion: schemaVersion,
-		State:         prompt.State,
-		Code:          prompt.Code,
-		Message:       prompt.Message,
-		Stage:         stage,
-		DurationMs:    boundedDurationMillis(duration),
-		ChallengeKind: prompt.ChallengeKind,
-		AuthMethods:   prompt.AuthMethods,
-		PhoneNumbers:  prompt.PhoneNumbers,
-		CaptchaWidth:  prompt.CaptchaWidth,
-		CaptchaHeight: prompt.CaptchaHeight,
+		State:         "awaitingCredentials",
+		Message:       "Enter your account and password",
+		Stage:         "auth.select_method",
+		Type:          "credentialsRequired",
 	}
-	switch prompt.State {
-	case "awaitingMethod":
-		event.Type = "authMethodsReady"
-	case "awaitingCredentials":
-		event.Type = "credentialsRequired"
-	case "awaitingPhone":
+	switch selected.AuthType {
+	case "auth/psw":
+	case "auth/smsCheckCode":
 		event.Type = "phoneRequired"
-	case "awaitingSms":
-		event.Type = "smsRequired"
-	case "awaitingCaptcha":
-		event.Type = "captchaRequired"
-	case "awaitingToken":
-		event.Type = "tokenRequired"
-	case "authenticated":
-		event.Type = "authenticated"
-		if result, ok := flow.Result(); ok {
-			if !cacheAuthenticatedResultForFlow(flow, listener, result) {
-				clearInteractiveResult(&result)
-				return
-			}
-			event.Username = result.Username
-			clearInteractiveResult(&result)
-		}
+		event.State = "awaitingPhone"
+		event.Message = "Enter the phone number registered for this method"
 	default:
-		event.Type = "stateChanged"
+		return fmt.Errorf("unsupported authentication method")
 	}
-	emitAuthenticationEvent(listener, event)
+	go func() {
+		if c.active() {
+			emitAuthenticationEvent(c.listener, event)
+		}
+	}()
+	return nil
 }
 
-func discardAuthenticationFlow(flow *auth.InteractiveFlow) {
-	currentAuthentication.mu.Lock()
-	if currentAuthentication.flow == flow {
-		currentAuthentication.flow = nil
-		currentAuthentication.listener = nil
-		currentAuthentication.server = ""
-		currentAuthentication.port = 0
-		currentAuthentication.deviceID = ""
-		currentAuthentication.busy = false
+func (c *authenticationCoordinator) submitLogin(options auth.LoginMethodOptions) error {
+	c.mu.Lock()
+	if c.ctx.Err() != nil || c.running || c.pending != nil || c.selected == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("login input is not expected")
 	}
-	currentAuthentication.mu.Unlock()
-	flow.Cancel()
+	selected := *c.selected
+	options.AuthType = selected.AuthType
+	options.Domain = selected.LoginDomain
+	if selected.AuthType == "auth/psw" && (options.Username == "" || options.Password == "") {
+		c.mu.Unlock()
+		return fmt.Errorf("account and password are required")
+	}
+	if selected.AuthType == "auth/smsCheckCode" && options.Phone == "" {
+		c.mu.Unlock()
+		return fmt.Errorf("phone number is required")
+	}
+	method, err := auth.NewLoginMethod(options)
+	if err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.running = true
+	c.mu.Unlock()
+
+	stage := "auth.credentials"
+	if selected.AuthType == "auth/smsCheckCode" {
+		stage = "auth.phone"
+	}
+	go c.login(method, stage)
+	return nil
+}
+
+func (c *authenticationCoordinator) login(method auth.LoginMethod, stage string) {
+	started := time.Now()
+	loginResult, err := c.session.Login(method, auth.LoginOptions{
+		DeviceID:         c.deviceID,
+		ChallengeHandler: c,
+	})
+	duration := time.Since(started)
+	c.mu.Lock()
+	c.running = false
+	c.mu.Unlock()
+	if !c.active() || errors.Is(err, errAuthenticationCancelled) {
+		return
+	}
+	if err != nil {
+		if stage == "auth.credentials" && isCredentialsRejectedError(err) {
+			emitAuthenticationEvent(c.listener, authenticationEvent{
+				SchemaVersion: schemaVersion,
+				Type:          "credentialsRequired",
+				State:         "awaitingCredentials",
+				Code:          "credentialsRejected",
+				Message:       "The saved account credentials were rejected",
+				Stage:         stage,
+				DurationMs:    boundedDurationMillis(duration),
+			})
+			return
+		}
+		emitAuthenticationEvent(c.listener, authenticationFailure(stage, duration, err))
+		return
+	}
+	c.completeLogin(loginResult, duration, stage)
+}
+
+func (c *authenticationCoordinator) completeLogin(loginResult auth.LoginResult, duration time.Duration, stage string) {
+	resourceData, err := c.session.ClientResource()
+	if err != nil {
+		if c.active() {
+			emitAuthenticationEvent(c.listener, authenticationFailure("auth.client_resource", duration, err))
+		}
+		return
+	}
+	authData, err := json.Marshal(auth.ClientAuthData{
+		DeviceID: c.deviceID,
+		Cookies:  append([]auth.Cookie(nil), loginResult.Cookies...),
+	})
+	if err != nil {
+		clear(resourceData)
+		if c.active() {
+			emitAuthenticationEvent(c.listener, authenticationFailure(stage, duration, err))
+		}
+		return
+	}
+	result := authenticatedResult{
+		Username:     loginResult.Username,
+		SID:          loginResult.SID,
+		AuthData:     authData,
+		ResourceData: resourceData,
+	}
+	if !cacheAuthenticatedResultForCoordinator(c, result) {
+		clearAuthenticatedResult(&result)
+		return
+	}
+	username := result.Username
+	clearAuthenticatedResult(&result)
+	emitAuthenticationEvent(c.listener, authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "authenticated",
+		State:         "authenticated",
+		Message:       "Authentication completed",
+		Stage:         stage,
+		DurationMs:    boundedDurationMillis(duration),
+		Username:      username,
+	})
+}
+
+func (c *authenticationCoordinator) restore(cookies []auth.Cookie) {
+	started := time.Now()
+	loginResult, err := c.session.Login(nil, auth.LoginOptions{
+		DeviceID:         c.deviceID,
+		Cookies:          append([]auth.Cookie(nil), cookies...),
+		ChallengeHandler: c,
+	})
+	duration := time.Since(started)
+	if !c.active() || errors.Is(err, errAuthenticationCancelled) {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		return
+	}
+	if isSessionStaleError(err) {
+		// Session.Login has already restored the cookies and stable DeviceID
+		// into this Session. A rejected SID only means that it cannot directly
+		// prove authentication; keep the same client context for foreground
+		// credential recovery and any server-required challenge.
+		c.fetchAuthMethods("sessionExpired")
+		return
+	}
+	c.mu.Lock()
+	c.running = false
+	c.mu.Unlock()
+	if err != nil {
+		detachAuthenticationCoordinator(c)
+		c.cancel()
+		emitAuthenticationEvent(c.listener, sessionRestoreFailure(duration, err))
+		return
+	}
+	c.completeLogin(loginResult, duration, "auth.session_restore")
+}
+
+func (c *authenticationCoordinator) beginChallenge(action string, event authenticationEvent, imageData []byte) (*pendingAuthenticationChallenge, error) {
+	c.mu.Lock()
+	if c.ctx.Err() != nil || c.pending != nil {
+		c.mu.Unlock()
+		return nil, errAuthenticationCancelled
+	}
+	c.nextID++
+	challengeCtx, cancel := context.WithCancel(c.ctx)
+	challenge := &pendingAuthenticationChallenge{
+		id:        c.nextID,
+		action:    action,
+		responses: make(chan challengeResponse, 1),
+		ctx:       challengeCtx,
+		cancel:    cancel,
+		image:     append([]byte(nil), imageData...),
+	}
+	c.pending = challenge
+	c.mu.Unlock()
+	if !c.active() {
+		c.clearChallenge(challenge)
+		return nil, errAuthenticationCancelled
+	}
+	emitAuthenticationEvent(c.listener, event)
+	return challenge, nil
+}
+
+func (c *authenticationCoordinator) waitForChallenge(challenge *pendingAuthenticationChallenge) (challengeResponse, error) {
+	defer c.clearChallenge(challenge)
+	select {
+	case response := <-challenge.responses:
+		if response.id != challenge.id {
+			return challengeResponse{}, fmt.Errorf("stale authentication challenge response")
+		}
+		return response, nil
+	case <-challenge.ctx.Done():
+		return challengeResponse{}, errAuthenticationCancelled
+	}
+}
+
+func (c *authenticationCoordinator) clearChallenge(challenge *pendingAuthenticationChallenge) {
+	c.mu.Lock()
+	if c.pending != nil && c.pending.id == challenge.id {
+		c.pending = nil
+	}
+	clear(challenge.image)
+	challenge.image = nil
+	challenge.cancel()
+	c.mu.Unlock()
+}
+
+func (c *authenticationCoordinator) submitChallenge(action, raw string) error {
+	c.mu.Lock()
+	challenge := c.pending
+	if challenge == nil || challenge.action != action || challenge.submitted || challenge.ctx.Err() != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("authentication challenge response is not expected")
+	}
+	response := challengeResponse{id: challenge.id}
+	switch action {
+	case "submitSmsCode":
+		response.code = strings.TrimSpace(raw)
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("SMS code is required")
+		}
+	case "submitToken":
+		response.code = strings.TrimSpace(raw)
+		if strings.HasPrefix(response.code, "$") {
+			response.skip = true
+			response.code = strings.TrimSpace(strings.TrimPrefix(response.code, "$"))
+		}
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("authentication token is required")
+		}
+	case "submitCaptcha":
+		var payload struct {
+			Coordinates [][]int `json:"coordinates"`
+			Width       int     `json:"width"`
+			Height      int     `json:"height"`
+		}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil || payload.Width <= 0 || payload.Height <= 0 || len(payload.Coordinates) == 0 {
+			c.mu.Unlock()
+			return fmt.Errorf("captcha response is invalid")
+		}
+		points := make([]authchallenge.Point, 0, len(payload.Coordinates))
+		for _, pair := range payload.Coordinates {
+			if len(pair) != 2 {
+				c.mu.Unlock()
+				return fmt.Errorf("captcha response is invalid")
+			}
+			points = append(points, authchallenge.Point{X: pair[0], Y: pair[1]})
+		}
+		response.captcha = authchallenge.ClickCaptchaResponse{Points: points, Width: payload.Width, Height: payload.Height}
+	default:
+		c.mu.Unlock()
+		return fmt.Errorf("unsupported authentication challenge response")
+	}
+	challenge.submitted = true
+	responses := challenge.responses
+	challengeCtx := challenge.ctx
+	c.mu.Unlock()
+
+	select {
+	case responses <- response:
+		return nil
+	case <-challengeCtx.Done():
+		return fmt.Errorf("authentication challenge is no longer active")
+	}
+}
+
+func (c *authenticationCoordinator) pendingCaptchaImage() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending == nil || c.pending.action != "submitCaptcha" || c.pending.ctx.Err() != nil {
+		return nil
+	}
+	return append([]byte(nil), c.pending.image...)
+}
+
+func (c *authenticationCoordinator) HandleCodeChallenge(challenge authchallenge.CodeChallenge) (authchallenge.CodeResponse, error) {
+	event := authenticationEvent{
+		SchemaVersion: schemaVersion,
+		State:         "awaitingToken",
+		Type:          "tokenRequired",
+		Message:       "Enter the authentication token requested by the server",
+	}
+	action := "submitToken"
+	switch challenge.Kind {
+	case authchallenge.CodeSMS:
+		event.Type = "smsRequired"
+		event.State = "awaitingSms"
+		event.Message = "Enter the SMS verification code"
+		event.ChallengeKind = "auth/sms"
+		action = "submitSmsCode"
+	case authchallenge.CodeTOTP:
+		event.ChallengeKind = "auth/totp"
+	case authchallenge.CodeRadius:
+		event.ChallengeKind = "auth/radius"
+	default:
+		return authchallenge.CodeResponse{}, fmt.Errorf("unsupported authentication code challenge")
+	}
+	pending, err := c.beginChallenge(action, event, nil)
+	if err != nil {
+		return authchallenge.CodeResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return authchallenge.CodeResponse{Code: response.code, SkipSecondaryAuth: response.skip}, err
+}
+
+func (c *authenticationCoordinator) HandleClickCaptcha(challenge authchallenge.ClickCaptchaChallenge) (authchallenge.ClickCaptchaResponse, error) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(challenge.Image))
+	if err != nil {
+		return authchallenge.ClickCaptchaResponse{}, fmt.Errorf("decode captcha image: %w", err)
+	}
+	pending, err := c.beginChallenge("submitCaptcha", authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "captchaRequired",
+		State:         "awaitingCaptcha",
+		Message:       "Complete the graphical verification",
+		CaptchaWidth:  config.Width,
+		CaptchaHeight: config.Height,
+	}, challenge.Image)
+	if err != nil {
+		return authchallenge.ClickCaptchaResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return response.captcha, err
+}
+
+func (c *authenticationCoordinator) HandleTextCaptcha(authchallenge.TextCaptchaChallenge) (authchallenge.TextCaptchaResponse, error) {
+	return authchallenge.TextCaptchaResponse{}, fmt.Errorf("unsupported text captcha challenge")
+}
+
+func (c *authenticationCoordinator) HandleExternalLogin(challenge authchallenge.ExternalLoginChallenge) (authchallenge.ExternalLoginResponse, error) {
+	return authchallenge.ExternalLoginResponse{}, fmt.Errorf("unsupported external login challenge: %s", challenge.Kind)
 }
 
 func sessionRestoreFailure(duration time.Duration, err error) authenticationEvent {
-	if errors.Is(err, auth.ErrSessionInvalid) {
-		return authenticationEvent{
-			SchemaVersion: schemaVersion,
-			Type:          "sessionInvalid",
-			State:         "idle",
-			Code:          "sessionInvalid",
-			Message:       "Saved authentication session has expired",
-			Stage:         "auth.session_restore",
-			Cause:         "authentication",
-			DurationMs:    boundedDurationMillis(duration),
-		}
-	}
 	failure := classifyAuthenticationFailure("auth.session_restore", duration, err)
 	if failure.code == "authenticationFailed" {
 		failure.code = "sessionRestoreUnavailable"
@@ -639,28 +951,48 @@ func sessionRestoreFailure(duration time.Duration, err error) authenticationEven
 	}
 }
 
+func isSessionStaleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return message == "login method is nil, but user is not logged in" || message == "aTrust session is not authenticated"
+}
+
+func isCredentialsRejectedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return message == "aTrust credentials rejected" ||
+		strings.HasPrefix(message, "aTrust credentials rejected: ") ||
+		strings.HasPrefix(message, "password authentication failed with code ")
+}
+
 func retryAuthentication() string {
 	currentAuthentication.mu.Lock()
-	if currentAuthentication.busy || currentAuthentication.listener == nil {
+	oldCoordinator := currentAuthentication.coordinator
+	if oldCoordinator == nil {
 		currentAuthentication.mu.Unlock()
 		return authError("invalidState", "Authentication is not ready to retry")
 	}
-	oldFlow := currentAuthentication.flow
-	flow, err := newAuthenticationFlow(currentAuthentication.server, currentAuthentication.port, currentAuthentication.deviceID)
-	if err != nil {
+	oldCoordinator.mu.Lock()
+	if oldCoordinator.running || oldCoordinator.pending != nil || oldCoordinator.ctx.Err() != nil {
+		oldCoordinator.mu.Unlock()
 		currentAuthentication.mu.Unlock()
-		return authError("initializationFailed", "Unable to restart authentication")
+		return authError("invalidState", "Authentication is not ready to retry")
 	}
-	listener := currentAuthentication.listener
-	currentAuthentication.flow = flow
-	currentAuthentication.busy = true
+	coordinator := newAuthenticationCoordinator(
+		oldCoordinator.server,
+		oldCoordinator.port,
+		oldCoordinator.deviceID,
+		oldCoordinator.listener,
+	)
+	oldCoordinator.mu.Unlock()
+	currentAuthentication.coordinator = coordinator
 	currentAuthentication.mu.Unlock()
-	if oldFlow != nil {
-		oldFlow.Cancel()
-	}
-	go runAuthenticationOperation(flow, listener, "auth.config", func() (auth.InteractivePrompt, error) {
-		return flow.Begin()
-	})
+	oldCoordinator.cancel()
+	go coordinator.fetchAuthMethods("")
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "retryStarted",

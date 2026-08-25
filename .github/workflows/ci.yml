@@ -23,6 +23,14 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.6"
+          cache-dependency-path: |
+            go/bridge/go.sum
+            tools/upstream-auth-spike/go.sum
+
       - name: Install Android SDK packages
         shell: pwsh
         run: |
@@ -35,6 +43,34 @@ jobs:
         shell: pwsh
         run: ./scripts/bootstrap-gomobile-toolchain.ps1
 
+      - name: Checkout upstream auth API baseline
+        uses: actions/checkout@v5
+        with:
+          repository: Mythologyli/zju-connect
+          ref: dc3cfa808ecc6dc424a38cf97b4f557dd02314b2
+          path: upstream-zju-connect
+
+      - name: Verify upstream compatibility module metadata
+        shell: pwsh
+        run: go -C tools/upstream-auth-spike mod tidy -diff
+
+      - name: Validate upstream auth API for Android
+        shell: pwsh
+        run: |
+          go work init ./tools/upstream-auth-spike ./upstream-zju-connect
+          go test ./tools/upstream-auth-spike/...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath go.work
+
+      - name: Test and vet Go bridge
+        shell: pwsh
+        run: |
+          $go = ".\.gomobile-toolchain\go\bin\go.exe"
+          & $go -C go/bridge test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $go -C go/bridge vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build Go core AAR
         shell: pwsh
         run: ./scripts/build-gomobile-aar.ps1
@@ -42,6 +78,10 @@ jobs:
       - name: Run release unit tests
         shell: pwsh
         run: ./gradlew.bat testReleaseUnitTest --no-daemon
+
+      - name: Run release lint
+        shell: pwsh
+        run: ./gradlew.bat lintRelease --no-daemon
 
       - name: Build unsigned release APK
         shell: pwsh

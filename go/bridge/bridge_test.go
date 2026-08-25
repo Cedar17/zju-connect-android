@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -8,13 +9,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
+	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
 
 func TestVerifyPinnedNodeSPKI(t *testing.T) {
@@ -43,11 +49,36 @@ func TestZjuAtrustNodeTLSConfigPinsDespiteCustomVerification(t *testing.T) {
 }
 
 type recordingListener struct {
+	mu     sync.Mutex
 	events []string
 }
 
 func (l *recordingListener) OnEvent(eventJSON string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.events = append(l.events, eventJSON)
+}
+
+func (l *recordingListener) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
+
+func (l *recordingListener) waitForType(t *testing.T, eventType string) authenticationEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, encoded := range l.snapshot() {
+			var event authenticationEvent
+			if json.Unmarshal([]byte(encoded), &event) == nil && event.Type == eventType {
+				return event
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in %v", eventType, l.snapshot())
+	return authenticationEvent{}
 }
 
 func TestStartAuthenticationValidatesEndpointWithoutNetworking(t *testing.T) {
@@ -92,14 +123,14 @@ func TestReusableAuthenticatedResultSurvivesCancellation(t *testing.T) {
 		t.Fatalf("Marshal auth data: %v", err)
 	}
 
-	result := auth.InteractiveResult{
+	result := authenticatedResult{
 		Username:     "student",
 		SID:          "session-id",
 		AuthData:     authData,
 		ResourceData: []byte(`{"resource":"opaque"}`),
 	}
 	cacheAuthenticatedResult(result)
-	clearInteractiveResult(&result)
+	clearAuthenticatedResult(&result)
 
 	if !HasReusableAuthenticatedResult() {
 		t.Fatal("authenticated result was not cached")
@@ -114,7 +145,7 @@ func TestReusableAuthenticatedResultSurvivesCancellation(t *testing.T) {
 	if !ok || reusable.Username != "student" || reusable.SID != "session-id" {
 		t.Fatalf("cached result = %#v, ok=%v", reusable, ok)
 	}
-	clearInteractiveResult(&reusable)
+	clearAuthenticatedResult(&reusable)
 
 	snapshot := ExportAuthenticatedSession()
 	if len(snapshot) == 0 {
@@ -136,29 +167,228 @@ func TestIncompleteAuthenticatedResultIsNotReusable(t *testing.T) {
 	ClearAuthenticatedResult()
 	defer ClearAuthenticatedResult()
 
-	cacheAuthenticatedResult(auth.InteractiveResult{SID: "session-id"})
+	cacheAuthenticatedResult(authenticatedResult{SID: "session-id"})
 	if HasReusableAuthenticatedResult() {
 		t.Fatal("incomplete authenticated result was marked reusable")
 	}
 }
 
-func TestAuthenticationPromptPreservesServerDrivenChallenge(t *testing.T) {
-	listener := &recordingListener{}
-	runAuthenticationPrompt(nil, listener, auth.InteractivePrompt{
-		State:         "awaitingToken",
-		Code:          "sessionExpired",
-		Message:       "token needed",
-		ChallengeKind: "auth/totp",
-	}, "auth.config", 0)
-	if len(listener.events) != 1 {
-		t.Fatalf("events = %d, want 1", len(listener.events))
+type fakeAuthSession struct {
+	methods      []auth.AuthInfo
+	login        func(auth.LoginMethod, auth.LoginOptions) (auth.LoginResult, error)
+	resourceData []byte
+	resourceErr  error
+}
+
+func (s *fakeAuthSession) GetAuthInfoList() ([]auth.AuthInfo, error) {
+	return append([]auth.AuthInfo(nil), s.methods...), nil
+}
+
+func (s *fakeAuthSession) Login(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
+	if s.login == nil {
+		return auth.LoginResult{}, errors.New("unexpected login")
 	}
-	var event authenticationEvent
-	if err := json.Unmarshal([]byte(listener.events[0]), &event); err != nil {
+	return s.login(method, options)
+}
+
+func (s *fakeAuthSession) ClientResource() ([]byte, error) {
+	return append([]byte(nil), s.resourceData...), s.resourceErr
+}
+
+func installTestCoordinator(t *testing.T, session upstreamAuthSession) (*authenticationCoordinator, *recordingListener) {
+	t.Helper()
+	CancelAuthentication()
+	ClearAuthenticatedResult()
+	listener := &recordingListener{}
+	coordinator := newAuthenticationCoordinator(
+		zjuAtrustServer,
+		zjuAtrustServerPort,
+		"0123456789abcdef0123456789abcdef",
+		listener,
+	)
+	coordinator.session = session
+	coordinator.running = false
+	currentAuthentication.mu.Lock()
+	currentAuthentication.coordinator = coordinator
+	currentAuthentication.mu.Unlock()
+	t.Cleanup(func() {
+		detachAuthenticationCoordinator(coordinator)
+		coordinator.cancel()
+		ClearAuthenticatedResult()
+	})
+	return coordinator, listener
+}
+
+func TestCoordinatorUsesUpstreamLoginAndBuildsReusableResult(t *testing.T) {
+	loginCall := make(chan struct {
+		authType string
+		domain   string
+		handler  authchallenge.Handler
+	}, 1)
+	session := &fakeAuthSession{
+		methods: []auth.AuthInfo{{AuthType: "auth/psw", LoginDomain: "default", AuthName: "Password"}},
+		login: func(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
+			loginCall <- struct {
+				authType string
+				domain   string
+				handler  authchallenge.Handler
+			}{method.AuthType(), method.LoginDomain(), options.ChallengeHandler}
+			return auth.LoginResult{
+				Username: "student",
+				SID:      "secret-session-id",
+				Cookies: []auth.Cookie{{
+					Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "secret-cookie",
+				}},
+			}, nil
+		},
+		resourceData: []byte(`{"resource":"opaque"}`),
+	}
+	coordinator, listener := installTestCoordinator(t, session)
+	coordinator.running = true
+	coordinator.fetchAuthMethods("")
+	listener.waitForType(t, "authMethodsReady")
+
+	if err := coordinator.selectMethod("auth/psw", "default"); err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != "tokenRequired" || event.Code != "sessionExpired" || event.ChallengeKind != "auth/totp" {
-		t.Fatalf("event = %#v", event)
+	listener.waitForType(t, "credentialsRequired")
+	if err := coordinator.submitLogin(auth.LoginMethodOptions{Username: "student", Password: "secret-password"}); err != nil {
+		t.Fatal(err)
+	}
+	authenticated := listener.waitForType(t, "authenticated")
+	if authenticated.Username != "student" || !HasReusableAuthenticatedResult() {
+		t.Fatalf("authenticated event/result = %#v, reusable=%v", authenticated, HasReusableAuthenticatedResult())
+	}
+	call := <-loginCall
+	if call.authType != "auth/psw" || call.domain != "default" || call.handler != coordinator {
+		t.Fatalf("upstream login call = %#v", call)
+	}
+	for _, encoded := range listener.snapshot() {
+		for _, secret := range []string{"secret-password", "secret-cookie", "secret-session-id"} {
+			if strings.Contains(encoded, secret) {
+				t.Fatalf("callback leaked %q: %s", secret, encoded)
+			}
+		}
+	}
+}
+
+func TestChallengeResponsesAreIsolatedByIdentity(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+
+	firstResult := make(chan authchallenge.CodeResponse, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleCodeChallenge(authchallenge.CodeChallenge{Kind: authchallenge.CodeTOTP})
+		firstResult <- response
+		firstErr <- err
+	}()
+	listener.waitForType(t, "tokenRequired")
+	coordinator.mu.Lock()
+	firstChallenge := coordinator.pending
+	coordinator.mu.Unlock()
+	if accepted := SubmitAuthentication(`{"action":"submitToken","token":"$ 123456"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("token submission was not accepted: %s", accepted)
+	}
+	if err := <-firstErr; err != nil {
+		t.Fatal(err)
+	}
+	if response := <-firstResult; response.Code != "123456" || !response.SkipSecondaryAuth {
+		t.Fatalf("first response = %#v", response)
+	}
+
+	secondResult := make(chan authchallenge.CodeResponse, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleCodeChallenge(authchallenge.CodeChallenge{Kind: authchallenge.CodeRadius})
+		secondResult <- response
+		secondErr <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	var secondChallenge *pendingAuthenticationChallenge
+	for time.Now().Before(deadline) {
+		coordinator.mu.Lock()
+		secondChallenge = coordinator.pending
+		coordinator.mu.Unlock()
+		if secondChallenge != nil && secondChallenge.id != firstChallenge.id {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if secondChallenge == nil || secondChallenge.id == firstChallenge.id {
+		t.Fatal("second challenge was not installed with a fresh identity")
+	}
+
+	select {
+	case firstChallenge.responses <- challengeResponse{id: firstChallenge.id, code: "late-secret"}:
+	default:
+		t.Fatal("completed response channel was unexpectedly closed or blocked")
+	}
+	select {
+	case <-secondResult:
+		t.Fatal("late response from the first challenge reached the second challenge")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitToken","token":"654321"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("second token submission was not accepted: %s", accepted)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatal(err)
+	}
+	if response := <-secondResult; response.Code != "654321" {
+		t.Fatalf("second response = %#v", response)
+	}
+}
+
+func TestChallengeCancellationUsesDoneSignalWithoutClosingResponses(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	result := make(chan error, 1)
+	go func() {
+		_, err := coordinator.HandleCodeChallenge(authchallenge.CodeChallenge{Kind: authchallenge.CodeSMS})
+		result <- err
+	}()
+	listener.waitForType(t, "smsRequired")
+	coordinator.mu.Lock()
+	challenge := coordinator.pending
+	coordinator.mu.Unlock()
+	coordinator.cancel()
+	if err := <-result; !errors.Is(err, errAuthenticationCancelled) {
+		t.Fatalf("cancelled handler error = %v", err)
+	}
+	select {
+	case challenge.responses <- challengeResponse{id: challenge.id, code: "late"}:
+	default:
+		t.Fatal("cancellation closed or blocked the response channel")
+	}
+}
+
+func TestClickCaptchaUsesExistingCoordinateSubmission(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	imageBuffer := new(bytes.Buffer)
+	pixels := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	pixels.Set(1, 1, color.White)
+	if err := png.Encode(imageBuffer, pixels); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan authchallenge.ClickCaptchaResponse, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleClickCaptcha(authchallenge.ClickCaptchaChallenge{Image: imageBuffer.Bytes()})
+		result <- response
+		errResult <- err
+	}()
+	event := listener.waitForType(t, "captchaRequired")
+	if event.CaptchaWidth != 20 || event.CaptchaHeight != 10 || len(coordinator.pendingCaptchaImage()) == 0 {
+		t.Fatalf("captcha event/image = %#v, bytes=%d", event, len(coordinator.pendingCaptchaImage()))
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitCaptcha","captcha":"{\"coordinates\":[[4,5]],\"width\":20,\"height\":10}"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("captcha submission was not accepted: %s", accepted)
+	}
+	if err := <-errResult; err != nil {
+		t.Fatal(err)
+	}
+	response := <-result
+	if len(response.Points) != 1 || response.Points[0].X != 4 || response.Points[0].Y != 5 {
+		t.Fatalf("captcha response = %#v", response)
 	}
 }
 
@@ -254,17 +484,92 @@ func TestAuthenticationSnapshotRejectsInvalidScopeAndVersion(t *testing.T) {
 	}
 }
 
-func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) {
-	invalid := sessionRestoreFailure(0, auth.ErrSessionInvalid)
-	if invalid.Type != "sessionInvalid" || invalid.Code != "sessionInvalid" || invalid.State != "idle" {
-		t.Fatalf("invalid-session event = %#v", invalid)
-	}
-
+func TestSessionRestoreFailureRedactsErrors(t *testing.T) {
 	secret := "cookie-value-that-must-not-leak"
 	unavailable := sessionRestoreFailure(0, errors.New("network failure: "+secret))
 	encoded := marshal(unavailable)
 	if unavailable.Code != "sessionRestoreUnavailable" || strings.Contains(encoded, secret) {
 		t.Fatalf("restore failure leaked or misclassified: %s", encoded)
+	}
+}
+
+func TestUpstreamErrorShimsAreNarrow(t *testing.T) {
+	if !isSessionStaleError(errors.New("login method is nil, but user is not logged in")) {
+		t.Fatal("current upstream stale-session error was not recognized")
+	}
+	if !isSessionStaleError(errors.New("aTrust session is not authenticated")) {
+		t.Fatal("compatibility stale-session error was not recognized")
+	}
+	if isSessionStaleError(errors.New("network failure while login method is nil")) {
+		t.Fatal("unrelated restore failure was classified as stale session")
+	}
+	if !isCredentialsRejectedError(errors.New("password authentication failed with code 1001: rejected")) {
+		t.Fatal("current upstream credential rejection was not recognized")
+	}
+	if isCredentialsRejectedError(errors.New("SMS authentication failed with code 1001")) {
+		t.Fatal("non-password failure was classified as credential rejection")
+	}
+}
+
+func TestCoordinatorContinuesStaleRestoredSessionInSameContext(t *testing.T) {
+	loginCalls := 0
+	session := &fakeAuthSession{
+		methods: []auth.AuthInfo{{AuthType: "auth/psw", LoginDomain: "default", AuthName: "Password"}},
+		login: func(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
+			loginCalls++
+			if loginCalls == 1 {
+				if method != nil || len(options.Cookies) != 1 || options.Cookies[0].Value != "secret-cookie" {
+					t.Fatalf("restore login inputs = method %v, options %#v", method, options)
+				}
+				return auth.LoginResult{}, errors.New("login method is nil, but user is not logged in")
+			}
+			if method == nil || method.AuthType() != "auth/psw" || method.LoginDomain() != "default" {
+				t.Fatalf("reauthentication method = %#v", method)
+			}
+			if len(options.Cookies) != 0 || options.ChallengeHandler == nil {
+				t.Fatalf("reauthentication options = %#v", options)
+			}
+			return auth.LoginResult{
+				Username: "student",
+				SID:      "refreshed-session-id",
+				Cookies: []auth.Cookie{{
+					Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "refreshed-cookie",
+				}},
+			}, nil
+		},
+		resourceData: []byte(`{"resource":"opaque"}`),
+	}
+	coordinator, listener := installTestCoordinator(t, session)
+	coordinator.running = true
+	coordinator.restore([]auth.Cookie{{
+		Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "secret-cookie",
+	}})
+	event := listener.waitForType(t, "authMethodsReady")
+	if event.Code != "sessionExpired" || event.State != "awaitingMethod" || len(event.AuthMethods) != 1 {
+		t.Fatalf("stale-session event = %#v", event)
+	}
+	if currentAuthenticationCoordinator() != coordinator || coordinator.ctx.Err() != nil {
+		t.Fatal("stale restore discarded the coordinator or its restored client context")
+	}
+	if err := coordinator.selectMethod("auth/psw", "default"); err != nil {
+		t.Fatal(err)
+	}
+	listener.waitForType(t, "credentialsRequired")
+	if err := coordinator.submitLogin(auth.LoginMethodOptions{Username: "student", Password: "saved-password"}); err != nil {
+		t.Fatal(err)
+	}
+	if event := listener.waitForType(t, "authenticated"); event.Username != "student" {
+		t.Fatalf("authenticated event = %#v", event)
+	}
+	if loginCalls != 2 || !HasReusableAuthenticatedResult() {
+		t.Fatalf("login calls = %d, reusable=%v", loginCalls, HasReusableAuthenticatedResult())
+	}
+	for _, encoded := range listener.snapshot() {
+		for _, secret := range []string{"secret-cookie", "saved-password", "refreshed-cookie", "refreshed-session-id"} {
+			if strings.Contains(encoded, secret) {
+				t.Fatalf("restore callback leaked %q: %s", secret, encoded)
+			}
+		}
 	}
 }
 
