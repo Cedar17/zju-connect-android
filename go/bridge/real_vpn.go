@@ -100,11 +100,11 @@ func PrepareRealVpn() string {
 	}
 	realVpnState.Unlock()
 
-	result, err := currentInteractiveResult()
+	result, err := currentAuthenticatedVpnResult()
 	if err != nil {
 		return realVpnErrorAt("notAuthenticated", "prepare.authentication", "Complete aTrust authentication before connecting")
 	}
-	defer clearInteractiveResult(&result)
+	defer clearAuthenticatedResult(&result)
 
 	var clientAuthData auth.ClientAuthData
 	if err := json.Unmarshal(result.AuthData, &clientAuthData); err != nil || clientAuthData.DeviceID == "" {
@@ -614,10 +614,10 @@ func closeTunFile(tunFile *os.File) {
 	}
 }
 
-func currentInteractiveResult() (auth.InteractiveResult, error) {
+func currentAuthenticatedVpnResult() (authenticatedResult, error) {
 	result, ok := currentAuthenticatedResult()
 	if !ok || result.SID == "" || len(result.AuthData) == 0 || len(result.ResourceData) == 0 {
-		return auth.InteractiveResult{}, fmt.Errorf("authentication has not completed")
+		return authenticatedResult{}, fmt.Errorf("authentication has not completed")
 	}
 	return result, nil
 }
