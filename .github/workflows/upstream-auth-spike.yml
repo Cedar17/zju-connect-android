@@ -16,15 +16,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.6"
-      - name: Checkout upstream PR 141 branch
-        uses: actions/checkout@v4
+          cache-dependency-path: tools/upstream-auth-spike/go.sum
+      - name: Checkout upstream auth API baseline
+        uses: actions/checkout@v5
         with:
           repository: Mythologyli/zju-connect
-          ref: refactor/auth-handler
+          ref: dc3cfa808ecc6dc424a38cf97b4f557dd02314b2
           path: upstream-zju-connect
+      - name: Verify compatibility module metadata
+        run: go -C tools/upstream-auth-spike mod tidy -diff
       - name: Compile Android-facing upstream auth API
-        working-directory: tools/upstream-auth-spike
         run: |
-          go mod edit -replace=github.com/mythologyli/zju-connect=${GITHUB_WORKSPACE}/upstream-zju-connect
-          go mod tidy
-          go test ./...
+          go work init ./tools/upstream-auth-spike ./upstream-zju-connect
+          go test ./tools/upstream-auth-spike/...

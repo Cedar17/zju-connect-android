@@ -54,6 +54,24 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $aarPath) | Out-Nu
 
 Push-Location $bridgeDir
 try {
+    $moduleMetadata = (& $goExe mod edit -json | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read Go module metadata."
+    }
+    $upstreamRequirement = $moduleMetadata.Require | Where-Object {
+        $_.Path -eq $lock.zjuConnect.module
+    }
+    $forkReplacement = $moduleMetadata.Replace | Where-Object {
+        $_.Old.Path -eq $lock.zjuConnect.module
+    }
+    if ($upstreamRequirement.Version -ne $lock.zjuConnect.upstreamVersion) {
+        throw "go.mod upstream version does not match tools\gomobile.lock.json."
+    }
+    if ($forkReplacement.New.Path -ne $lock.zjuConnect.forkModule -or
+        $forkReplacement.New.Version -ne $lock.zjuConnect.forkVersion) {
+        throw "go.mod fork replacement does not match tools\gomobile.lock.json."
+    }
+
     & $goExe mod tidy -diff
     if ($LASTEXITCODE -ne 0) {
         throw "Go module metadata is not tidy; run go mod tidy and commit the result."
@@ -104,11 +122,15 @@ $receipt = [ordered]@{
     goVersion = $lock.go.version
     gomobileVersion = $lock.gomobile.version
     gomobileCommit = $lock.gomobile.commit
+    zjuConnectUpstreamModule = $lock.zjuConnect.module
     zjuConnectUpstreamVersion = $lock.zjuConnect.upstreamVersion
     zjuConnectUpstreamCommit = $lock.zjuConnect.upstreamCommit
+    zjuConnectUpstreamRepository = $lock.zjuConnect.upstreamRepository
     zjuConnectForkModule = $lock.zjuConnect.forkModule
     zjuConnectForkVersion = $lock.zjuConnect.forkVersion
     zjuConnectForkCommit = $lock.zjuConnect.forkCommit
+    zjuConnectForkBranch = $lock.zjuConnect.forkBranch
+    zjuConnectForkRepository = $lock.zjuConnect.forkRepository
     ndkVersion = $lock.android.ndkVersion
     androidApi = $lock.android.androidApi
     abis = $lock.android.abis

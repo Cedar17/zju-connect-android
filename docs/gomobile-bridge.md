@@ -11,8 +11,8 @@ The authoritative machine-readable record is
 
 | Input | Pinned value |
 | --- | --- |
-| zju-connect upstream base | **1b6ad138737547782dcfc09def2a950738a67188** |
-| Android real-VPN fork | **Cedar17/zju-connect** at **7b54744a2d27bcaac1f75543ba9be582ae661754** |
+| zju-connect upstream auth API | **dc3cfa808ecc6dc424a38cf97b4f557dd02314b2** |
+| Android compatibility core | **Cedar17/zju-connect** branch **codex/pr53-auth-handler-compat** at **09e6d2e7224b773c67dd0bc32e47558a409d986d** |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -78,19 +78,23 @@ TLS, protocol, or server failures without exposing the underlying error text.
 
 ## Interactive authentication control plane
 
-The original upstream's mobile/mobile_android.go exposes EasyConnect Login,
-Logout, and StartStack; it is not an aTrust bridge. The maintained Android fork
-adds a small in-memory aTrust state machine that preserves certificate and host
-validation and replaces its synchronous CLI interactions. The Android façade
-provides password, server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
-structured events; `StartAuthentication`, `SubmitAuthentication`,
+The production bridge uses upstream `auth.Session`, `NewLoginMethod`,
+`Session.Login`, and `authchallenge.Handler`; it no longer depends on the
+fork-only `InteractiveFlow`. Upstream owns the aTrust protocol, session, and
+challenge definitions. The Android bridge implements the challenge handler and
+owns the UI-facing coordinator and state machine. It exposes password,
+server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
+structured events through `StartAuthentication`, `SubmitAuthentication`,
 `GetPendingCaptchaImage`, `CancelAuthentication`,
 `HasReusableAuthenticatedResult`, and `ClearAuthenticatedResult`;
 `ExportAuthenticatedSession` and
 `ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
 single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
-responses into callback JSON.
+responses into callback JSON. The production AAR remains temporarily pinned to
+the Cedar compatibility core above because the data plane has not yet migrated
+off the fork; the separate upstream auth compatibility test compiles this
+Android-facing API against the pinned upstream `main` merge commit.
 
 Authentication success leaves its client/resource result in Go memory for real
 VPN setup. Its exported recovery snapshot contains only a schema version,
