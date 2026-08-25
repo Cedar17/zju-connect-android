@@ -29,3 +29,4 @@ jobs:
         run: |
           go work init ./tools/upstream-auth-spike ./upstream-zju-connect
           go test ./tools/upstream-auth-spike/...
+          rm go.work

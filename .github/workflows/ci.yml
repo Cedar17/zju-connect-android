@@ -59,6 +59,8 @@ jobs:
         run: |
           go work init ./tools/upstream-auth-spike ./upstream-zju-connect
           go test ./tools/upstream-auth-spike/...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath go.work
 
       - name: Test and vet Go bridge
         shell: pwsh
