@@ -211,7 +211,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	currentAuthentication.coordinator = coordinator
 	currentAuthentication.mu.Unlock()
 
-	go coordinator.fetchAuthMethods()
+	go coordinator.fetchAuthMethods("")
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "authenticationStarted",
@@ -532,7 +532,7 @@ func (c *authenticationCoordinator) active() bool {
 	return c.ctx.Err() == nil && isCurrentAuthenticationCoordinator(c)
 }
 
-func (c *authenticationCoordinator) fetchAuthMethods() {
+func (c *authenticationCoordinator) fetchAuthMethods(code string) {
 	started := time.Now()
 	methods, err := c.session.GetAuthInfoList()
 	duration := time.Since(started)
@@ -562,6 +562,7 @@ func (c *authenticationCoordinator) fetchAuthMethods() {
 		SchemaVersion: schemaVersion,
 		Type:          "authMethodsReady",
 		State:         "awaitingMethod",
+		Code:          code,
 		Message:       "Choose an authentication method",
 		Stage:         "auth.config",
 		DurationMs:    boundedDurationMillis(duration),
@@ -729,12 +730,23 @@ func (c *authenticationCoordinator) restore(cookies []auth.Cookie) {
 		ChallengeHandler: c,
 	})
 	duration := time.Since(started)
+	if !c.active() || errors.Is(err, errAuthenticationCancelled) {
+		c.mu.Lock()
+		c.running = false
+		c.mu.Unlock()
+		return
+	}
+	if isSessionStaleError(err) {
+		// Session.Login has already restored the cookies and stable DeviceID
+		// into this Session. A rejected SID only means that it cannot directly
+		// prove authentication; keep the same client context for foreground
+		// credential recovery and any server-required challenge.
+		c.fetchAuthMethods("sessionExpired")
+		return
+	}
 	c.mu.Lock()
 	c.running = false
 	c.mu.Unlock()
-	if !c.active() || errors.Is(err, errAuthenticationCancelled) {
-		return
-	}
 	if err != nil {
 		detachAuthenticationCoordinator(c)
 		c.cancel()
@@ -923,18 +935,6 @@ func (c *authenticationCoordinator) HandleExternalLogin(challenge authchallenge.
 }
 
 func sessionRestoreFailure(duration time.Duration, err error) authenticationEvent {
-	if isSessionInvalidError(err) {
-		return authenticationEvent{
-			SchemaVersion: schemaVersion,
-			Type:          "sessionInvalid",
-			State:         "idle",
-			Code:          "sessionInvalid",
-			Message:       "Saved authentication session has expired",
-			Stage:         "auth.session_restore",
-			Cause:         "authentication",
-			DurationMs:    boundedDurationMillis(duration),
-		}
-	}
 	failure := classifyAuthenticationFailure("auth.session_restore", duration, err)
 	if failure.code == "authenticationFailed" {
 		failure.code = "sessionRestoreUnavailable"
@@ -951,7 +951,7 @@ func sessionRestoreFailure(duration time.Duration, err error) authenticationEven
 	}
 }
 
-func isSessionInvalidError(err error) bool {
+func isSessionStaleError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -992,7 +992,7 @@ func retryAuthentication() string {
 	currentAuthentication.coordinator = coordinator
 	currentAuthentication.mu.Unlock()
 	oldCoordinator.cancel()
-	go coordinator.fetchAuthMethods()
+	go coordinator.fetchAuthMethods("")
 	return marshal(authenticationEvent{
 		SchemaVersion: schemaVersion,
 		Type:          "retryStarted",

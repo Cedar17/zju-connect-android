@@ -245,7 +245,7 @@ func TestCoordinatorUsesUpstreamLoginAndBuildsReusableResult(t *testing.T) {
 	}
 	coordinator, listener := installTestCoordinator(t, session)
 	coordinator.running = true
-	coordinator.fetchAuthMethods()
+	coordinator.fetchAuthMethods("")
 	listener.waitForType(t, "authMethodsReady")
 
 	if err := coordinator.selectMethod("auth/psw", "default"); err != nil {
@@ -484,12 +484,7 @@ func TestAuthenticationSnapshotRejectsInvalidScopeAndVersion(t *testing.T) {
 	}
 }
 
-func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) {
-	invalid := sessionRestoreFailure(0, errors.New("login method is nil, but user is not logged in"))
-	if invalid.Type != "sessionInvalid" || invalid.Code != "sessionInvalid" || invalid.State != "idle" {
-		t.Fatalf("invalid-session event = %#v", invalid)
-	}
-
+func TestSessionRestoreFailureRedactsErrors(t *testing.T) {
 	secret := "cookie-value-that-must-not-leak"
 	unavailable := sessionRestoreFailure(0, errors.New("network failure: "+secret))
 	encoded := marshal(unavailable)
@@ -499,11 +494,14 @@ func TestSessionRestoreFailureDistinguishesExpiryAndRedactsErrors(t *testing.T) 
 }
 
 func TestUpstreamErrorShimsAreNarrow(t *testing.T) {
-	if !isSessionInvalidError(errors.New("login method is nil, but user is not logged in")) {
-		t.Fatal("current upstream invalid-session error was not recognized")
+	if !isSessionStaleError(errors.New("login method is nil, but user is not logged in")) {
+		t.Fatal("current upstream stale-session error was not recognized")
 	}
-	if isSessionInvalidError(errors.New("network failure while login method is nil")) {
-		t.Fatal("unrelated restore failure was classified as invalid session")
+	if !isSessionStaleError(errors.New("aTrust session is not authenticated")) {
+		t.Fatal("compatibility stale-session error was not recognized")
+	}
+	if isSessionStaleError(errors.New("network failure while login method is nil")) {
+		t.Fatal("unrelated restore failure was classified as stale session")
 	}
 	if !isCredentialsRejectedError(errors.New("password authentication failed with code 1001: rejected")) {
 		t.Fatal("current upstream credential rejection was not recognized")
@@ -513,27 +511,64 @@ func TestUpstreamErrorShimsAreNarrow(t *testing.T) {
 	}
 }
 
-func TestCoordinatorMapsInvalidRestoredSessionToExistingEvent(t *testing.T) {
+func TestCoordinatorContinuesStaleRestoredSessionInSameContext(t *testing.T) {
+	loginCalls := 0
 	session := &fakeAuthSession{
+		methods: []auth.AuthInfo{{AuthType: "auth/psw", LoginDomain: "default", AuthName: "Password"}},
 		login: func(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
-			if method != nil || len(options.Cookies) != 1 {
-				t.Fatalf("restore login inputs = method %v, options %#v", method, options)
+			loginCalls++
+			if loginCalls == 1 {
+				if method != nil || len(options.Cookies) != 1 || options.Cookies[0].Value != "secret-cookie" {
+					t.Fatalf("restore login inputs = method %v, options %#v", method, options)
+				}
+				return auth.LoginResult{}, errors.New("login method is nil, but user is not logged in")
 			}
-			return auth.LoginResult{}, errors.New("login method is nil, but user is not logged in")
+			if method == nil || method.AuthType() != "auth/psw" || method.LoginDomain() != "default" {
+				t.Fatalf("reauthentication method = %#v", method)
+			}
+			if len(options.Cookies) != 0 || options.ChallengeHandler == nil {
+				t.Fatalf("reauthentication options = %#v", options)
+			}
+			return auth.LoginResult{
+				Username: "student",
+				SID:      "refreshed-session-id",
+				Cookies: []auth.Cookie{{
+					Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "refreshed-cookie",
+				}},
+			}, nil
 		},
+		resourceData: []byte(`{"resource":"opaque"}`),
 	}
 	coordinator, listener := installTestCoordinator(t, session)
 	coordinator.running = true
 	coordinator.restore([]auth.Cookie{{
 		Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "secret-cookie",
 	}})
-	event := listener.waitForType(t, "sessionInvalid")
-	if event.Code != "sessionInvalid" || event.State != "idle" {
-		t.Fatalf("session-invalid event = %#v", event)
+	event := listener.waitForType(t, "authMethodsReady")
+	if event.Code != "sessionExpired" || event.State != "awaitingMethod" || len(event.AuthMethods) != 1 {
+		t.Fatalf("stale-session event = %#v", event)
+	}
+	if currentAuthenticationCoordinator() != coordinator || coordinator.ctx.Err() != nil {
+		t.Fatal("stale restore discarded the coordinator or its restored client context")
+	}
+	if err := coordinator.selectMethod("auth/psw", "default"); err != nil {
+		t.Fatal(err)
+	}
+	listener.waitForType(t, "credentialsRequired")
+	if err := coordinator.submitLogin(auth.LoginMethodOptions{Username: "student", Password: "saved-password"}); err != nil {
+		t.Fatal(err)
+	}
+	if event := listener.waitForType(t, "authenticated"); event.Username != "student" {
+		t.Fatalf("authenticated event = %#v", event)
+	}
+	if loginCalls != 2 || !HasReusableAuthenticatedResult() {
+		t.Fatalf("login calls = %d, reusable=%v", loginCalls, HasReusableAuthenticatedResult())
 	}
 	for _, encoded := range listener.snapshot() {
-		if strings.Contains(encoded, "secret-cookie") {
-			t.Fatalf("restore callback leaked a cookie: %s", encoded)
+		for _, secret := range []string{"secret-cookie", "saved-password", "refreshed-cookie", "refreshed-session-id"} {
+			if strings.Contains(encoded, secret) {
+				t.Fatalf("restore callback leaked %q: %s", secret, encoded)
+			}
 		}
 	}
 }
