@@ -2,9 +2,7 @@ module github.com/Cedar17/zju-connect-android/go/bridge
 
 go 1.25.6
 
-require github.com/mythologyli/zju-connect v1.3.1-0.20260812122842-1b6ad1387375
-
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.3-0.20260820105047-75aafb27f2fe
+require github.com/mythologyli/zju-connect v1.3.1-0.20260824165359-5d7f5b11fcf2
 
 require (
 	github.com/boombuler/barcode v1.1.0 // indirect
