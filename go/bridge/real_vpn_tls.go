@@ -30,11 +30,16 @@ var zjuAtrustNodeSPKIPins = [][sha256.Size]byte{
 	},
 }
 
+func zjuAtrustPortalTLSConfig() *tls.Config {
+	return &tls.Config{}
+}
+
 func zjuAtrustNodeTLSConfig() *tls.Config {
 	return &tls.Config{
 		// The appliance certificate cannot pass Web PKI verification. The
 		// VerifyConnection callback below replaces it with a mandatory SPKI pin.
-		InsecureSkipVerify: true, // #nosec G402 -- verification is enforced by VerifyConnection.
+		InsecureSkipVerify:     true, // #nosec G402 -- verification is enforced by VerifyConnection.
+		SessionTicketsDisabled: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			return verifyPinnedNodeSPKI(state.PeerCertificates, zjuAtrustNodeSPKIPins)
 		},

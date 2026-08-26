@@ -106,10 +106,11 @@ type upstreamAuthSession interface {
 	ClientResource() ([]byte, error)
 }
 
-var newUpstreamAuthSession = func(server string) upstreamAuthSession {
-	// PR #141 reserves the second argument for TLS key logging. The Cedar
-	// compatibility base accepts the same nil value as an unused dialer.
-	return auth.NewSession(server, nil)
+var newUpstreamAuthSession = func(ctx context.Context, server string) upstreamAuthSession {
+	return auth.NewSessionWithOptions(server, auth.SessionOptions{
+		Context:   ctx,
+		TLSConfig: zjuAtrustPortalTLSConfig(),
+	})
 }
 
 type authenticationSession struct {
@@ -486,7 +487,7 @@ type authenticationCoordinator struct {
 func newAuthenticationCoordinator(server string, port int, deviceID string, listener BridgeListener) *authenticationCoordinator {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &authenticationCoordinator{
-		session:   newUpstreamAuthSession(net.JoinHostPort(server, fmt.Sprint(port))),
+		session:   newUpstreamAuthSession(ctx, net.JoinHostPort(server, fmt.Sprint(port))),
 		listener:  listener,
 		server:    server,
 		port:      port,
