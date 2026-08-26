@@ -4,8 +4,6 @@ go 1.25.6
 
 require github.com/mythologyli/zju-connect v1.3.2-0.20260825122625-dc3cfa808ecc
 
-replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v1.2.3-0.20260825115350-09e6d2e7224b
-
 require (
 	github.com/boombuler/barcode v1.1.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
@@ -43,3 +41,5 @@ require (
 )
 
 tool golang.org/x/mobile/cmd/gobind
+
+replace github.com/mythologyli/zju-connect => github.com/Cedar17/zju-connect v0.0.0-20260826082435-a76568d0973e

@@ -66,9 +66,10 @@ type realVpnSession struct {
 }
 
 type preparedRealVpn struct {
-	client  *atrust.Client
-	address string
-	routes  []realVpnRoute
+	client   *atrust.Client
+	underlay *androidUnderlayDialer
+	address  string
+	routes   []realVpnRoute
 }
 
 var realVpnState struct {
@@ -111,8 +112,17 @@ func PrepareRealVpn() string {
 		return realVpnErrorAt("invalidAuthResult", "prepare.authentication", "The in-memory authentication result is incomplete")
 	}
 
-	vpnClient := atrust.NewClient(result.Username, result.SID, clientAuthData.DeviceID, "")
-	vpnClient.SetNodeTLSConfig(zjuAtrustNodeTLSConfig())
+	underlay := newAndroidUnderlayDialer()
+	vpnClient := atrust.NewClient(atrust.ClientOptions{
+		Session: atrust.SessionOptions{
+			Username: result.Username,
+			SID:      result.SID,
+			DeviceID: clientAuthData.DeviceID,
+		},
+		UnderlayDialer: underlay,
+		AuthTLSConfig:  zjuAtrustPortalTLSConfig(),
+		NodeTLSConfig:  zjuAtrustNodeTLSConfig(),
+	})
 	owner := newRealVpnPreparationOwner(vpnClient.Close)
 	realVpnState.Lock()
 	if realVpnState.active != nil {
@@ -135,18 +145,13 @@ func PrepareRealVpn() string {
 
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), realVpnPrepareTimeout)
 	defer cancelSetup()
-	vpnClient.SetSetupStageReporter(owner.setStage)
-	if _, err := vpnClient.SetupContext(
-		setupCtx,
-		zjuAtrustServer,
-		zjuAtrustServerPort,
-		"", "", "", "", "", "", "", "", "",
-		result.AuthData,
-		result.ResourceData,
-		0,
-		"",
-		false,
-	); err != nil {
+	owner.setStage("prepare.setup")
+	if _, err := vpnClient.SetupContext(setupCtx, atrust.SetupOptions{
+		ServerAddress: zjuAtrustServer,
+		ServerPort:    zjuAtrustServerPort,
+		ClientData:    result.AuthData,
+		ResourceData:  result.ResourceData,
+	}); err != nil {
 		return realVpnSetupFailure(owner, setupCtx, err)
 	}
 	if err := setupCtx.Err(); err != nil {
@@ -192,9 +197,10 @@ func PrepareRealVpn() string {
 	}
 
 	prepared := &preparedRealVpn{
-		client:  vpnClient,
-		address: address.To4().String(),
-		routes:  routes,
+		client:   vpnClient,
+		underlay: underlay,
+		address:  address.To4().String(),
+		routes:   routes,
 	}
 	stage, durationMillis := owner.snapshot()
 	realVpnState.Lock()
@@ -308,7 +314,7 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 	realVpnState.prepared = nil
 	realVpnState.Unlock()
 
-	prepared.client.SetSocketProtector(protector)
+	prepared.underlay.SetSocketProtector(protector)
 	if err := prepareTunFileDescriptor(tunFD); err != nil {
 		prepared.client.Close()
 		closeTunFile(os.NewFile(uintptr(tunFD), "zju-connect-real-tun-invalid"))
@@ -442,8 +448,10 @@ func safeRunRealVpnStack(session *realVpnSession) (failure *realVpnFailure) {
 	return runRealVpnStack(session)
 }
 
-// runRealVpnStack is the Android TUN loop. Resource misses and packets rejected
-// while the L3 transport recovers are dropped without ending the Android VPN.
+// runRealVpnStack is the Android TUN loop. Resource misses are dropped without
+// ending the Android VPN. Upstream main currently does not expose the fork's
+// L3 recovery state/events, so this spike treats other transport failures as
+// terminal and records that behavior as a migration blocker.
 func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	l3Conn, err := session.client.NewL3Conn()
 	if err != nil {
@@ -459,36 +467,6 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	var failureOnce sync.Once
 	reportFailure := func(failure *realVpnFailure) {
 		failureOnce.Do(func() { failureCh <- failure })
-	}
-	if eventSource, ok := l3Conn.(interface {
-		Events() <-chan atrust.L3TunnelEvent
-	}); ok {
-		go func() {
-			for event := range eventSource.Events() {
-				switch event.State {
-				case atrust.L3TunnelStateRecovering:
-					emitRealVpnState(
-						session.listener,
-						"recovering",
-						"l3Reconnecting",
-						"dataplane.l3.reconnect",
-						"The aTrust data connection is recovering",
-						session,
-					)
-				case atrust.L3TunnelStateActive:
-					emitRealVpnState(
-						session.listener,
-						"active",
-						"",
-						"dataplane.l3.recovered",
-						"The aTrust data connection recovered",
-						session,
-					)
-				case atrust.L3TunnelStateFailed:
-					reportFailure(realVpnFailureFromL3Event(event))
-				}
-			}
-		}()
 	}
 	go func() {
 		buf := make([]byte, realVpnMTU)
@@ -514,10 +492,6 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 
 			session.diagnostics.l3WriteAttempts.Add(1)
 			if _, writeErr := l3Conn.Write(packet); writeErr != nil {
-				if errors.Is(writeErr, atrust.ErrL3TunnelRecovering) {
-					emitRealVpnObservation(session, "dataplane.l3.write", "l3Recovering", packet)
-					continue
-				}
 				if errors.Is(writeErr, client.ErrResourceNotFound) {
 					session.diagnostics.resourceDrops.Add(1)
 					emitRealVpnObservation(session, "dataplane.l3.write", "resourceNotFound", packet)
@@ -579,25 +553,6 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	}()
 
 	return <-failureCh
-}
-
-func realVpnFailureFromL3Event(event atrust.L3TunnelEvent) *realVpnFailure {
-	switch event.Failure {
-	case atrust.L3TunnelFailureAuthentication:
-		return &realVpnFailure{
-			code:    "vpnSessionInvalid",
-			stage:   "dataplane.l3.reconnect",
-			cause:   "authentication",
-			message: "The authenticated VPN session is no longer valid",
-		}
-	default:
-		return &realVpnFailure{
-			code:    "vpnConfigurationUnavailable",
-			stage:   "dataplane.l3.reconnect",
-			cause:   "configuration",
-			message: "The aTrust data connection configuration is unavailable",
-		}
-	}
 }
 
 func clearActiveRealVpn(session *realVpnSession) {
