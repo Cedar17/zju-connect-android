@@ -120,8 +120,6 @@ func PrepareRealVpn() string {
 			DeviceID: clientAuthData.DeviceID,
 		},
 		UnderlayDialer: underlay,
-		AuthTLSConfig:  zjuAtrustPortalTLSConfig(),
-		NodeTLSConfig:  zjuAtrustNodeTLSConfig(),
 	})
 	owner := newRealVpnPreparationOwner(vpnClient.Close)
 	realVpnState.Lock()
