@@ -31,6 +31,18 @@ jobs:
             go/bridge/go.sum
             tools/upstream-auth-spike/go.sum
 
+      # Temporary migration bootstrap: collect exact module metadata changes from CI.
+      - name: Regenerate module metadata (temporary)
+        shell: pwsh
+        run: |
+          go -C go/bridge mod tidy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go -C tools/upstream-auth-spike mod tidy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "MIGRATION_GO_MOD_DIFF_BEGIN"
+          git diff -- go/bridge/go.mod go/bridge/go.sum tools/upstream-auth-spike/go.mod tools/upstream-auth-spike/go.sum
+          Write-Host "MIGRATION_GO_MOD_DIFF_END"
+
       - name: Install Android SDK packages
         shell: pwsh
         run: |
@@ -47,7 +59,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Mythologyli/zju-connect
-          ref: dc3cfa808ecc6dc424a38cf97b4f557dd02314b2
+          ref: c19eb4ed34b9cf6e8e8ea3315fe9973c8411eb63
           path: upstream-zju-connect
 
       - name: Verify upstream compatibility module metadata
