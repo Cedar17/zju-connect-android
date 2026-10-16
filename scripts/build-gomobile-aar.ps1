@@ -68,12 +68,11 @@ try {
         throw "go.mod upstream version does not match tools\gomobile.lock.json."
     }
 
+    if ($null -ne $upstreamReplacement) {
+        throw "Official zju-connect dependency must not use a module replace."
+    }
     $zjuConnectModule = $lock.zjuConnect.module
     $zjuConnectVersion = $upstreamRequirement.Version
-    if ($null -ne $upstreamReplacement) {
-        $zjuConnectModule = $upstreamReplacement.New.Path
-        $zjuConnectVersion = $upstreamReplacement.New.Version
-    }
 
     & $goExe mod tidy -diff
     if ($LASTEXITCODE -ne 0) {
