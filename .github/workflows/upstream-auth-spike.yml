@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Mythologyli/zju-connect
-          ref: dc3cfa808ecc6dc424a38cf97b4f557dd02314b2
+          ref: c19eb4ed34b9cf6e8e8ea3315fe9973c8411eb63
           path: upstream-zju-connect
       - name: Verify compatibility module metadata
         run: go -C tools/upstream-auth-spike mod tidy -diff
