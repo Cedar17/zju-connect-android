@@ -11,8 +11,7 @@ The authoritative machine-readable record is
 
 | Input | Pinned value |
 | --- | --- |
-| zju-connect upstream auth API | **dc3cfa808ecc6dc424a38cf97b4f557dd02314b2** |
-| Android compatibility core | **Cedar17/zju-connect** branch **codex/pr53-auth-handler-compat** at **09e6d2e7224b773c67dd0bc32e47558a409d986d** |
+| Official zju-connect core | **c19eb4ed34b9cf6e8e8ea3315fe9973c8411eb63** (upstream `main`, #144 merged) |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -91,10 +90,10 @@ structured events through `StartAuthentication`, `SubmitAuthentication`,
 `ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
 single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
-responses into callback JSON. The production AAR remains temporarily pinned to
-the Cedar compatibility core above because the data plane has not yet migrated
-off the fork; the separate upstream auth compatibility test compiles this
-Android-facing API against the pinned upstream `main` merge commit.
+responses into callback JSON. The production Go module depends directly on the pinned official upstream
+core, without a module `replace` to the former compatibility fork. The
+upstream authentication compatibility test validates the official API
+surface independently.
 
 Authentication success leaves its client/resource result in Go memory for real
 VPN setup. Its exported recovery snapshot contains only a schema version,

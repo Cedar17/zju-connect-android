@@ -3,8 +3,6 @@ package core
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -22,31 +20,6 @@ import (
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
-
-func TestVerifyPinnedNodeSPKI(t *testing.T) {
-	certificate := &x509.Certificate{RawSubjectPublicKeyInfo: []byte("expected-node-key")}
-	expected := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
-
-	if err := verifyPinnedNodeSPKI([]*x509.Certificate{certificate}, [][sha256.Size]byte{expected}); err != nil {
-		t.Fatalf("matching node pin rejected: %v", err)
-	}
-	if err := verifyPinnedNodeSPKI(nil, [][sha256.Size]byte{expected}); err == nil {
-		t.Fatal("missing node certificate was accepted")
-	}
-	if err := verifyPinnedNodeSPKI(
-		[]*x509.Certificate{{RawSubjectPublicKeyInfo: []byte("unexpected-node-key")}},
-		[][sha256.Size]byte{expected},
-	); err == nil {
-		t.Fatal("unexpected node certificate was accepted")
-	}
-}
-
-func TestZjuAtrustNodeTLSConfigPinsDespiteCustomVerification(t *testing.T) {
-	config := zjuAtrustNodeTLSConfig()
-	if !config.InsecureSkipVerify || config.VerifyConnection == nil {
-		t.Fatal("node TLS config must replace appliance PKI validation with a mandatory pin")
-	}
-}
 
 type recordingListener struct {
 	mu     sync.Mutex
