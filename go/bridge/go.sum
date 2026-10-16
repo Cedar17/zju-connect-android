@@ -1,5 +1,5 @@
-github.com/Cedar17/zju-connect v0.0.0-20260826082435-a76568d0973e h1:c88hBn4r+j+xatVzHvZA0whIbq8Ml+WBH1Wlw7sqDf4=
-github.com/Cedar17/zju-connect v0.0.0-20260826082435-a76568d0973e/go.mod h1:q1iWuUTuW21poGl7Az+lXqj5D/MH0DRIqAZ+4U4blI8=
+github.com/mythologyli/zju-connect v1.3.2-0.20261008095431-c19eb4ed34b9 h1:F8J5xRrx/lHSLHUOhTfc+0j/Y+bSZB6ihMfIY7dB+mo=
+github.com/mythologyli/zju-connect v1.3.2-0.20261008095431-c19eb4ed34b9/go.mod h1:q1iWuUTuW21poGl7Az+lXqj5D/MH0DRIqAZ+4U4blI8=
 github.com/andybalholm/brotli v1.2.1 h1:R+f5xP285VArJDRgowrfb9DqL18yVK0gKAW/F+eTWro=
 github.com/andybalholm/brotli v1.2.1/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/beevik/etree v1.6.0 h1:u8Kwy8pp9D9XeITj2Z0XtA5qqZEmtJtuXZRQi+j03eE=
