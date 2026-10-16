@@ -107,10 +107,7 @@ type upstreamAuthSession interface {
 }
 
 var newUpstreamAuthSession = func(ctx context.Context, server string) upstreamAuthSession {
-	return auth.NewSessionWithOptions(server, auth.SessionOptions{
-		Context:   ctx,
-		TLSConfig: zjuAtrustPortalTLSConfig(),
-	})
+	return auth.NewSessionContext(ctx, server, nil)
 }
 
 type authenticationSession struct {
