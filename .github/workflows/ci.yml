@@ -31,29 +31,6 @@ jobs:
             go/bridge/go.sum
             tools/upstream-auth-spike/go.sum
 
-      # Temporary migration bootstrap: collect exact module metadata changes from CI.
-      - name: Regenerate module metadata (temporary)
-        shell: pwsh
-        run: |
-          go -C go/bridge mod tidy
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go -C tools/upstream-auth-spike mod tidy
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host "MIGRATION_GO_MOD_DIFF_BEGIN"
-          git diff -- go/bridge/go.mod go/bridge/go.sum tools/upstream-auth-spike/go.mod tools/upstream-auth-spike/go.sum
-          Write-Host "MIGRATION_GO_MOD_DIFF_END"
-
-      - name: Upload regenerated module metadata (temporary)
-        uses: actions/upload-artifact@v4
-        with:
-          name: upstream-module-metadata
-          path: |
-            go/bridge/go.mod
-            go/bridge/go.sum
-            tools/upstream-auth-spike/go.mod
-            tools/upstream-auth-spike/go.sum
-          if-no-files-found: error
-
       - name: Install Android SDK packages
         shell: pwsh
         run: |
