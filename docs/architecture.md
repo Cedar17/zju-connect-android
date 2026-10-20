@@ -59,7 +59,9 @@ Android system ─────── Always-on start ─────────
   it does not duplicate authentication or VPN lifecycle state.
 - Session and remembered-account storage are private Android implementation details owned by the ViewModel flow.
 - `VpnService` owns the Android TUN, foreground service, and socket protection boundary.
-- The Go core owns aTrust protocol handling, resource parsing, routing, and the data plane.
+- The official upstream Go core owns aTrust protocol handling, resource parsing,
+  routing, the data plane, and internal L3 reconnect. The app-owned Go bridge
+  maps its public API to Android without a production core fork.
 
 ## Connection state
 
@@ -132,8 +134,10 @@ The implemented encrypted snapshot persists only `schemaVersion`, the exact
 `deviceId`, and the complete authentication cookie set returned for the fixed
 ZJU endpoint. SID remains inside that cookie set. Resources, connection ID,
 sign key, password, verification input, creation time, server identity, and
-username are not stored in that snapshot. Separately, Android stores only the
-last server-confirmed username in private preferences for display and login
+username are not stored in that snapshot. `ServerVersionInfo` is also not
+persisted; upstream setup fetches the server manifest for each preparation,
+so this app does not provide the upstream cached-manifest fallback. Separately,
+Android stores only the last server-confirmed username in private preferences for display and login
 prefill; resources and username are refreshed after session validation, and
 connection-scoped identifiers are regenerated.
 
@@ -148,7 +152,11 @@ Required security properties:
 - Encrypt persisted state with an Android Keystore-backed non-exportable key, for example AES-GCM.
 - Store ciphertext in a location excluded from system backup, such as `noBackupFilesDir` or its equivalent.
 - Write the encrypted envelope atomically and bind its format to fixed authenticated data.
-- Do not bypass server-required SMS, captcha, TLS certificate, or hostname validation.
+- Never bypass server-required SMS, CAPTCHA, or other interactive verification.
+- TLS follows the pinned official upstream implementation. Both authentication
+  and tunnel transports currently skip standard certificate-chain and hostname
+  verification; the app does not add certificate or SPKI pins. This is the
+  current upstream transport policy, not a claim of standard TLS peer validation.
 - Never log passwords, cookies, SIDs, device identifiers, sign keys, captcha data, or complete authentication responses.
 - The user-facing diagnostics report is an application-owned, bounded redacted
   event buffer rather than a Logcat viewer. It records only allowlisted state,
@@ -175,12 +183,13 @@ identified by the absence of an app marker and uses `START_STICKY` only as a
 lifecycle aid. Android system VPN settings, not an app preference, remain the
 source of truth for Always-on.
 
-The service observes all non-VPN networks with Internet capability instead of
-the application's default network, which can be the VPN itself. An opaque,
+The service observes Internet-capable non-VPN networks and captures the system
+default underlay at session start. Recovery follows that session's underlay;
+changes to an unrelated backup network do not rebuild a working VPN. An opaque,
 in-memory fingerprint covers network identity, transport, suspension, interface,
 and IPv4/default-route changes; addresses and network names never enter logs or
-diagnostics. A stable change is debounced for 1.5 seconds, then the service stops
-the old Go/TUN session and rebuilds it from the authenticated result already held
+diagnostics. A relevant stable change is debounced for 1.5 seconds, then the
+service stops the old Go/TUN session and rebuilds it from the authenticated result already held
 in Go memory. If no usable underlay exists, the foreground service waits until a
 network returns. Cold Always-on session validation uses at most three attempts
 at 0, 5, and 30 seconds for one underlay-network revision, then waits for a new
@@ -224,13 +233,14 @@ continue to follow them:
 
 ### Authentication control plane
 
-- The Android fork exposes a single in-memory aTrust flow for server-advertised
-  password login, server-triggered SMS, and graphical CAPTCHA steps.
+- The Android bridge coordinates a single in-memory flow through upstream
+  authentication and challenge APIs, including server-advertised password,
+  SMS, CAPTCHA, TOTP, and RADIUS authentication.
 - Kotlin receives versioned structured events and CAPTCHA bytes through the
   gomobile boundary; it never parses CLI output or exchanges secrets through
   temporary files.
-- Authentication enforces normal TLS certificate and hostname validation,
-  supports cancellation and retry, maps UI-visible failures to stable codes,
+- Authentication follows the upstream TLS policy described above, supports
+  caller-owned cancellation and retry, maps UI-visible failures to stable codes,
   and retains the live result in Go memory while Android encrypts only the
   minimal recovery snapshot.
 
@@ -242,9 +252,9 @@ continue to follow them:
   TUN, and owns deterministic stop and revoke cleanup.
 - Packets outside the aTrust resource set are dropped as split-tunnel traffic;
   TUN and L3 failures use stable UI error codes.
-- The length-framed response parser preserves the negotiated mode, reassembles
-  IPv4 packets split across server frames, and fails closed on malformed length
-  streams instead of desynchronizing the TUN.
+- The upstream core owns server framing, L3 transport, and internal reconnect.
+  The Android bridge maps errors returned by its public L3 connection to
+  terminal VPN failures instead of maintaining another protocol recovery loop.
 - Diagnostics expose only allowlisted states, stable codes, and bounded counters;
   they exclude packet metadata, payloads, authentication material, and network
   identifiers.
@@ -303,7 +313,8 @@ cellular data. K40 smoke checks use CLI requests to `https://www.cc98.org/` and
 ### Underlay network recovery
 
 - Android observes Internet-capable non-VPN networks for identity, transport,
-  suspension, interface, IPv4 address, and default-route changes.
+  suspension, interface, IPv4 address, and default-route changes, and anchors
+  recovery to the underlay captured when the current session starts.
 - Callback bursts are coalesced before Android closes the old TUN and aTrust
   data plane and rebuilds them with the existing authenticated result.
 - If no underlay is usable, the foreground service waits indefinitely for a
@@ -322,7 +333,8 @@ recovery has also been manually accepted on a OnePlus Ace 3V.
 
 Do not publish while any of the following is true:
 
-- TLS certificate or hostname verification can be bypassed.
+- TLS behavior differs from the documented pinned-upstream policy without an
+  explicit implementation and documentation update.
 - Sensitive credentials or identifiers can enter logs or plaintext files.
 - Session snapshots are unencrypted or included in cloud backup.
 - The VPN socket is not protected from TUN routing loops.

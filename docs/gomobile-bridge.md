@@ -11,7 +11,7 @@ The authoritative machine-readable record is
 
 | Input | Pinned value |
 | --- | --- |
-| Official zju-connect core | **c19eb4ed34b9cf6e8e8ea3315fe9973c8411eb63** (upstream `main`, #144 merged) |
+| Official zju-connect core | Exact module version and commit in the lockfile |
 | Go | **1.25.6** |
 | golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
 | Android NDK | **29.0.14206865** (r29) |
@@ -55,8 +55,25 @@ a side effect of a normal Android build.
 
 The Gradle unit-test task covers the Kotlin connection policies, CAPTCHA
 coordinate mapper, encrypted-session envelope codec, VPN lifecycle, and
-redacted diagnostics. It does not replace the Go bridge and fork state-machine
-tests above.
+redacted diagnostics. It does not replace the Go bridge tests, which also cover
+the public upstream authentication API used by Android, or real-device checks.
+
+## Versioning and release
+
+`app/build.gradle.kts` owns the user-facing `versionName` and Android's integer
+`versionCode`. For this app, patch releases contain fixes and small compatible
+improvements; minor releases introduce features or substantial core/behavior
+changes. During `0.x` development, the minor number identifies a development
+milestone. After `1.0.0`, incompatible changes to supported use, configuration,
+or persisted state require a major release.
+
+Increment `versionCode` for each distinct distributed build. A release tag must
+be `v<versionName>` so the generated APK name matches the release workflow.
+Publish from the merged integration commit; do not replace an existing release
+with different contents. The tag workflow builds and signs the arm64 APK and
+publishes a GitHub Pre-release. A local APK, successful CI, a merged PR, and a
+published release are separate states. Record real-device acceptance in the PR
+with its actual scope before publishing.
 
 ## Kotlin–Go contract
 
@@ -77,10 +94,9 @@ TLS, protocol, or server failures without exposing the underlying error text.
 
 ## Interactive authentication control plane
 
-The production bridge uses upstream `auth.Session`, `NewLoginMethod`,
-`Session.Login`, and `authchallenge.Handler`; it no longer depends on the
-fork-only `InteractiveFlow`. Upstream owns the aTrust protocol, session, and
-challenge definitions. The Android bridge implements the challenge handler and
+The production bridge uses upstream `auth.NewSessionContext`, `NewLoginMethod`,
+`Session.Login`, and `authchallenge.Handler`. Upstream owns the aTrust protocol,
+session, and challenge definitions. The Android bridge implements the challenge handler and
 owns the UI-facing coordinator and state machine. It exposes password,
 server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
 structured events through `StartAuthentication`, `SubmitAuthentication`,
@@ -90,10 +106,13 @@ structured events through `StartAuthentication`, `SubmitAuthentication`,
 `ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
 single active flow that never puts
 credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
-responses into callback JSON. The production Go module depends directly on the pinned official upstream
-core, without a module `replace` to the former compatibility fork. The
-upstream authentication compatibility test validates the official API
-surface independently.
+responses into callback JSON. The production Go module depends directly on the
+pinned official upstream core. The AAR build rejects a core module `replace`;
+the bridge tests and Android AAR build validate the consumed public APIs.
+
+TLS policy is inherited from that pinned core: authentication and tunnel
+transports currently skip standard certificate-chain and hostname verification.
+The Android bridge supplies no custom certificate or SPKI verification policy.
 
 Authentication success leaves its client/resource result in Go memory for real
 VPN setup. Its exported recovery snapshot contains only a schema version,
@@ -102,8 +121,9 @@ those bytes with Android Keystore AES-GCM and atomically stores the envelope in
 `noBackupFilesDir`. After a process restart, the user's Connect action asks Go
 to validate the restored cookies with the server and refetch username and
 resources before recreating the in-memory result. App startup itself does not
-read or validate the snapshot. The recovery ladder and invalidation policy,
-including `sessionExpired != invalidSession`, are authoritative in
+read or validate the snapshot. `ServerVersionInfo` is not part of this snapshot;
+upstream setup must fetch the server manifest during preparation. The recovery
+ladder and invalidation policy, including `sessionExpired != invalidSession`, are authoritative in
 [authentication-recovery.md](authentication-recovery.md).
 
 The bridge keeps a separate copy of a complete authenticated result while the
@@ -127,22 +147,24 @@ invalidation rules are defined in
 [authentication-recovery.md](authentication-recovery.md).
 
 The bridge exposes `PrepareRealVpn()`, which prepares an
-`atrust.Client` and returns a versioned event containing only the assigned IPv4
+`atrust.Client` through `SetupContext` with a 30-second preparation deadline,
+and returns a versioned event containing only the assigned IPv4
 address and IPv4 resource prefixes. `StartRealVpn(tunFD, protector, listener)`
 attaches the Android TUN and installs the `VpnService.protect()` boundary for
 future underlay connections. `DiscardPreparedRealVpn()` releases only a
 prepared client that has not yet been attached to a TUN, leaving an active VPN
 untouched. `StopRealVpn()` is idempotent and closes the client, TUN, underlay
 sockets, and L3 readers. Cancelling returns without
-waiting for an in-flight request: it cancels the request context, closes that
-session's active HTTP connections, and clears its sensitive state before any
-stale event can reach the UI. QR/CAS/OAuth login and bridge-owned reconnect
+waiting for an in-flight request: it cancels the caller context and rejects
+late results after ownership changes. QR/CAS/OAuth login and bridge-owned reconnect
 behavior are out of scope.
 
 Android owns network-switch recovery by calling the existing idempotent
 `StopRealVpn()`, then `PrepareRealVpn()` and `StartRealVpn()` again after the
 new underlay settles. The Go bridge does not migrate live sockets, choose an
-Android `Network`, or implement an independent reconnect loop.
+Android `Network`, or implement an independent reconnect loop. Internal L3
+reconnect belongs to upstream; errors returned by the public L3 connection are
+mapped to terminal Android VPN failures.
 
 The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
 aTrust resource set are dropped as split-tunnel traffic instead of terminating

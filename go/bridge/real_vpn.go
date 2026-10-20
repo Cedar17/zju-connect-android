@@ -447,9 +447,8 @@ func safeRunRealVpnStack(session *realVpnSession) (failure *realVpnFailure) {
 }
 
 // runRealVpnStack is the Android TUN loop. Resource misses are dropped without
-// ending the Android VPN. Upstream main currently does not expose the fork's
-// L3 recovery state/events, so this spike treats other transport failures as
-// terminal and records that behavior as a migration blocker.
+// ending the Android VPN. Upstream owns internal L3 reconnect; the bridge maps
+// errors returned by the public L3 connection to terminal Android VPN failures.
 func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	l3Conn, err := session.client.NewL3Conn()
 	if err != nil {
