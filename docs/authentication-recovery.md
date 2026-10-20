@@ -168,7 +168,9 @@ A failure in one layer should invalidate only the state proven unusable at that 
 
 Successful authentication produces a reusable in-memory result and refreshes the encrypted recovery snapshot.
 
-A successful foreground credential login may also refresh saved credentials.
+A successful foreground password login automatically attempts to save or refresh
+the accepted credentials in their encrypted store. The current UI has no
+remember-password toggle.
 
 ### Session expired
 

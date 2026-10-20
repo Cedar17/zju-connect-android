@@ -14,12 +14,16 @@
 
 ## 安装与使用
 
+应用支持简体中文和英文，默认跟随系统语言。Android 13 及以上可在系统的应用语言设置中单独选择。下文使用中文界面名称。
+
 1. 在 [Releases](https://github.com/Cedar17/zju-connect-android/releases) 下载 `zju-connect-v*-arm64-v8a.apk` 并安装。首次安装可能需要允许当前浏览器或文件管理器安装应用。
 2. 打开 **ZJU Connect**，点击连接，允许 Android 创建 VPN。
 3. 按页面提示登录；短信、动态口令和图形验证码等认证步骤由服务端决定。
 4. 显示“已连接”后，即可访问 CC98 等校内资源。
 
-普通断开会保留认证状态，下次连接优先复用。应用进程重启后，会尝试从加密保存的 session 恢复；会话过期时，继续完成页面提示的认证。
+普通断开会保留认证状态，下次连接优先复用。应用进程重启后，会尝试从加密保存的 session 恢复；需要重新登录时，会尝试使用已保存的账号密码。
+
+切换账号时，先断开连接，再从右上角 **⋮ → 切换账号** 操作。切换会清除当前账号保存的登录状态和密码。
 
 APK 由 GitHub Actions 构建、测试并签名。已在 Xiaomi K40 / Android 13 和 OnePlus Ace 3V / Android 15 上进行实机测试。
 
@@ -27,7 +31,7 @@ APK 由 GitHub Actions 构建、测试并签名。已在 Xiaomi K40 / Android 13
 
 - aTrust 登录、VPN 连接与断开；
 - 密码、短信、动态口令和图形验证码认证；
-- 加密保存 session，按用户选择记住密码；
+- 加密保存 session 和密码登录成功后的账号密码；
 - Wi-Fi、蜂窝和以太网切换后的连接恢复；
 - Android 快捷设置磁贴和 Always-on VPN；
 - 应用内诊断报告，方便反馈问题。
@@ -38,7 +42,7 @@ APK 由 GitHub Actions 构建、测试并签名。已在 Xiaomi K40 / Android 13
 
 ### Always-on VPN
 
-在 Android 系统 VPN 设置中为 ZJU Connect 开启 Always-on，系统会在开机或服务进程重启时启动连接。后台恢复使用已保存的 session，需要重新认证时会提示你打开应用。
+在 Android 系统 VPN 设置中为 ZJU Connect 开启“始终开启 VPN”（Always-on VPN），系统会在开机或服务进程重启时启动连接。后台恢复使用已保存的 session，需要重新认证时会提示你打开应用。
 
 ### 网络切换
 
@@ -46,7 +50,7 @@ APK 由 GitHub Actions 构建、测试并签名。已在 Xiaomi K40 / Android 13
 
 ## 问题反馈
 
-在应用菜单中打开 **Diagnostics**，复制报告并附到 [GitHub Issue](https://github.com/Cedar17/zju-connect-android/issues)，再补充网络环境和复现步骤。
+点击右上角 **⋮ → 诊断 → 复制报告**，将报告附到 [GitHub Issue](https://github.com/Cedar17/zju-connect-android/issues)，再补充网络环境和复现步骤。英文界面对应 **Diagnostics → Copy report**。
 
 报告包含版本、设备、状态、错误码和数据面计数，不含账号、认证凭据或网络端点。请留意额外附上的截图和日志中的个人信息。
 

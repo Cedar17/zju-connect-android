@@ -63,6 +63,24 @@ Android system ─────── Always-on start ─────────
   routing, the data plane, and internal L3 reconnect. The app-owned Go bridge
   maps its public API to Android without a production core fork.
 
+## Interface languages
+
+The app uses the same Compose screens and connection policies for English and
+Simplified Chinese. English defaults are in `res/values/strings.xml`; Chinese
+resources are in `res/values-zh-rCN/strings.xml`. User-facing states and errors
+resolve through string resources rather than displaying bridge messages.
+
+The manifest references `res/xml/locales_config.xml`, declaring `en` and `zh-CN`.
+Language normally follows the system; Android 13+ also offers a per-app language
+selection in system settings. There is no in-app language picker. Use labels
+from the relevant resources when documenting UI actions, such as Chinese
+“诊断 → 复制报告” and English “Diagnostics → Copy report”.
+
+The diagnostics screen is localized, including its state summary and controls.
+The copied report currently uses fixed Chinese headings and English structured
+field names/state codes; it is separate from the localized display projection.
+Report timestamps use UTC; on-screen diagnostic history uses the device time zone.
+
 ## Connection state
 
 Use a closed state model with explicit events rather than inferring phases from log text:
