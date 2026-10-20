@@ -7,38 +7,6 @@ import org.junit.Test
 
 class RealVpnRecoveryCoordinatorTest {
     @Test
-    fun combinedPresentationPrioritizesWaitingThenEitherRecoverySource() {
-        assertEquals(
-            RealVpnRecoveryPresentation.WAITING_FOR_NETWORK,
-            combinedRealVpnRecoveryPresentation(
-                RealVpnRecoveryPresentation.WAITING_FOR_NETWORK,
-                l3Recovering = true,
-            ),
-        )
-        assertEquals(
-            RealVpnRecoveryPresentation.RECOVERING,
-            combinedRealVpnRecoveryPresentation(
-                RealVpnRecoveryPresentation.NONE,
-                l3Recovering = true,
-            ),
-        )
-        assertEquals(
-            RealVpnRecoveryPresentation.RECOVERING,
-            combinedRealVpnRecoveryPresentation(
-                RealVpnRecoveryPresentation.RECOVERING,
-                l3Recovering = false,
-            ),
-        )
-        assertEquals(
-            RealVpnRecoveryPresentation.NONE,
-            combinedRealVpnRecoveryPresentation(
-                RealVpnRecoveryPresentation.NONE,
-                l3Recovering = false,
-            ),
-        )
-    }
-
-    @Test
     fun sessionAnchorBecomesBaselineWithoutRestart() {
         val wifi = network(100, linkHash = 1)
         val initial = snapshot(0, wifi)

@@ -65,7 +65,6 @@ private val SAFE_DIAGNOSTIC_CODES = setOf(
     "invalidEvent",
     "invalidInput",
     "invalidSession",
-    "l3Reconnecting",
     "networkMonitorUnavailable",
     "sessionInvalid",
     "sessionRestoreUnavailable",
@@ -101,7 +100,6 @@ private val SAFE_DIAGNOSTIC_CAUSES = setOf(
     "fdClosed",
     "invalidPacket",
     "io",
-    "l3Recovering",
     "network",
     "packetTooLarge",
     "protocol",
@@ -636,11 +634,7 @@ private fun redactStage(value: String): String = when {
     ) -> value
     value.startsWith("auth") -> "auth"
     value in setOf(
-        "prepare.resource",
-        "prepare.nodeProbe",
-        "prepare.ip",
-        "prepare.l3",
-        "prepare.complete",
+        "prepare.setup",
     ) -> value
     value.startsWith("prepare") -> "prepare"
     value.startsWith("tun") -> "tun"

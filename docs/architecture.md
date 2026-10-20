@@ -257,7 +257,12 @@ continue to follow them:
   terminal VPN failures instead of maintaining another protocol recovery loop.
 - Diagnostics expose only allowlisted states, stable codes, and bounded counters;
   they exclude packet metadata, payloads, authentication material, and network
-  identifiers.
+  identifiers. Packet forwarding performs only lightweight IPv4 length/protocol
+  checks; it does not parse or serialize detailed packet diagnostics.
+- Logcat records local monotonic durations for preparation, TUN establishment
+  and bridge attachment. Preparation distinguishes actual core setup from a
+  prepared-client cache hit; the measurement contract is in
+  [gomobile-bridge.md](gomobile-bridge.md).
 
 The real data plane and lifecycle have been exercised on the K40, including CLI
 requests to CC98 and private campus resources. Off-campus resource access over
@@ -323,11 +328,13 @@ cellular data. K40 smoke checks use CLI requests to `https://www.cc98.org/` and
 - Recovery adds only `recovering` and `waitingForNetwork` to the redacted state
   contract and never records network identifiers.
 
-Recovery policy is covered by JVM tests. On K40, three complete Wi-Fi
-disable/enable cycles switched between Wi-Fi and Ethernet while ADB and SSH
-remained reachable; every stable transition produced one reconstruction,
-returned to `active`, and passed both campus-resource requests. Wi-Fi ↔ cellular
-recovery has also been manually accepted on a OnePlus Ace 3V.
+Recovery policy is covered by JVM tests. Historical acceptance on 2026-08-11
+covered three complete Wi-Fi disable/enable cycles between Wi-Fi and Ethernet
+on K40, with one reconstruction per stable transition, return to `active` and
+both campus-resource requests passing. The maintainer also accepted Wi-Fi ↔
+cellular recovery on OnePlus Ace 3V that day. Each release records its own
+real-device acceptance in its PR; these historical results do not validate
+subsequent builds.
 
 ## Release blockers
 

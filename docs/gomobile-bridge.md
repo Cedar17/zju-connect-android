@@ -58,6 +58,14 @@ coordinate mapper, encrypted-session envelope codec, VPN lifecycle, and
 redacted diagnostics. It does not replace the Go bridge tests, which also cover
 the public upstream authentication API used by Android, or real-device checks.
 
+Release builds enable R8 optimization/obfuscation and resource shrinking with
+`proguard-android-optimize.txt`. The generated AAR supplies consumer keep rules
+for `go.**` and `io.github.cedar17.zjuconnect.gocore.**`, preserving JNI entry
+points and callback interfaces. Retain the matching files under
+`app/build/outputs/mapping/release/` when investigating an obfuscated crash.
+Optional Compose group-key mapping is disabled so the pinned cached toolchain
+can build offline; ordinary R8 mappings are still generated.
+
 ## Versioning and release
 
 `app/build.gradle.kts` owns the user-facing `versionName` and Android's integer
@@ -71,7 +79,7 @@ Increment `versionCode` for each distinct distributed build. A release tag must
 be `v<versionName>` so the generated APK name matches the release workflow.
 Publish from the merged integration commit; do not replace an existing release
 with different contents. The tag workflow builds and signs the arm64 APK and
-publishes a GitHub Pre-release. A local APK, successful CI, a merged PR, and a
+publishes a regular GitHub Release. A local APK, successful CI, a merged PR, and a
 published release are separate states. Record real-device acceptance in the PR
 with its actual scope before publishing.
 
@@ -149,7 +157,11 @@ invalidation rules are defined in
 The bridge exposes `PrepareRealVpn()`, which prepares an
 `atrust.Client` through `SetupContext` with a 30-second preparation deadline,
 and returns a versioned event containing only the assigned IPv4
-address and IPv4 resource prefixes. `StartRealVpn(tunFD, protector, listener)`
+address and IPv4 resource prefixes. Successful preparation also includes
+`setupDurationMs` (monotonic `SetupContext` duration) and `reusedPrepared`.
+A cache hit retains the original setup duration while `durationMs` describes
+only the current preparation call. These fields are optional with safe defaults
+for absent values. `StartRealVpn(tunFD, protector, listener)`
 attaches the Android TUN and installs the `VpnService.protect()` boundary for
 future underlay connections. `DiscardPreparedRealVpn()` releases only a
 prepared client that has not yet been attached to a TUN, leaving an active VPN
@@ -170,7 +182,20 @@ The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
 aTrust resource set are dropped as split-tunnel traffic instead of terminating
 the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
 codes, and cleanup preserves the original failure instead of replacing it with
-an uninformative `stopped` state.
+an uninformative `stopped` state. Lifecycle and failure events carry numeric
+counter snapshots; normal forwarding does not emit per-packet callbacks,
+endpoints, TCP metadata or checksum diagnostics. Lightweight IPv4 length and
+protocol checks preserve the forwarding policy, including diagnostic-only
+validation of inbound packets.
+
+`ZjuConnectRealVpn` logs local monotonic call durations for ViewModel and Service
+preparation, TUN establishment and bridge attachment. A Service cache hit must
+not hide or double-count earlier ViewModel setup. `setupDurationMs` measures the
+whole upstream `SetupContext`, without isolating manifest requests, node probing
+or virtual-IP allocation. The preparation stage is fixed at `prepare.setup`.
+These call measurements are Logcat-only; there is no cross-Activity/Service
+trace state or new persisted measurement schema. Real-device results and Issue
+closeout decisions belong in the corresponding PR.
 
 ## Licensing
 

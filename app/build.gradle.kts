@@ -17,8 +17,8 @@ android {
         applicationId = "io.github.cedar17.zjuconnect"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 8
+        versionName = "0.2.1"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -40,6 +40,9 @@ android {
 
     buildTypes {
         getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
@@ -64,6 +67,11 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+composeCompiler {
+    // Omit optional Compose group-name mapping; keep builds on the pinned cached toolchain.
+    includeComposeMappingFile.set(false)
 }
 
 dependencies {
