@@ -1,206 +1,194 @@
 # Reproducible gomobile bridge
 
-This document defines the reproducible gomobile boundary. It builds a local
-AAR from pinned source and toolchain inputs; the AAR is intentionally ignored
-by Git.
+This guide owns the Kotlin–Go API, pinned AAR build and Android release process.
+[Architecture](architecture.md) owns Android lifecycle and network recovery;
+[authentication recovery](authentication-recovery.md) owns persisted state and
+invalidation rules. Machine/device-specific commands stay in the local guide.
 
 ## Pinned inputs
 
-The authoritative machine-readable record is
-[tools/gomobile.lock.json](../tools/gomobile.lock.json).
+[`tools/gomobile.lock.json`](../tools/gomobile.lock.json) is authoritative for
+core/toolchain versions and checksums; `go/bridge/go.mod` and `go.sum` must match
+its official zju-connect dependency. The AAR build rejects a core module `replace`.
+Core contributions belong in the separate upstream checkout; Android pins a
+fetchable official commit after upstream integration.
 
-| Input | Pinned value |
+| Input | Value |
 | --- | --- |
-| Official zju-connect core | Exact module version and commit in the lockfile |
-| Go | **1.25.6** |
-| golang.org/x/mobile | **v0.0.0-20260602190626-68735029466e** (68735029466e…) |
-| Android NDK | **29.0.14206865** (r29) |
-| Android API / Build Tools | **29** / **36.0.0** |
-| AAR ABIs | **arm64-v8a**, **x86_64** |
+| Official core | Exact module version and commit in the lockfile |
+| Go | 1.25.6 |
+| golang.org/x/mobile | v0.0.0-20260602190626-68735029466e |
+| Android NDK | 29.0.14206865 (r29) |
+| Android API / Build Tools | 29 / 36.0.0 |
+| AAR ABIs | arm64-v8a and x86_64 |
+| Release APK ABI | arm64-v8a only |
 
-The generated AAR retains both ABIs for the reusable Go bridge. The Android
-application's Release APK applies its own packaging filter and contains only
-`arm64-v8a`.
+Bootstrap checks the Go archive's SHA-256 and NDK archive's published SHA-1.
+Tools live in ignored `.gomobile-toolchain`, except the NDK under the configured
+Android SDK. Application SDK/Gradle settings remain in the checked-in build files.
 
-The bootstrap script verifies the Go archive's SHA-256 and the NDK archive's
-published SHA-1 before extracting them. It leaves all downloaded tools under
-the ignored .gomobile-toolchain directory, except for the NDK, which is
-installed below the configured Android SDK.
+## Build and validate
 
-## Build
-
-Run these commands in Windows PowerShell at the repository root. Android Studio
-must already have SDK Platform 36.1 and Build Tools 36.0.0 installed.
+Use Windows PowerShell at the repository root, with SDK Platform 36.1 and Build
+Tools 36.0.0 installed. Bootstrap downloads pinned dependencies; use it when
+provisioning the toolchain, subject to local authorization rules:
 
 ~~~powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-gomobile-toolchain.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-gomobile-aar.ps1
-.\.gomobile-toolchain\go\bin\go.exe -C .\go\bridge test ./...
-cmd.exe /c "gradlew.bat :app:assembleRelease --no-daemon --console=plain"
 ~~~
 
-Use -AndroidSdkRoot, -JavaHome, or -ToolRoot on either script when the defaults
-are not appropriate. The build writes:
+With the toolchain available, test, rebuild the AAR after production bridge/core
+changes, then package Android:
 
-- app/libs/zju-connect-core.aar
-- app/libs/zju-connect-core-sources.jar
-- app/libs/zju-connect-core.build-info.json with its SHA-256 and every pinned
-  input
+~~~powershell
+.\.gomobile-toolchain\go\bin\go.exe -C .\go\bridge test ./...
+.\.gomobile-toolchain\go\bin\go.exe -C .\go\bridge vet ./...
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-gomobile-aar.ps1
+cmd.exe /c "gradlew.bat :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --no-daemon --console=plain"
+~~~
 
-All outputs are ignored. Before binding, the script verifies that go.mod and
-go.sum are tidy without modifying them, then downloads and verifies their
-pinned modules. Gradle's verifyGoCoreAar task fails early with the required
-command when the AAR has not been built. It does not download a toolchain as
-a side effect of a normal Android build.
+The scripts accept `-AndroidSdkRoot`, `-JavaHome` and `-ToolRoot` overrides.
+AAR generation checks `go mod tidy -diff`, downloads/verifies pinned modules,
+and writes these ignored outputs under `app/libs/`:
 
-The Gradle unit-test task covers the Kotlin connection policies, CAPTCHA
-coordinate mapper, encrypted-session envelope codec, VPN lifecycle, and
-redacted diagnostics. It does not replace the Go bridge tests, which also cover
-the public upstream authentication API used by Android, or real-device checks.
+- `zju-connect-core.aar`
+- `zju-connect-core-sources.jar`
+- `zju-connect-core.build-info.json`, containing AAR SHA-256 and pinned inputs
 
-Release builds enable R8 optimization/obfuscation and resource shrinking with
-`proguard-android-optimize.txt`. The generated AAR supplies consumer keep rules
-for `go.**` and `io.github.cedar17.zjuconnect.gocore.**`, preserving JNI entry
-points and callback interfaces. Retain the matching files under
-`app/build/outputs/mapping/release/` when investigating an obfuscated crash.
-Optional Compose group-key mapping is disabled so the pinned cached toolchain
-can build offline; ordinary R8 mappings are still generated.
+Verify the receipt against the AAR and lockfile before Android packaging.
+Gradle's `verifyGoCoreAar` checks AAR existence and prints the required build
+command when absent; it does not itself validate the receipt or bootstrap tools.
+When using cached dependencies only, use Gradle `--offline` and Go
+`GOPROXY=off` / `GOSUMDB=off` as appropriate.
+
+Go tests cover bridge behavior and consumed public upstream APIs. Android Release
+unit tests cover policies, codecs, lifecycle and diagnostics; lint and assembly
+check the Android package. These host checks complement the
+[device acceptance scope](architecture.md#validation) and
+[authentication validation contract](authentication-recovery.md#validation-contract).
+The [CI workflow](../.github/workflows/ci.yml) runs Go tests/vet, AAR generation,
+Release unit tests/lint and unsigned APK assembly on PRs targeting `master`.
+
+### R8 and crash mappings
+
+Release enables R8 optimization/obfuscation and resource shrinking with
+`proguard-android-optimize.txt`. The AAR supplies consumer keep rules for `go.**`
+and `io.github.cedar17.zjuconnect.gocore.**`, preserving JNI entry points and
+callback interfaces. Optional Compose group-key mapping is disabled for the
+pinned offline toolchain; ordinary R8 mappings are still generated.
+
+Preserve the corresponding `app/build/outputs/mapping/release/` files with the
+exact APK version/hash for crash investigation. These files are ignored locally.
+Current CI and release workflows publish no mapping artifact; release builds
+publish only the APK. Deobfuscation support for those builds requires adding
+mapping retention to the workflow.
 
 ## Versioning and release
 
-`app/build.gradle.kts` owns the user-facing `versionName` and Android's integer
-`versionCode`. For this app, patch releases contain fixes and small compatible
-improvements; minor releases introduce features or substantial core/behavior
-changes. During `0.x` development, the minor number identifies a development
-milestone. After `1.0.0`, incompatible changes to supported use, configuration,
-or persisted state require a major release.
+`app/build.gradle.kts` owns `versionName` and integer `versionCode`. Patch versions
+cover compatible fixes/small improvements; minor versions mark features or
+substantial core/behavior changes. During `0.x`, minor versions identify
+milestones. After `1.0.0`, incompatible supported-use, configuration or persisted
+state changes require a major version.
 
-Increment `versionCode` for each distinct distributed build. A release tag must
-be `v<versionName>` so the generated APK name matches the release workflow.
-Publish from the merged integration commit; do not replace an existing release
-with different contents. The tag workflow builds and signs the arm64 APK and
-publishes a regular GitHub Release. A local APK, successful CI, a merged PR, and a
-published release are separate states. Record real-device acceptance in the PR
-with its actual scope before publishing.
+Increment `versionCode` for each distinct distributed build. Publish from a merged
+integration commit with tag `v<versionName>`, matching the APK filename
+`zju-connect-v<versionName>-arm64-v8a.apk`. Existing releases retain their contents.
+The [tag workflow](../.github/workflows/release.yml) restores the Release key from
+`RELEASE_KEYSTORE_BASE64`, runs Release unit tests, assembles/signs the APK,
+verifies its signature and creates a regular GitHub Release.
 
-## Kotlin–Go contract
+Local APK, passing CI, merged PR and published Release are separate states.
+Record actual device acceptance and remaining gaps in the PR before publishing.
+Issue measurements and product tradeoffs also belong there. The linked upstream
+core uses AGPL-3.0-only; distribution preserves license notices and the applicable
+source-availability obligations.
 
-The Go package is [go/bridge](../go/bridge). It exposes gomobile-safe strings,
-`ByteArray`, and one callback interface. [GoCoreBridge.kt](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt)
-owns the generated Java API. `ConnectionViewModel` uses the wrapper for the
-single active authentication flow, beginning network work only after the user
-taps Connect.
+## Kotlin-Go contract
 
-All event payloads contain schemaVersion and type. Future callback events must
-preserve this versioned JSON boundary and must not contain passwords, cookies,
-SIDs, device IDs, sign keys, CAPTCHA bytes, or raw authentication responses.
+The source declarations in [`bridge.go`](../go/bridge/bridge.go),
+[`real_vpn.go`](../go/bridge/real_vpn.go) and
+[`socket_protector.go`](../go/bridge/socket_protector.go) define the API. The host
+stub matches VPN entry points for non-Android tests.
+[`GoCoreBridge.kt`](../app/src/main/kotlin/io/github/cedar17/zjuconnect/GoCoreBridge.kt)
+wraps generated Java bindings; Go integer parameters follow gomobile's generated
+Java/Kotlin types.
 
-Authentication failure events may additionally carry the allowlisted `stage`,
-`cause`, and bounded `durationMs` fields. These fields describe where the
-operation stopped (for example `auth.config`) and classify transport, DNS,
-TLS, protocol, or server failures without exposing the underlying error text.
+Control-plane requests/results use JSON strings; snapshots and CAPTCHA images
+use byte arrays. Packets pass through the TUN file descriptor. Go callback
+interfaces are
+`BridgeListener.OnEvent(eventJSON)` and `SocketProtector.Protect(socketFD) bool`;
+the generated Kotlin implementations override `onEvent` and `protect`.
+Event payloads carry `schemaVersion` and `type`; stable state/code/cause fields
+support UI mapping independently of raw messages. Authentication errors may add
+`stage`, `cause` and bounded `durationMs`.
 
-## Interactive authentication control plane
+Callback JSON excludes passwords, cookies, SID, DeviceID, sign keys, CAPTCHA bytes,
+verification input and raw server responses. Authentication events can supply
+confirmed username and phone choices for UI; these are not diagnostic records.
+Prepared address/routes configure the Android TUN and likewise stay outside the
+redacted report. CAPTCHA bytes are retrieved only through `GetPendingCaptchaImage`.
+The pinned core's [TLS policy](architecture.md#diagnostics-and-transport-security)
+applies to authentication and tunnel transports.
 
-The production bridge uses upstream `auth.NewSessionContext`, `NewLoginMethod`,
-`Session.Login`, and `authchallenge.Handler`. Upstream owns the aTrust protocol,
-session, and challenge definitions. The Android bridge implements the challenge handler and
-owns the UI-facing coordinator and state machine. It exposes password,
-server-triggered SMS, CAPTCHA, TOTP, RADIUS, and challenge state transitions as
-structured events through `StartAuthentication`, `SubmitAuthentication`,
-`GetPendingCaptchaImage`, `CancelAuthentication`,
-`HasReusableAuthenticatedResult`, and `ClearAuthenticatedResult`;
-`ExportAuthenticatedSession` and
-`ResumeAuthentication` for the encrypted-at-rest recovery handoff; and a
-single active flow that never puts
-credentials, cookies, SID, device identifiers, sign keys, CAPTCHA data, or raw
-responses into callback JSON. The production Go module depends directly on the
-pinned official upstream core. The AAR build rejects a core module `replace`;
-the bridge tests and Android AAR build validate the consumed public APIs.
+### Authentication API
 
-TLS policy is inherited from that pinned core: authentication and tunnel
-transports currently skip standard certificate-chain and hostname verification.
-The Android bridge supplies no custom certificate or SPKI verification policy.
+| Go entry point | Result / effect |
+| --- | --- |
+| `StartAuthentication(requestJSON, listener)` | JSON response; starts the single asynchronous authentication flow |
+| `SubmitAuthentication(responseJSON)` | JSON response; advances or retries the current flow |
+| `ResumeAuthentication(snapshotBytes, deviceID, listener)` | JSON response; validates snapshot and starts server-side session recovery |
+| `ExportAuthenticatedSession()` | Opaque snapshot bytes for Android encryption |
+| `GetPendingCaptchaImage()` | Current challenge image bytes |
+| `CancelAuthentication()` | Cancels interactive flow and clears its verification input |
+| `HasReusableAuthenticatedResult()` | Boolean availability, without exposing session fields |
+| `ClearAuthenticatedResult()` | Clears reusable result and result retained by the active flow |
 
-Authentication success leaves its client/resource result in Go memory for real
-VPN setup. Its exported recovery snapshot contains only a schema version,
-the exact device ID, and the complete endpoint cookie set. Kotlin encrypts
-those bytes with Android Keystore AES-GCM and atomically stores the envelope in
-`noBackupFilesDir`. After a process restart, the user's Connect action asks Go
-to validate the restored cookies with the server and refetch username and
-resources before recreating the in-memory result. App startup itself does not
-read or validate the snapshot. `ServerVersionInfo` is not part of this snapshot;
-upstream setup must fetch the server manifest during preparation. The recovery
-ladder and invalidation policy, including `sessionExpired != invalidSession`, are authoritative in
-[authentication-recovery.md](authentication-recovery.md).
+The start request carries the fixed ZJU server/port and Android-derived device ID;
+resume receives the current device ID explicitly. The bridge calls upstream
+`auth.NewSessionContext`, `NewLoginMethod`, `Session.Login` and
+`authchallenge.Handler`; it selects supported methods and maps interactive
+challenges into structured events. Authentication result retention, snapshot
+contents, background restrictions and invalidation are defined once in the
+[authentication guide](authentication-recovery.md).
 
-The bridge keeps a separate copy of a complete authenticated result while the
-process remains alive. `CancelAuthentication()` cancels only the active
-interactive flow and preserves that reusable result;
-`HasReusableAuthenticatedResult()` reports availability without exposing its
-fields. `ClearAuthenticatedResult()` clears both the reusable copy and any
-result still held by the active flow.
+### VPN API
 
-`ResumeAuthentication()` is also callable by `RealVpnService` when Android
-starts the app in Always-on mode without an Activity. The service reads only the
-Keystore-protected snapshot and the current device identity, zeroes the
-decrypted bytes after the bridge call, and never supplies `SavedCredentialStore`
-data. The foreground and service-side recovery boundary is defined in
-[authentication-recovery.md](authentication-recovery.md).
+| Go entry point | Result / effect |
+| --- | --- |
+| `PrepareRealVpn()` | JSON configuration; prepares a client or reuses an already prepared one |
+| `StartRealVpn(tunFD, protector, listener)` | Attaches the Android TUN to the prepared client and starts callbacks |
+| `CancelPreparingRealVpn()` | Cancels the current in-flight pre-TUN preparation |
+| `DiscardPreparedRealVpn()` | Releases an already prepared, unattached client; leaves active VPN alone |
+| `StopRealVpn()` | Idempotently cancels preparation and releases prepared/active VPN resources |
 
-Android derives a stable 32-character aTrust device ID from its app-scoped
-`ANDROID_ID` and supplies it to both start and resume calls. A restored legacy
-snapshot cannot replace that identity. Saved-credential storage, reuse, and
-invalidation rules are defined in
-[authentication-recovery.md](authentication-recovery.md).
+Preparation consumes the authenticated result already in Go memory and calls
+upstream `SetupContext` with a 30-second deadline. Success supplies IPv4 address,
+resource prefixes and MTU. Android establishes the TUN, then attaches it with the
+socket protector for future underlay connections.
 
-The bridge exposes `PrepareRealVpn()`, which prepares an
-`atrust.Client` through `SetupContext` with a 30-second preparation deadline,
-and returns a versioned event containing only the assigned IPv4
-address and IPv4 resource prefixes. Successful preparation also includes
-`setupDurationMs` (monotonic `SetupContext` duration) and `reusedPrepared`.
-A cache hit retains the original setup duration while `durationMs` describes
-only the current preparation call. These fields are optional with safe defaults
-for absent values. `StartRealVpn(tunFD, protector, listener)`
-attaches the Android TUN and installs the `VpnService.protect()` boundary for
-future underlay connections. `DiscardPreparedRealVpn()` releases only a
-prepared client that has not yet been attached to a TUN, leaving an active VPN
-untouched. `StopRealVpn()` is idempotent and closes the client, TUN, underlay
-sockets, and L3 readers. Cancelling returns without
-waiting for an in-flight request: it cancels the caller context and rejects
-late results after ownership changes. QR/CAS/OAuth login and bridge-owned reconnect
-behavior are out of scope.
+Cancellation clears preparation ownership before a late result can be published.
+The preparation owner closes its client once; cancellation does not wait for the
+setup goroutine to finish. Full stop closes TUN/client resources and waits for
+reader shutdown, bounded by a cleanup timeout. Cancellation/discard/stop retain
+the authentication assets according to the authentication guide.
 
-Android owns network-switch recovery by calling the existing idempotent
-`StopRealVpn()`, then `PrepareRealVpn()` and `StartRealVpn()` again after the
-new underlay settles. The Go bridge does not migrate live sockets, choose an
-Android `Network`, or implement an independent reconnect loop. Internal L3
-reconnect belongs to upstream; errors returned by the public L3 connection are
-mapped to terminal Android VPN failures.
+The data loop forwards IPv4 TCP/UDP, using lightweight IP header/total-length and
+protocol checks. Packets outside aTrust resources are split-tunnel drops; TUN/L3
+I/O errors produce stable failure codes. Inbound validation updates counters and
+retains the existing write behavior. Lifecycle/failure callbacks carry numeric
+counter snapshots, not per-packet metadata, endpoint parsing or checksum samples.
 
-The Android data loop forwards IPv4 TCP/UDP packets. Packets outside the
-aTrust resource set are dropped as split-tunnel traffic instead of terminating
-the whole VPN. TUN and aTrust L3 I/O failures are mapped to stable UI error
-codes, and cleanup preserves the original failure instead of replacing it with
-an uninformative `stopped` state. Lifecycle and failure events carry numeric
-counter snapshots; normal forwarding does not emit per-packet callbacks,
-endpoints, TCP metadata or checksum diagnostics. Lightweight IPv4 length and
-protocol checks preserve the forwarding policy, including diagnostic-only
-validation of inbound packets.
+### Measurements
 
-`ZjuConnectRealVpn` logs local monotonic call durations for ViewModel and Service
-preparation, TUN establishment and bridge attachment. A Service cache hit must
-not hide or double-count earlier ViewModel setup. `setupDurationMs` measures the
-whole upstream `SetupContext`, without isolating manifest requests, node probing
-or virtual-IP allocation. The preparation stage is fixed at `prepare.setup`.
-These call measurements are Logcat-only; there is no cross-Activity/Service
-trace state or new persisted measurement schema. Real-device results and Issue
-closeout decisions belong in the corresponding PR.
+Preparation exposes optional `setupDurationMs` and `reusedPrepared` with safe
+Kotlin defaults when absent. `setupDurationMs` is Go's monotonic duration of the
+whole `SetupContext`, not its manifest/probe/virtual-IP sub-stages. A prepared
+cache hit retains the original setup duration while `durationMs` describes only
+the current call. The preparation stage is fixed at `prepare.setup`.
 
-## Licensing
-
-The pinned zju-connect repository is licensed under AGPL-3.0-only. Linking it
-into a distributable Android application requires preserving the applicable
-license notices and satisfying its source-availability obligations. Release
-compliance must be established before distributing an APK containing the
-generated AAR.
+`ZjuConnectRealVpn` logs local monotonic durations for ViewModel/Service prepare,
+TUN establishment and bridge attachment. Count actual setup once; a Service cache
+hit must not hide earlier ViewModel work. Logs measure individual calls, not a
+successful end-to-end attempt, and introduce no cross-component trace state or
+persisted measurement schema.
