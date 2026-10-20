@@ -53,6 +53,11 @@ Android stores an encrypted recovery snapshot in `noBackupFilesDir`.
 
 The snapshot contains the minimum client/session context required to resume authentication. It is not treated as proof that the user is still authenticated: every restore is validated with the server.
 
+The current format contains only its schema version, stable DeviceID, and the
+authentication cookie set (including SID). It does not persist upstream
+`ServerVersionInfo`; VPN setup fetches that manifest again. Upgrading the core
+does not automatically expand the app's persisted snapshot format.
+
 Properties:
 
 * survives process death and device reboot;

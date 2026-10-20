@@ -1,6 +1,7 @@
-package upstreamauthspike
+package core
 
 import (
+	"context"
 	"testing"
 
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
@@ -44,7 +45,7 @@ func TestAndroidAuthAPIShape(t *testing.T) {
 		t.Fatal("NewLoginMethod returned nil")
 	}
 
-	session := auth.NewSession("vpn.zju.edu.cn:443", nil)
+	session := auth.NewSessionContext(context.Background(), "vpn.zju.edu.cn:443", nil)
 	_ = session.GetAuthInfoList
 	_ = session.Login
 	_ = session.ClientResource
