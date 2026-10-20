@@ -13,13 +13,13 @@ class DiagnosticsTest {
             category = "connection",
             state = "error",
             code = "vpnPrepareTimeout",
-            stage = "prepare.nodeProbe",
+            stage = "prepare.setup",
             cause = "timeout",
             durationMillis = 30_000,
         ).redacted()
 
         assertEquals("vpnPrepareTimeout", event.code)
-        assertEquals("prepare.nodeProbe", event.stage)
+        assertEquals("prepare.setup", event.stage)
         assertEquals("timeout", event.cause)
         assertEquals(30_000L, event.durationMillis)
     }
@@ -85,7 +85,7 @@ class DiagnosticsTest {
                 RedactedDiagnosticEvent(
                     timestampMillis = 42,
                     category = "vpn",
-                    state = "diagnostic",
+                    state = "stopped",
                     code = "password=secret",
                     stage = "dataplane.l3.write",
                     cause = "fdClosed",
@@ -100,7 +100,7 @@ class DiagnosticsTest {
             generatedAtMillis = 1_000,
         )
 
-        assertTrue(report.contains("state=diagnostic"))
+        assertTrue(report.contains("state=stopped"))
         assertTrue(report.contains("code=unknown"))
         assertTrue(report.contains("stage=dataplane"))
         assertTrue(report.contains("cause=fdClosed"))
@@ -205,14 +205,14 @@ class DiagnosticsTest {
             RedactedDiagnosticEvent(
                 timestampMillis = 1,
                 category = "vpn",
-                state = "diagnostic",
+                state = "stopped",
                 stage = "dataplane.l3.read",
                 counters = RedactedDiagnosticCounters(l3ReadPackets = 1),
             ),
             RedactedDiagnosticEvent(
                 timestampMillis = 2,
                 category = "vpn",
-                state = "diagnostic",
+                state = "stopped",
                 stage = "dataplane.l3.read",
                 counters = RedactedDiagnosticCounters(l3ReadPackets = 2),
             ),
@@ -298,28 +298,17 @@ class DiagnosticsTest {
     }
 
     @Test
-    fun l3RecoveryCodesAndFailureCategoriesRemainSafeAndVisible() {
-        val recovering = RedactedDiagnosticEvent(
-            timestampMillis = 1,
-            category = "vpn",
-            state = "recovering",
-            code = "l3Reconnecting",
-            stage = "dataplane.l3.reconnect",
-            cause = "l3Recovering",
-        ).redacted()
+    fun dataPlaneFailureCategoriesRemainSafeAndVisible() {
         val failed = RedactedDiagnosticEvent(
             timestampMillis = 2,
             category = "vpn",
             state = "error",
-            code = "vpnSessionInvalid",
-            stage = "dataplane.l3.reconnect",
-            cause = "authentication",
+            code = "vpnPacketForwardFailed",
+            stage = "dataplane.l3.write",
+            cause = "io",
         ).redacted()
-
-        assertEquals("l3Reconnecting", recovering.code)
-        assertEquals("l3Recovering", recovering.cause)
-        assertEquals("vpnSessionInvalid", failed.code)
-        assertEquals("authentication", failed.cause)
+        assertEquals("vpnPacketForwardFailed", failed.code)
+        assertEquals("io", failed.cause)
         assertEquals("dataplane", failed.stage)
     }
 

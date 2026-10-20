@@ -67,7 +67,7 @@ jobs:
           & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --verbose --print-certs $apk.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Create GitHub Pre-release
+      - name: Create GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,5 +76,4 @@ jobs:
           gh release create $env:GITHUB_REF_NAME $apk.FullName `
             --repo $env:GITHUB_REPOSITORY `
             --title $env:GITHUB_REF_NAME `
-            --prerelease `
             --generate-notes

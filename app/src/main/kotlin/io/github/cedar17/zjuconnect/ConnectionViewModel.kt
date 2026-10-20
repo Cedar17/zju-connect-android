@@ -2,6 +2,8 @@ package io.github.cedar17.zjuconnect
 
 import android.app.Application
 import android.content.Context
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -488,6 +490,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             if (!attempts.accepts(attemptId)) return@launch
             reusableVpnPreparation.begin()
+            val prepareStartedAt = SystemClock.elapsedRealtime()
             val config = try {
                 withContext(Dispatchers.IO) { bridge.prepareRealVpn() }
             } catch (error: Exception) {
@@ -507,6 +510,13 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 bridge.discardPreparedRealVpn()
                 return@launch
             }
+
+            Log.i(
+                "ZjuConnectRealVpn",
+                "phase=prepare.complete owner=viewmodel attempt=$attemptId state=${config.state} " +
+                    "durationMs=${SystemClock.elapsedRealtime() - prepareStartedAt} " +
+                    "cached=${config.reusedPrepared} setupMs=${config.setupDurationMillis}",
+            )
 
             if (config.state == "prepared" && config.address.isNotBlank() && config.routes.isNotEmpty()) {
                 recordAuthenticationRecovery(

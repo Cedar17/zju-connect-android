@@ -96,6 +96,8 @@ class GoCoreBridge {
             stage = event.optString("stage", ""),
             cause = event.optString("cause", ""),
             durationMillis = event.optLong("durationMs", 0),
+            setupDurationMillis = event.optLong("setupDurationMs", 0),
+            reusedPrepared = event.optBoolean("reusedPrepared", false),
             address = event.optString("address", ""),
             mtu = event.optInt("mtu", 1400),
             routes = event.optJSONArray("routes").toVpnRoutes(),
@@ -117,7 +119,6 @@ class GoCoreBridge {
             stage = event.optString("stage", ""),
             cause = event.optString("cause", ""),
             diagnostics = event.optJSONObject("diagnostics").toVpnDiagnostics(),
-            packet = event.optJSONObject("packet").toVpnPacketMetadata(),
         )
     }.getOrElse {
         GoVpnEvent(
@@ -211,30 +212,6 @@ class GoCoreBridge {
             )
         }
 
-    private fun JSONObject?.toVpnPacketMetadata(): GoVpnPacketMetadata? =
-        this?.let { packet ->
-            GoVpnPacketMetadata(
-                sequence = packet.optLong("sequence", 0),
-                direction = packet.optString("direction", ""),
-                ipVersion = packet.optInt("ipVersion", 0),
-                protocol = packet.optString("protocol", "unknown"),
-                sourceIp = packet.optString("sourceIp", ""),
-                destinationIp = packet.optString("destinationIp", ""),
-                sourcePort = packet.optInt("sourcePort", 0),
-                destinationPort = packet.optInt("destinationPort", 0),
-                length = packet.optInt("length", 0),
-                dataLength = packet.optInt("dataLength", 0),
-                tcpFlags = packet.optInt("tcpFlags", 0),
-                tcpSequence = packet.optLong("tcpSequence", 0),
-                tcpAcknowledgment = packet.optLong("tcpAcknowledgment", 0),
-                tcpWindow = packet.optInt("tcpWindow", 0),
-                ipChecksum = packet.optString("ipChecksum", ""),
-                transportChecksum = packet.optString("transportChecksum", ""),
-                valid = packet.optBoolean("valid", false),
-                truncated = packet.optBoolean("truncated", false),
-            )
-        }
-
     private companion object {
         const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
         const val ZJU_ATRUST_PORT = 443
@@ -253,6 +230,8 @@ data class GoVpnPrepared(
     val stage: String = "",
     val cause: String = "",
     val durationMillis: Long = 0,
+    val setupDurationMillis: Long = 0,
+    val reusedPrepared: Boolean = false,
     val address: String = "",
     val mtu: Int = 1400,
     val routes: List<GoVpnRoute> = emptyList(),
@@ -265,7 +244,6 @@ data class GoVpnEvent(
     val stage: String = "",
     val cause: String = "",
     val diagnostics: GoVpnDiagnostics? = null,
-    val packet: GoVpnPacketMetadata? = null,
 )
 
 data class GoVpnDiagnostics(
@@ -282,27 +260,6 @@ data class GoVpnDiagnostics(
     val tunWriteAttempts: Long = 0,
     val tunWriteSuccesses: Long = 0,
     val tunWriteBytes: Long = 0,
-)
-
-data class GoVpnPacketMetadata(
-    val sequence: Long = 0,
-    val direction: String = "",
-    val ipVersion: Int = 0,
-    val protocol: String = "unknown",
-    val sourceIp: String = "",
-    val destinationIp: String = "",
-    val sourcePort: Int = 0,
-    val destinationPort: Int = 0,
-    val length: Int = 0,
-    val dataLength: Int = 0,
-    val tcpFlags: Int = 0,
-    val tcpSequence: Long = 0,
-    val tcpAcknowledgment: Long = 0,
-    val tcpWindow: Int = 0,
-    val ipChecksum: String = "",
-    val transportChecksum: String = "",
-    val valid: Boolean = false,
-    val truncated: Boolean = false,
 )
 
 data class GoAuthMethod(

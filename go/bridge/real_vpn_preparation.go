@@ -7,14 +7,12 @@ import (
 
 // realVpnPreparationOwner owns exactly one pre-TUN client preparation. The
 // Android bridge serializes ownership operations with realVpnState; this type
-// separately protects the stage callback because it is invoked from Go client
-// setup code while cancellation may arrive from another bridge call.
+// retains a monotonic start time and an idempotent close while cancellation
+// may arrive from another bridge call.
 type realVpnPreparationOwner struct {
 	startedAt time.Time
 	close     func()
 
-	stageMu sync.RWMutex
-	stage   string
 	closeMu sync.Once
 }
 
@@ -22,27 +20,14 @@ func newRealVpnPreparationOwner(closeClient func()) *realVpnPreparationOwner {
 	return &realVpnPreparationOwner{
 		startedAt: time.Now(),
 		close:     closeClient,
-		stage:     "prepare.resource",
 	}
-}
-
-func (owner *realVpnPreparationOwner) setStage(stage string) {
-	if owner == nil {
-		return
-	}
-	owner.stageMu.Lock()
-	owner.stage = stage
-	owner.stageMu.Unlock()
 }
 
 func (owner *realVpnPreparationOwner) snapshot() (stage string, durationMillis int64) {
 	if owner == nil {
 		return "", 0
 	}
-	owner.stageMu.RLock()
-	stage = owner.stage
-	owner.stageMu.RUnlock()
-	return stage, time.Since(owner.startedAt).Milliseconds()
+	return "prepare.setup", time.Since(owner.startedAt).Milliseconds()
 }
 
 func (owner *realVpnPreparationOwner) cancel() {
