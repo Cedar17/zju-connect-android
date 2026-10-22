@@ -128,8 +128,6 @@ verification input and raw server responses. Authentication events can supply
 confirmed username and phone choices for UI; these are not diagnostic records.
 Prepared address/routes configure the Android TUN and likewise stay outside the
 redacted report. CAPTCHA bytes are retrieved only through `GetPendingCaptchaImage`.
-The pinned core's [TLS policy](architecture.md#diagnostics-and-transport-security)
-applies to authentication and tunnel transports.
 
 ### Authentication API
 
