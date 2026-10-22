@@ -38,7 +38,7 @@ Android system ─────── Always-on start ─────────
 | `QuickSettingsTileService` | User-added tile, permission check and direct connect/disconnect |
 | `RealVpnService` | TUN, foreground notification, socket protection and underlay recovery |
 | Go bridge | Single authentication coordinator, prepared/active client ownership and JSON boundary |
-| Official Go core | aTrust protocol, resource parsing/routing, L3 transport and internal L3 reconnect |
+| Official Go core | aTrust protocol, authentication, resource parsing/routing, L3 transport and internal L3 reconnect |
 
 The client targets aTrust and one active account. Legacy EasyConnect, WebVPN,
 local proxy/port forwarding and general VPN configuration are outside its scope.
@@ -136,7 +136,7 @@ Language normally follows the system; Android 13+ offers per-app selection in
 system settings. There is no in-app language picker. Documentation uses labels
 from the relevant resources: “诊断 → 复制报告” or “Diagnostics → Copy report”.
 
-## Diagnostics and transport security
+## Diagnostics
 
 The non-exported diagnostics Activity reads a bounded buffer of at most 100
 allowlisted records in `noBackupFilesDir`. Records contain state, authentication
@@ -151,11 +151,6 @@ fixed Chinese headings and English field names/state codes. Report timestamps
 use UTC; on-screen history uses the device time zone. The authentication guide
 owns [recovery labels](authentication-recovery.md#observable-recovery-paths);
 the bridge guide owns [local call measurements](gomobile-bridge.md#measurements).
-
-TLS follows the pinned official core: authentication and tunnel transports skip
-standard certificate-chain and hostname verification. The Android bridge adds
-no certificate or SPKI pins. This is the actual upstream transport policy;
-changes require coordinated implementation and documentation updates.
 
 Encrypted state contents and Keystore storage are defined only in
 [authentication-recovery.md](authentication-recovery.md#authentication-state).

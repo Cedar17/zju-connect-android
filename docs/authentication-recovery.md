@@ -105,7 +105,7 @@ server-rejection cause clears only that reusable result before trying persisted
 recovery. `credentialsRejected` deletes the saved credential and asks for new
 input without discarding the persisted context.
 
-Network, DNS, TLS, timeout and storage I/O failures are operational failures.
+Network, DNS, timeout and storage I/O failures are operational failures.
 They retain durable state for retry. Proven malformed/undecryptable local state
 is cleared separately from a temporarily unavailable store.
 
@@ -120,7 +120,7 @@ is cleared separately from a temporarily unavailable store.
 | `sessionInvalid` / `invalidSession` | discard if unusable | clear | retain | retain |
 | Reusable result rejected by authentication/server | clear | retain and retry | retain | retain |
 | `credentialsRejected` | no result created | retain | clear | retain |
-| Network / DNS / TLS / timeout / storage I/O failure | retain | retain | retain | retain |
+| Network / DNS / timeout / storage I/O failure | retain | retain | retain | retain |
 | User cancellation | retain existing result | retain | retain | retain |
 | Corrupt / undecryptable session snapshot | unaffected | clear corrupt snapshot | retain | retain |
 | Corrupt saved credential | unaffected | retain | clear corrupt credential | retain |
@@ -162,7 +162,7 @@ attempt. The reusable-result `authenticated` marker follows successful foregroun
 VPN preparation; it must not be read as a separate fresh password login.
 
 Only these labels and bounded durations reach recovery diagnostics. Sensitive
-state follows the [diagnostic and transport boundary](architecture.md#diagnostics-and-transport-security)
+state follows the [diagnostic boundary](architecture.md#diagnostics)
 and [callback contract](gomobile-bridge.md#kotlin-go-contract).
 
 ## Validation contract
