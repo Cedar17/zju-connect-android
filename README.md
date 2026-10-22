@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="artwork/readme-icon.png" width="96" height="96" alt="ZJU Connect 图标">
+</p>
+
 # zju-connect-android
 
 浙江大学 aTrust / RVPN 的第三方 Android 客户端，基于 [zju-connect](https://github.com/Mythologyli/zju-connect) 开源核心，采用 Material 3 设计，通过系统 VPN 访问校内资源。
