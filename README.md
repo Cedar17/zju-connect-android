@@ -4,9 +4,11 @@
 
 # zju-connect-android
 
+![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?style=flat-square&logo=android&logoColor=white) ![Architecture](https://img.shields.io/badge/arch-arm64--v8a-blue?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square)
+
 浙江大学 aTrust / RVPN 的第三方 Android 客户端，基于 [zju-connect](https://github.com/Mythologyli/zju-connect) 开源核心，采用 Material 3 设计，通过系统 VPN 访问校内资源。
 
-**Android 10+ · arm64-v8a · [下载 APK](https://github.com/Cedar17/zju-connect-android/releases)**
+**[下载 APK](https://github.com/Cedar17/zju-connect-android/releases)**
 
 ## 界面预览
 
