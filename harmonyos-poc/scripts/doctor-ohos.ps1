@@ -1,5 +1,6 @@
 param(
-    [string]$OhosSdkRoot
+    [string]$OhosSdkRoot,
+    [string]$BootstrapGoRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,10 +36,17 @@ if (Test-Path -LiteralPath $localSdk) {
 }
 
 $sdkRoot = $null
+$clangPath = $null
 foreach ($candidate in $candidates) {
-    if ((Test-Path -LiteralPath (Join-Path $candidate "native\sysroot")) -and
-        (Test-Path -LiteralPath (Join-Path $candidate "native\llvm\bin\clang.exe"))) {
+    $bin = Join-Path $candidate "native\llvm\bin"
+    $clangCandidates = @(
+        (Join-Path $bin "aarch64-unknown-linux-ohos-clang.exe"),
+        (Join-Path $bin "clang.exe")
+    )
+    $clang = $clangCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ((Test-Path -LiteralPath (Join-Path $candidate "native\sysroot")) -and $null -ne $clang) {
         $sdkRoot = $candidate
+        $clangPath = $clang
         break
     }
 }
@@ -46,10 +54,10 @@ foreach ($candidate in $candidates) {
 Write-Host "=== ZJU Connect HarmonyOS environment ==="
 if ($null -eq $sdkRoot) {
     Write-Host "[missing] HarmonyOS SDK native toolchain"
-    Write-Host "Extract DevEco/Command Line Tools, then pass -OhosSdkRoot with the directory containing native\sysroot and native\llvm."
+    Write-Host "Extract DevEco/Command Line Tools and install the OpenHarmony native SDK. Pass -OhosSdkRoot with the directory containing native\sysroot and native\llvm."
 } else {
     Write-Host "[ok] OHOS SDK root: $sdkRoot"
-    Write-Host "[ok] clang.exe: $(Join-Path $sdkRoot 'native\llvm\bin\clang.exe')"
+    Write-Host "[ok] clang: $clangPath"
     Write-Host "[ok] sysroot: $(Join-Path $sdkRoot 'native\sysroot')"
     $readElf = Join-Path $sdkRoot "native\llvm\bin\llvm-readelf.exe"
     $nm = Join-Path $sdkRoot "native\llvm\bin\llvm-nm.exe"
@@ -60,12 +68,15 @@ if ($null -eq $sdkRoot) {
     Write-Host ('$env:OHOS_SDK_ROOT = "' + $sdkRoot + '"')
 }
 
-$bootstrapGo = Join-Path $RepositoryRoot ".gomobile-toolchain\go\bin\go.exe"
+if ([string]::IsNullOrWhiteSpace($BootstrapGoRoot)) {
+    $BootstrapGoRoot = Join-Path $RepositoryRoot ".gomobile-toolchain\go"
+}
+$bootstrapGo = Join-Path $BootstrapGoRoot "bin\go.exe"
 if (Test-Path -LiteralPath $bootstrapGo) {
     $version = (& $bootstrapGo version | Out-String).Trim()
     Write-Host "[ok] bootstrap Go: $version"
 } else {
-    Write-Host "[missing] bootstrap Go at .gomobile-toolchain\go\bin\go.exe (or pass -BootstrapGoRoot to bootstrap script)"
+    Write-Host "[missing] bootstrap Go at $bootstrapGo"
 }
 
 $ohosGo = Join-Path $ProjectRoot ".toolchain\ohos-go\bin\go.exe"
@@ -79,6 +90,7 @@ if (Test-Path -LiteralPath $ohosGo) {
     }
 } else {
     Write-Host "[pending] OpenHarmony Go toolchain has not been built yet"
+}
 
 if (Get-Command git.exe -ErrorAction SilentlyContinue) {
     Write-Host "[ok] $(git --version)"
