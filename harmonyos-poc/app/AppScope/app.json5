@@ -1,0 +1,9 @@
+{
+  "app": {
+    "bundleName": "io.github.cedar17.zjuconnect.harmony",
+    "vendor": "Cedar17",
+    "versionCode": 1000000,
+    "versionName": "0.1.0",
+    "label": "$string:app_name"
+  }
+}

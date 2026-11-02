@@ -1,0 +1,6 @@
+{
+  "name": "libzjuprobe_bridge.so",
+  "types": "./Index.d.ts",
+  "version": "0.1.0",
+  "description": "Node-API bridge for the ZJU Connect Go runtime probe"
+}

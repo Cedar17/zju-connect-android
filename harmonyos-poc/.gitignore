@@ -1,0 +1,12 @@
+.toolchain/
+out/
+app/.hvigor/
+app/.idea/
+app/oh_modules/
+app/entry/oh_modules/
+app/entry/build/
+app/build/
+app/entry/libs/**/*.so
+app/entry/src/main/cpp/*.h
+*.hap
+*.hsp
