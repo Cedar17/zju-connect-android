@@ -16,8 +16,10 @@ if ([string]::IsNullOrWhiteSpace($OhosSdkRoot)) {
 $GoExe = Join-Path $ToolchainRoot "bin\go.exe"
 $NativeRoot = Join-Path $OhosSdkRoot "native"
 $LlvmBin = Join-Path $NativeRoot "llvm\bin"
-$Clang = Join-Path $LlvmBin "clang.exe"
-$ClangXX = Join-Path $LlvmBin "clang++.exe"
+$Clang = Join-Path $LlvmBin "aarch64-unknown-linux-ohos-clang.exe"
+$ClangXX = Join-Path $LlvmBin "aarch64-unknown-linux-ohos-clang++.exe"
+if (-not (Test-Path -LiteralPath $Clang)) { $Clang = Join-Path $LlvmBin "clang.exe" }
+if (-not (Test-Path -LiteralPath $ClangXX)) { $ClangXX = Join-Path $LlvmBin "clang++.exe" }
 $ReadElf = Join-Path $LlvmBin "llvm-readelf.exe"
 $Nm = Join-Path $LlvmBin "llvm-nm.exe"
 $Sysroot = Join-Path $NativeRoot "sysroot"
