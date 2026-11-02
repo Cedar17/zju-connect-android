@@ -124,6 +124,14 @@ Internal L3 reconnect belongs to the official core; errors returned through its
 public connection become terminal bridge failures. Android owns tunnel rebuilds,
 not another protocol reconnect loop.
 
+## UI sizing
+
+Prefer content-driven heights for text-bearing containers and interactive
+controls. Let text, content padding and component minimums determine their
+vertical size so wrapping and system font scaling can expand the layout. Use
+fixed heights only when a documented design constraint requires them, and
+verify affected screens with enlarged system font and display-size settings.
+
 ## Interface languages
 
 English and Simplified Chinese share Compose screens and connection policies.
