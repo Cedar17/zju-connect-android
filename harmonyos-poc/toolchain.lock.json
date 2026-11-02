@@ -6,6 +6,7 @@
   },
   "openHarmonyGo": {
     "repository": "https://github.com/star4277/ohos-go.git",
+    "tag": "v1.26.5-beta1",
     "commit": "19667c7abfc332f848b5bd1f293e4aeb0e9991a9",
     "license": "BSD-3-Clause"
   },
@@ -13,6 +14,6 @@
     "goos": "openharmony",
     "goarch": "arm64",
     "cgoEnabled": 1,
-    "triple": "aarch64-linux-ohos"
+    "triple": "aarch64-unknown-linux-ohos"
   }
 }

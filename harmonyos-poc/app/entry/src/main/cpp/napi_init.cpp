@@ -19,19 +19,59 @@ static std::string g_loadError;
 static void EnsureCore()
 {
     std::call_once(g_loadOnce, []() {
-        g_coreHandle = dlopen("libzju_go_probe.so", RTLD_NOW | RTLD_GLOBAL);
-        if (g_coreHandle == nullptr) {
-            const char *error = dlerror();
-            g_loadError = error == nullptr ? "dlopen failed without an error message" : error;
-            return;
+        Dl_info moduleInfo{};
+        std::string libraryPath;
+        if (dladdr(reinterpret_cast<void *>(&EnsureCore), &moduleInfo) != 0 &&
+            moduleInfo.dli_fname != nullptr) {
+            libraryPath = moduleInfo.dli_fname;
+            const size_t separator = libraryPath.find_last_of('/');
+            if (separator != std::string::npos) {
+                libraryPath.resize(separator + 1);
+                libraryPath += "libzju_go_probe.so";
+            } else {
+                libraryPath.clear();
+            }
         }
 
-        g_probeVersion = reinterpret_cast<ProbeVersionFn>(dlsym(g_coreHandle, "ZJUProbeVersion"));
-        g_probeAdd = reinterpret_cast<ProbeAddFn>(dlsym(g_coreHandle, "ZJUProbeAdd"));
-        g_probeFree = reinterpret_cast<ProbeFreeFn>(dlsym(g_coreHandle, "ZJUProbeFree"));
+        if (!libraryPath.empty()) {
+            dlerror();
+            g_coreHandle = dlopen(libraryPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+            if (g_coreHandle == nullptr) {
+                const char *error = dlerror();
+                g_loadError = "dlopen " + libraryPath + ": " +
+                    (error == nullptr ? "unknown error" : error);
+            }
+        }
+
+        if (g_coreHandle == nullptr) {
+            dlerror();
+            g_coreHandle = dlopen("libzju_go_probe.so", RTLD_NOW | RTLD_GLOBAL);
+            if (g_coreHandle == nullptr) {
+                const char *error = dlerror();
+                const std::string fallbackError =
+                    error == nullptr ? "unknown error" : error;
+                if (!g_loadError.empty()) {
+                    g_loadError += "; fallback: " + fallbackError;
+                } else {
+                    g_loadError = "dlopen libzju_go_probe.so: " + fallbackError;
+                }
+                return;
+            }
+        }
+
+        dlerror();
+        g_probeVersion = reinterpret_cast<ProbeVersionFn>(
+            dlsym(g_coreHandle, "ZJUProbeVersion"));
+        g_probeAdd = reinterpret_cast<ProbeAddFn>(
+            dlsym(g_coreHandle, "ZJUProbeAdd"));
+        g_probeFree = reinterpret_cast<ProbeFreeFn>(
+            dlsym(g_coreHandle, "ZJUProbeFree"));
+        const char *symbolError = dlerror();
+
         if (g_probeVersion == nullptr || g_probeAdd == nullptr || g_probeFree == nullptr) {
-            const char *error = dlerror();
-            g_loadError = error == nullptr ? "required Go export is missing" : error;
+            g_loadError = symbolError == nullptr
+                ? "one or more required Go exports are missing"
+                : symbolError;
         }
     });
 }

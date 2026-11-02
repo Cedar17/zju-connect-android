@@ -8,4 +8,5 @@ add_library(zjuprobe_bridge SHARED napi_init.cpp)
 
 target_link_libraries(zjuprobe_bridge PUBLIC
     libace_napi.z.so
+    libdl.so
 )
