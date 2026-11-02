@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -70,7 +69,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntSize
@@ -79,7 +77,6 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
-private val CONNECTION_STATUS_CARD_HEIGHT = 96.dp
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -345,9 +342,7 @@ private fun ConnectionHomeContent(
         }
 
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(CONNECTION_STATUS_CARD_HEIGHT),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -355,7 +350,7 @@ private fun ConnectionHomeContent(
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .padding(20.dp),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -370,8 +365,6 @@ private fun ConnectionHomeContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .semantics { contentDescription = supportingText },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (state.phase == ConnectionPhase.ERROR) {
                         MaterialTheme.colorScheme.error
@@ -387,9 +380,7 @@ private fun ConnectionHomeContent(
         Button(
             onClick = viewModel::onPrimaryAction,
             enabled = presentation.primaryActionEnabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
         ) {
             when (val primaryAction = presentation.primaryAction) {
