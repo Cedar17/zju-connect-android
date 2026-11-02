@@ -20,9 +20,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -70,7 +70,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.IntSize
@@ -79,7 +78,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
 
 private const val MAIN_ACTIVITY_LOG_TAG = "ZjuConnectMain"
-private val CONNECTION_STATUS_CARD_HEIGHT = 96.dp
+private const val PRIMARY_ACTION_VERTICAL_PADDING_LINE_HEIGHT_FRACTION = 0.35f
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
@@ -217,13 +216,15 @@ private fun ZjuConnectApp(
                     .padding(contentPadding),
             ) {
                 val contentModifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 24.dp, vertical = 28.dp)
+                    .fillMaxWidth(0.8f)
+                    .fillMaxHeight()
+                    .padding(vertical = 28.dp)
                 if (usesScrollableHomeLayout(state.phase)) {
                     ConnectionHomeContent(
                         state = state,
                         viewModel = viewModel,
                         modifier = contentModifier
+                            .align(Alignment.TopCenter)
                             .imePadding()
                             .verticalScroll(rememberScrollState())
                             .padding(top = 36.dp),
@@ -233,7 +234,7 @@ private fun ZjuConnectApp(
                     ConnectionHomeContent(
                         state = state,
                         viewModel = viewModel,
-                        modifier = contentModifier,
+                        modifier = contentModifier.align(Alignment.Center),
                         centered = true,
                     )
                 }
@@ -322,6 +323,13 @@ private fun ConnectionHomeContent(
     val presentation = connectionPresentation(state)
     val supportingText = presentation.supportingText.resolve()
     val progressDescription = stringResource(R.string.connection_progress)
+    val connectionStatusTextStyle = MaterialTheme.typography.titleLarge.copy(
+        fontWeight = FontWeight.Medium,
+    )
+    val primaryActionVerticalPadding = with(LocalDensity.current) {
+        connectionStatusTextStyle.lineHeight.toDp() *
+            PRIMARY_ACTION_VERTICAL_PADDING_LINE_HEIGHT_FRACTION
+    }
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -345,9 +353,7 @@ private fun ConnectionHomeContent(
         }
 
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(CONNECTION_STATUS_CARD_HEIGHT),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -355,23 +361,20 @@ private fun ConnectionHomeContent(
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
                     .padding(20.dp),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     text = presentation.title.resolve(),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Medium,
+                    style = connectionStatusTextStyle,
                 )
                 Text(
                     text = supportingText,
                     modifier = Modifier
                         .fillMaxWidth()
                         .semantics { contentDescription = supportingText },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (state.phase == ConnectionPhase.ERROR) {
                         MaterialTheme.colorScheme.error
@@ -387,22 +390,25 @@ private fun ConnectionHomeContent(
         Button(
             onClick = viewModel::onPrimaryAction,
             enabled = presentation.primaryActionEnabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
         ) {
-            when (val primaryAction = presentation.primaryAction) {
-                null -> CircularProgressIndicator(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .semantics {
-                            contentDescription = progressDescription
-                        },
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-                else -> Text(primaryAction.resolve())
+            Box(modifier = Modifier.padding(vertical = primaryActionVerticalPadding)) {
+                when (val primaryAction = presentation.primaryAction) {
+                    null -> CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .semantics {
+                                contentDescription = progressDescription
+                            },
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                    else -> Text(
+                        text = primaryAction.resolve(),
+                        style = connectionStatusTextStyle,
+                    )
+                }
             }
         }
     }
