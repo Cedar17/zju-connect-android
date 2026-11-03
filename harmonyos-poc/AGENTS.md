@@ -25,6 +25,8 @@ devecocli skills list
 
 If the locally installed DevEco CLI supplies an official skill and MCP, follow their current help output to install them to this app project; prefer `devecocli init --agent codex --project .` and `devecocli init --mcp --agent codex --project .`. Only install relevant skills discovered from `devecocli skills find`. Agent config generated locally must not overwrite authored source files or include secrets.
 
+Launch Codex from `harmonyos-poc/app` so the generated `app/.codex/config.toml` is within its configuration search path and this parent `AGENTS.md` applies. Starting Codex at the Git repository root will not load the nested app configuration or this nested `AGENTS.md`. DevEco CLI's locally generated `app/.codex/` files are ignored by Git and should be recreated through the documented init commands. Before relying on the integration, run `codex mcp list` from the app directory and check `/skills` inside Codex. `devecocli skills list` lists available catalog entries, not 51 installed skills.
+
 ## Build and verification
 
 1. Run `..\scripts\doctor-ohos.ps1`, then `..\scripts\bootstrap-ohos-go.ps1`, then `..\scripts\build-go-probe.ps1` (from the app root), following `../README.md`.
