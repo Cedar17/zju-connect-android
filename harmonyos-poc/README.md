@@ -23,6 +23,8 @@ $env:OHOS_SDK_ROOT = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharm
 
 工具链 bootstrap 在 `harmonyos-poc/.toolchain/ohos-go` 中构建第三方 `star4277/ohos-go v1.26.5-beta1`；C-shared 产物在 `harmonyos-poc/app/entry/libs/arm64-v8a/libzju_go_probe.so`，并检查 `PT_TLS`、`R_AARCH64_TLSDESC` 和四个导出符号。CMake 会把它复制进 HAP native 库目录。缺少 Go `.so` 时 HAP 构建会直接失败，不会生成一个伪装成功的空壳。
 
+`doctor-ohos.ps1` 只检查本地前置环境：其中 `[pending] OpenHarmony Go toolchain has not been built yet` 表示还需要执行 bootstrap，并非 P0 已通过。只有交叉编译、HAP 构建和设备端运行结果均成功，才算完成 P0。
+
 在 DevEco Studio 打开 `harmonyos-poc/app`，同步依赖、配置本机签名、安装到真机。点击 **P0 · Run Go probe**，成功标准是 `loaded=true`、版本包含 `go1.26.5 (openharmony/arm64)`、`addResult=42`。
 
 ## P1：系统 VPN fd → Go
@@ -33,18 +35,23 @@ P0 成功后，点击 **P1 · Start isolated VPN probe**。此步骤使用 `198.
 
 ## Codex CLI + 华为工具
 
-从本地的 HarmonyOS 工程根目录配置官方 DevEco CLI Skill 与 MCP：
+从 **Git 仓库根目录** 进入 `harmonyos-poc/app`，在这个目录初始化并启动 Codex。Git 仓库根目录仍是 `zju-connect-android`，而 `harmonyos-poc/app` 是 DevEco Studio 工程根目录；二者不能混淆。
 
 ```powershell
-cd harmonyos-poc\app
+cd .\harmonyos-poc\app
 devecocli docs search VpnExtensionAbility
 devecocli skills list
 devecocli init --agent codex --project .
 devecocli init --mcp --agent codex --project .
+codex mcp list
 codex
 ```
 
-`devecocli skills find <keyword>` 检索相关细分技能，针对具体 ArkTS、API 兼容、设备测试问题按需安装；不要一次性安装全部技能。Node/npm 全局包若跳过 DevEco CLI 的安装脚本，应先运行文档检索和 `devecocli --help` 确认功能正常，必要时按 npm 的提示明确授权该包的安装脚本。
+上述 `init` 会在 `app/.codex/` 写入本地 Skill 和 MCP 配置，该目录是可重新生成的本机集成产物，已被 Git 忽略，不要直接提交。启动 Codex 后用 `/skills` 检查 Skill 是否被识别；`codex mcp list` 检查 MCP 配置是否加载。**初始化成功不等于 Codex 已识别或连接成功**，以实际检查结果为准。
+
+Codex 会沿 Git 根目录到当前工作目录查找受信任的项目配置和 `AGENTS.md`。从 `app` 启动可以读取 `app/.codex/config.toml` 和上级 `harmonyos-poc/AGENTS.md`；若从仓库根目录直接启动，则这两处嵌套配置不会自动进入当前工作目录的加载路径。`devecocli skills list` 列出的是可用技能目录，不代表全部 51 个技能已安装；`devecocli skills find <keyword>` 可按需检索具体技能，不要批量安装。
+
+Node/npm 全局包若跳过 DevEco CLI 的安装脚本，应先运行文档检索和 `devecocli --help` 确认功能正常，必要时按 npm 的提示明确授权该包的安装脚本。
 
 `AGENTS.md` 中有面向本地 Codex 的工程规则。Codex 的构建、签名、真机测试结果应完整记录真实命令、错误和关键日志。
 
