@@ -1,81 +1,55 @@
 # HarmonyOS PoC
 
-HarmonyOS 手机、平板和 PC 共用的原生客户端实验工程。当前第一阶段只验证 Go runtime、cgo shared library 与 ArkTS/Node-API 的调用链；VPN 和 aTrust 集成在后续阶段接入。
+HarmonyOS 手机、平板和 PC 共用的原生客户端实验工程。第一台真机是 MateBook Pro S。本目录的 `app` 是 DevEco Studio 工程根目录；`native/go-probe` 是独立的 Go C-shared 运行时测试程序。
 
-## P0：Go runtime + NAPI
+## 环境
 
-验收目标：Go 1.26.5 OpenHarmony 工具链编译出 ARM64 `.so`，由 HarmonyOS 应用加载，并从 ArkTS 线程调用 Go 导出函数。
+- Windows 11 x64 / PowerShell 7。
+- 已安装 DevEco Studio 26.0.0.851，自带 `sdk/default/openharmony`、Hvigor、ohpm、Node。
+- DevEco CLI 1.3.0-stable 可选，但推荐供 Codex 使用。**不需要单独安装 Command Line Tools。**
+- Go >= 1.24.6 用于 bootstrap；OpenHarmony fork 固定在 `toolchain.lock.json`。
 
-### 环境
+## P0：Go runtime + N-API
 
-- Windows 11 x64。
-- DevEco Studio 26.0.0.851 和 Command Line Tools 26.0.0.851。
-- HarmonyOS SDK 26.0.0（API 26），native 工具链。
-- Go 1.25.6 或更新版本作为工具链 bootstrap。仓库现有 `.gomobile-toolchain/go` 可直接复用。
-- Git。
-
-### 检查本机环境
-
-先解压 DevEco Studio 和 Command Line Tools，安装/配置 SDK 后，在仓库根目录执行：
+在仓库根目录运行：
 
 ```powershell
+git switch poc/harmonyos
 .\harmonyos-poc\scripts\doctor-ohos.ps1
-```
-
-如果脚本没有自动找到 SDK，传入包含 `native\sysroot` 和 `native\llvm` 的 OpenHarmony SDK 根目录：
-
-```powershell
-.\harmonyos-poc\scripts\doctor-ohos.ps1 -OhosSdkRoot "D:\Huawei\command-line-tools\sdk\default\openharmony"
-```
-
-### 构建 Go 工具链
-
-在仓库根目录执行：
-
-```powershell
 .\harmonyos-poc\scripts\bootstrap-ohos-go.ps1
-```
-
-脚本固定检出 `star4277/ohos-go` 的 `v1.26.5-beta1`，并从源码构建 `GOOS=openharmony` 工具链。工具链源码和构建产物放在 `harmonyos-poc/.toolchain/`，不会提交到 Git。
-
-### 构建 Go shared library
-
-将 DevEco SDK 的 OpenHarmony 根目录设为环境变量：
-
-```powershell
-$env:OHOS_SDK_ROOT = "D:\Huawei\command-line-tools\sdk\default\openharmony"
+$env:OHOS_SDK_ROOT = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony'
 .\harmonyos-poc\scripts\build-go-probe.ps1
 ```
 
-脚本会生成并打包：
+工具链 bootstrap 在 `harmonyos-poc/.toolchain/ohos-go` 中构建第三方 `star4277/ohos-go v1.26.5-beta1`；C-shared 产物在 `harmonyos-poc/app/entry/libs/arm64-v8a/libzju_go_probe.so`，并检查 `PT_TLS`、`R_AARCH64_TLSDESC` 和四个导出符号。CMake 会把它复制进 HAP native 库目录。缺少 Go `.so` 时 HAP 构建会直接失败，不会生成一个伪装成功的空壳。
 
-`harmonyos-poc/app/entry/libs/arm64-v8a/libzju_go_probe.so`
+在 DevEco Studio 打开 `harmonyos-poc/app`，同步依赖、配置本机签名、安装到真机。点击 **P0 · Run Go probe**，成功标准是 `loaded=true`、版本包含 `go1.26.5 (openharmony/arm64)`、`addResult=42`。
 
-构建时检查 ELF 的 `PT_TLS`、`R_AARCH64_TLSDESC` 和三个 C 导出符号。只检查“编译成功”不足以证明 Go runtime 能在 HarmonyOS musl 环境中被动态加载。
+## P1：系统 VPN fd → Go
 
-### 真机验证
+P0 成功后，点击 **P1 · Start isolated VPN probe**。此步骤使用 `198.18.254.0/24` 的隔离路由，不添加默认路由、不覆盖 DNS、也不访问校网。VPN Extension 建立 TUN fd 后，Go 侧只 `dup` 然后关闭副本，确认 Go runtime 能在 VPN 扩展进程访问系统文件描述符。
 
-1. 在 DevEco Studio 中打开 `harmonyos-poc/app`。
-2. 等待工程同步，选择 MateBook Pro S 对应的真机设备，配置本机签名。
-3. Build HAP 并安装运行。
-4. 点击 **Run Go + NAPI probe**。
+`startVpnExtensionAbility` 返回仅表示启动请求已完成，并不意味着 fd 验证通过。需要在 DevEco hilog 或 `devecocli log` 中确认 `P1_OK` 或 `P1_FAILED`。完成后点击 Stop VPN probe。系统 VPN 授权或设备能力限制都属于实际测试结果，不能通过源码检查代替。
 
-预期结果包含：
+## Codex CLI + 华为工具
 
-- `loaded=true`
-- Go 版本为 `go1.26.5 (openharmony/arm64)`
-- `addResult=42`
+从本地的 HarmonyOS 工程根目录配置官方 DevEco CLI Skill 与 MCP：
 
-这一步验证 Go shared library 能被 HarmonyOS 加载，并且 ArkTS → N-API → Go runtime 的调用可正常返回。它不代表 VPN 数据面或 aTrust 已经打通。
+```powershell
+cd harmonyos-poc\app
+devecocli docs search VpnExtensionAbility
+devecocli skills list
+devecocli init --agent codex --project .
+devecocli init --mcp --agent codex --project .
+codex
+```
 
-## SDK 版本策略
+`devecocli skills find <keyword>` 检索相关细分技能，针对具体 ArkTS、API 兼容、设备测试问题按需安装；不要一次性安装全部技能。Node/npm 全局包若跳过 DevEco CLI 的安装脚本，应先运行文档检索和 `devecocli --help` 确认功能正常，必要时按 npm 的提示明确授权该包的安装脚本。
 
-工程使用 API 26 编译，目标 API 26，最低兼容版本暂定 HarmonyOS 6.0.0（API 20）。这样可以使用新工具链，同时保留对较早 HarmonyOS 6 设备的安装兼容性；若 MateBook Pro S 的实际系统 API 高于 20，不需要因此提高最低版本。
+`AGENTS.md` 中有面向本地 Codex 的工程规则。Codex 的构建、签名、真机测试结果应完整记录真实命令、错误和关键日志。
 
-## 后续阶段
+## 下一阶段
 
-- P1：VpnExtensionAbility 创建 TUN，验证 fd 生命周期和 Go 读写。
-- P2：复用现有 Go aTrust 认证流程，接入完整挑战交互及 HUKS 加密会话恢复。
-- P3：将 aTrust 返回的地址和资源路由配置到系统 VPN，验证真实浙大内网访问、断开和诊断。
+P2：基于 `../go/bridge` 的真实 aTrust 认证、验证码和会话恢复；P3：通过服务器动态返回地址和资源路由构造 VPN 配置，完整建立双向 L3 转发并访问浙大内网。
 
-Android 现有工程保持独立；鸿蒙端通过共享 Go 核心和平台适配层复用协议实现。
+当前代码属于 PoC，尚未完成 HarmonyOS HAP 编译或真机验证。

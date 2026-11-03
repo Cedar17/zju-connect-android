@@ -1,5 +1,5 @@
 import { vpnExtension, VpnExtensionAbility } from '@kit.NetworkKit';
-import { Want } from '@kit.AbilityKit';
+import Want from '@ohos.app.ability.Want';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import * as nativeProbe from 'libzjuprobe_bridge.so';
 
@@ -7,12 +7,9 @@ const DOMAIN: number = 0x2026;
 const TAG: string = 'ZjuVpnPoC';
 
 /**
- * P1 only: prove that the system grants a TUN fd and that our Go runtime
- * can access that fd in the VPN extension process.
- *
- * 198.18.254.0/24 is an isolated benchmarking range. We intentionally do not
- * configure a default route, DNS override, or any Zhejiang University routes.
- * This experiment cannot provide a working VPN yet.
+ * P1 only: verify that the system grants a TUN fd and the Go runtime can
+ * access it from the VPN extension process. The isolated benchmarking subnet
+ * below is not the university intranet. No default route or DNS override.
  */
 export default class ZjuVpnAbility extends VpnExtensionAbility {
   private vpnConnection: vpnExtension.VpnConnection | undefined;
@@ -49,9 +46,8 @@ export default class ZjuVpnAbility extends VpnExtensionAbility {
       this.vpnConnection = vpnExtension.createVpnConnection(this.context);
       const tunFd: number = await this.vpnConnection.create(config);
       hilog.info(DOMAIN, TAG, 'VPN create returned fd=%{public}d', tunFd);
-
-      // This enters the Go runtime from the extension process. It duplicates
-      // and immediately closes the duplicate, never consuming any packets.
+      // Go duplicates and immediately closes only the duplicate. It does not
+      // consume or inject packets.
       const goCanAccessFd: boolean = nativeProbe.inspectFd(tunFd);
       if (!goCanAccessFd) {
         throw new Error('Go runtime could not duplicate the TUN fd');
