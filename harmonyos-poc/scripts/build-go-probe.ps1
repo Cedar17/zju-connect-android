@@ -116,7 +116,7 @@ try {
     }
 
     $symbols = (& $Nm -D $OutputPath | Out-String)
-    foreach ($symbol in @("ZJUProbeVersion", "ZJUProbeAdd", "ZJUProbeFree")) {
+    foreach ($symbol in @("ZJUProbeVersion", "ZJUProbeAdd", "ZJUProbeFree", "ZJUProbeFdValid")) {
         if ($symbols -notmatch "\b$symbol$") {
             throw "Required Go export is missing: $symbol"
         }
@@ -126,7 +126,7 @@ try {
     $hash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-Host "[verify] PT_TLS present"
     Write-Host "[verify] R_AARCH64_TLSDESC present"
-    Write-Host "[verify] all three ZJUProbe exports present"
+    Write-Host "[verify] all four ZJUProbe exports present"
     Write-Host "[package] $PackagePath"
     Write-Host "[sha256] $hash"
 }

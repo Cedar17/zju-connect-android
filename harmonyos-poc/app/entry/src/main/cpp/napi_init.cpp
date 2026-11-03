@@ -8,12 +8,14 @@
 using ProbeVersionFn = char *(*)(void);
 using ProbeAddFn = int32_t (*)(int32_t, int32_t);
 using ProbeFreeFn = void (*)(char *);
+using ProbeFdValidFn = int32_t (*)(int32_t);
 
 static std::once_flag g_loadOnce;
 static void *g_coreHandle = nullptr;
 static ProbeVersionFn g_probeVersion = nullptr;
 static ProbeAddFn g_probeAdd = nullptr;
 static ProbeFreeFn g_probeFree = nullptr;
+static ProbeFdValidFn g_probeFdValid = nullptr;
 static std::string g_loadError;
 
 static void EnsureCore()
@@ -66,9 +68,12 @@ static void EnsureCore()
             dlsym(g_coreHandle, "ZJUProbeAdd"));
         g_probeFree = reinterpret_cast<ProbeFreeFn>(
             dlsym(g_coreHandle, "ZJUProbeFree"));
+        g_probeFdValid = reinterpret_cast<ProbeFdValidFn>(
+            dlsym(g_coreHandle, "ZJUProbeFdValid"));
         const char *symbolError = dlerror();
 
-        if (g_probeVersion == nullptr || g_probeAdd == nullptr || g_probeFree == nullptr) {
+        if (g_probeVersion == nullptr || g_probeAdd == nullptr || g_probeFree == nullptr ||
+            g_probeFdValid == nullptr) {
             g_loadError = symbolError == nullptr
                 ? "one or more required Go exports are missing"
                 : symbolError;
@@ -90,7 +95,8 @@ static napi_value Probe(napi_env env, napi_callback_info)
     napi_value result = nullptr;
     napi_create_object(env, &result);
 
-    const bool loaded = g_probeVersion != nullptr && g_probeAdd != nullptr && g_probeFree != nullptr;
+    const bool loaded = g_probeVersion != nullptr && g_probeAdd != nullptr &&
+        g_probeFree != nullptr && g_probeFdValid != nullptr;
     napi_value loadedValue = nullptr;
     napi_create_boolean(env, loaded, &loadedValue);
     napi_set_named_property(env, result, "loaded", loadedValue);
@@ -115,10 +121,34 @@ static napi_value Probe(napi_env env, napi_callback_info)
     return result;
 }
 
+static napi_value InspectFd(napi_env env, napi_callback_info info)
+{
+    EnsureCore();
+    if (g_probeFdValid == nullptr) {
+        napi_throw_error(env, nullptr, g_loadError.empty() ?
+            "Go probe is unavailable" : g_loadError.c_str());
+        return nullptr;
+    }
+
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t fd = -1;
+    if (argc != 1 || napi_get_value_int32(env, args[0], &fd) != napi_ok) {
+        napi_throw_type_error(env, nullptr, "inspectFd requires an integer fd");
+        return nullptr;
+    }
+
+    napi_value valid = nullptr;
+    napi_create_boolean(env, g_probeFdValid(fd) == 1, &valid);
+    return valid;
+}
+
 static napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor properties[] = {
         {"probe", nullptr, Probe, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"inspectFd", nullptr, InspectFd, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     return exports;

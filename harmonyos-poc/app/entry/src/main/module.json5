@@ -23,12 +23,20 @@
         ]
       }
     ],
+    "extensionAbilities": [
+      {
+        "name": "ZjuVpnAbility",
+        "srcEntry": "./ets/vpnability/ZjuVpnAbility.ets",
+        "type": "vpn",
+        "exported": false
+      }
+    ],
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET",
         "reason": "$string:app_name",
         "usedScene": {
-          "abilities": ["EntryAbility"],
+          "abilities": ["EntryAbility", "ZjuVpnAbility"],
           "when": "always"
         }
       }

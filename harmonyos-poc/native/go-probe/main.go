@@ -3,6 +3,7 @@ package main
 /*
 #include <stdint.h>
 #include <stdlib.h>
+#include <unistd.h>
 */
 import "C"
 
@@ -22,6 +23,19 @@ func ZJUProbeVersion() *C.char {
 //export ZJUProbeAdd
 func ZJUProbeAdd(a, b C.int32_t) C.int32_t {
 	return a + b
+}
+
+//export ZJUProbeFdValid
+func ZJUProbeFdValid(fd C.int32_t) C.int32_t {
+	if fd < 0 {
+		return 0
+	}
+	duplicate := C.dup(C.int(fd))
+	if duplicate < 0 {
+		return 0
+	}
+	C.close(duplicate)
+	return 1
 }
 
 //export ZJUProbeFree

@@ -6,3 +6,4 @@ export interface ProbeResult {
 }
 
 export function probe(): ProbeResult;
+export function inspectFd(fd: number): boolean;
