@@ -2,6 +2,7 @@
 out/
 app/.hvigor/
 app/.idea/
+app/.codex/
 app/oh_modules/
 app/entry/oh_modules/
 app/entry/build/
