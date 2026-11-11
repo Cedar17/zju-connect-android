@@ -88,6 +88,21 @@ class AlwaysOnSessionRecoveryTest {
     }
 
     @Test
+    fun serverMismatchIsADefinitiveInvalidationNotATransientFailure() {
+        assertEquals(
+            AlwaysOnSessionRestoreOutcome.InvalidSession,
+            classifyAlwaysOnSessionRestoreEvent(
+                GoAuthEvent(
+                    type = "error",
+                    state = "error",
+                    code = "serverMismatch",
+                    message = "different server",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun retryPolicyUsesThreeAttemptsAndResetsOnNetworkRevision() {
         val policy = AlwaysOnRestoreRetryPolicy()
 

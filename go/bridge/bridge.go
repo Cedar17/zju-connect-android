@@ -28,8 +28,10 @@ import (
 )
 
 const (
-	schemaVersion                       = 1
-	authenticationSnapshotSchemaVersion = 1
+	schemaVersion = 1
+	// Snapshot v1 predates the experimental custom-server option and always
+	// refers to the ZJU production endpoint; v2 records the endpoint inline.
+	authenticationSnapshotSchemaVersion = 2
 	maxAuthenticationSnapshotSize       = 64 * 1024
 	zjuAtrustServer                     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort                 = 443
@@ -88,9 +90,13 @@ type authenticationEvent struct {
 // Go to Kotlin for persistence. It deliberately excludes password, username,
 // standalone SID, resources, connection ID, and sign key.
 type authenticationSnapshot struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	DeviceID      string        `json:"deviceId"`
-	Cookies       []auth.Cookie `json:"cookies"`
+	SchemaVersion int    `json:"schemaVersion"`
+	DeviceID      string `json:"deviceId"`
+	// Server and Port record the aTrust endpoint the cookies belong to.
+	// v1 snapshots omit both and always refer to the ZJU endpoint.
+	Server  string        `json:"server,omitempty"`
+	Port    int           `json:"port,omitempty"`
+	Cookies []auth.Cookie `json:"cookies"`
 }
 
 type authenticatedResult struct {
@@ -98,6 +104,11 @@ type authenticatedResult struct {
 	SID          string
 	AuthData     []byte
 	ResourceData []byte
+	// Server and Port record the aTrust endpoint this result authenticated
+	// against, so the VPN data plane reconnects to the same service. They
+	// identify the origin of the session and are not secrets.
+	Server string
+	Port   int
 }
 
 type upstreamAuthSession interface {
@@ -124,6 +135,8 @@ func cloneAuthenticatedResult(result authenticatedResult) authenticatedResult {
 		SID:          result.SID,
 		AuthData:     append([]byte(nil), result.AuthData...),
 		ResourceData: append([]byte(nil), result.ResourceData...),
+		Server:       result.Server,
+		Port:         result.Port,
 	}
 }
 
@@ -135,6 +148,8 @@ func clearAuthenticatedResult(result *authenticatedResult) {
 	clear(result.ResourceData)
 	result.Username = ""
 	result.SID = ""
+	result.Server = ""
+	result.Port = 0
 	result.AuthData = nil
 	result.ResourceData = nil
 }
@@ -182,15 +197,18 @@ func currentAuthenticatedResult() (authenticatedResult, bool) {
 }
 
 // StartAuthentication begins a single in-memory aTrust authentication session.
-// The target is deliberately restricted to ZJU's production aTrust endpoint so
-// credentials cannot be redirected to an arbitrary host by the UI layer.
+// The target defaults to ZJU's production aTrust endpoint; the experimental
+// custom-server setting may point it at another aTrust endpoint, and the UI
+// layer is still restricted to a bare host and port so credentials cannot be
+// redirected into arbitrary URLs.
 func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	var request authenticationStartRequest
 	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
 		return authError("invalidRequest", "Authentication request is not valid JSON")
 	}
-	if request.Server != zjuAtrustServer || request.Port != zjuAtrustServerPort {
-		return authError("invalidRequest", "Authentication is only available for the ZJU aTrust service")
+	server, port, err := resolveAuthenticationServer(request.Server, request.Port)
+	if err != nil {
+		return authError("invalidRequest", "Authentication requires a valid aTrust server host and port")
 	}
 	if err := validateDeviceID(request.DeviceID); err != nil {
 		return authError("invalidRequest", "Authentication requires a valid device identity")
@@ -199,7 +217,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
 
-	coordinator := newAuthenticationCoordinator(request.Server, request.Port, request.DeviceID, listener)
+	coordinator := newAuthenticationCoordinator(server, port, request.DeviceID, listener)
 	currentAuthentication.mu.Lock()
 	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
@@ -329,7 +347,11 @@ func ExportAuthenticatedSession() []byte {
 		return nil
 	}
 	defer clearAuthenticatedResult(&result)
-	encoded, err := encodeAuthenticationSnapshot(result.AuthData)
+	server, port := result.Server, result.Port
+	if server == "" || port == 0 {
+		server, port = zjuAtrustServer, zjuAtrustServerPort
+	}
+	encoded, err := encodeAuthenticationSnapshot(result.AuthData, server, port)
 	if err != nil {
 		return nil
 	}
@@ -337,16 +359,26 @@ func ExportAuthenticatedSession() []byte {
 }
 
 // ResumeAuthentication validates an encrypted-at-rest snapshot after Kotlin
-// decrypts it. The coordinator is restricted to ZJU's endpoint and emits only safe
-// lifecycle events; snapshot values never enter callback JSON.
-func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener BridgeListener) string {
+// decrypts it. The snapshot records the aTrust endpoint its cookies belong
+// to; Kotlin passes the currently configured target and a snapshot from a
+// different server is rejected as serverMismatch instead of silently
+// reconnecting there. The coordinator emits only safe lifecycle events;
+// snapshot values never enter callback JSON.
+func ResumeAuthentication(snapshotBytes []byte, deviceID string, server string, port int, listener BridgeListener) string {
 	if listener == nil {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
 	if err := validateDeviceID(deviceID); err != nil {
 		return authError("invalidRequest", "Session restoration requires a valid device identity")
 	}
-	authData, err := decodeAuthenticationSnapshot(snapshotBytes, deviceID)
+	expectedServer, expectedPort, err := resolveAuthenticationServer(server, port)
+	if err != nil {
+		return authError("invalidRequest", "Session restoration requires a valid aTrust server host and port")
+	}
+	authData, err := decodeAuthenticationSnapshot(snapshotBytes, deviceID, expectedServer, expectedPort)
+	if errors.Is(err, errSnapshotServerMismatch) {
+		return authError("serverMismatch", "Saved authentication data belongs to a different server")
+	}
 	if err != nil {
 		return authError("invalidSession", "Saved authentication data is invalid")
 	}
@@ -358,7 +390,7 @@ func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener Bridge
 	}
 	clear(authData)
 
-	coordinator := newAuthenticationCoordinator(zjuAtrustServer, zjuAtrustServerPort, deviceID, listener)
+	coordinator := newAuthenticationCoordinator(expectedServer, expectedPort, deviceID, listener)
 	currentAuthentication.mu.Lock()
 	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
@@ -377,14 +409,19 @@ func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener Bridge
 	})
 }
 
-func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
+func encodeAuthenticationSnapshot(authData []byte, server string, port int) ([]byte, error) {
 	var clientAuthData auth.ClientAuthData
 	if err := json.Unmarshal(authData, &clientAuthData); err != nil {
+		return nil, err
+	}
+	if err := validateAuthenticationServer(server, port); err != nil {
 		return nil, err
 	}
 	snapshot := authenticationSnapshot{
 		SchemaVersion: authenticationSnapshotSchemaVersion,
 		DeviceID:      clientAuthData.DeviceID,
+		Server:        server,
+		Port:          port,
 		Cookies:       append([]auth.Cookie(nil), clientAuthData.Cookies...),
 	}
 	if err := validateAuthenticationSnapshot(snapshot); err != nil {
@@ -393,13 +430,27 @@ func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
 	return json.Marshal(snapshot)
 }
 
-func decodeAuthenticationSnapshot(snapshotBytes []byte, deviceID string) ([]byte, error) {
+var errSnapshotServerMismatch = errors.New("authentication snapshot belongs to a different server")
+
+func decodeAuthenticationSnapshot(
+	snapshotBytes []byte,
+	deviceID string,
+	expectedServer string,
+	expectedPort int,
+) ([]byte, error) {
 	if len(snapshotBytes) == 0 || len(snapshotBytes) > maxAuthenticationSnapshotSize {
 		return nil, fmt.Errorf("authentication snapshot size is invalid")
 	}
 	var snapshot authenticationSnapshot
 	if err := json.Unmarshal(snapshotBytes, &snapshot); err != nil {
 		return nil, err
+	}
+	snapshotServer, snapshotPort, err := snapshotAuthenticationServer(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if snapshotServer != expectedServer || snapshotPort != expectedPort {
+		return nil, fmt.Errorf("%w: %s", errSnapshotServerMismatch, snapshotServer)
 	}
 	if err := validateAuthenticationSnapshot(snapshot); err != nil {
 		return nil, err
@@ -410,9 +461,29 @@ func decodeAuthenticationSnapshot(snapshotBytes []byte, deviceID string) ([]byte
 	})
 }
 
+// snapshotAuthenticationServer resolves the endpoint a snapshot belongs to.
+// v1 snapshots predate the custom-server option and only ever targeted the
+// ZJU endpoint; v2 snapshots carry their server inline and must be valid.
+func snapshotAuthenticationServer(snapshot authenticationSnapshot) (string, int, error) {
+	switch snapshot.SchemaVersion {
+	case 1:
+		return zjuAtrustServer, zjuAtrustServerPort, nil
+	case authenticationSnapshotSchemaVersion:
+		if snapshot.Server == "" || snapshot.Port == 0 {
+			return "", 0, fmt.Errorf("authentication snapshot server is missing")
+		}
+		if err := validateAuthenticationServer(snapshot.Server, snapshot.Port); err != nil {
+			return "", 0, err
+		}
+		return snapshot.Server, snapshot.Port, nil
+	default:
+		return "", 0, fmt.Errorf("unsupported authentication snapshot version")
+	}
+}
+
 func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
-	if snapshot.SchemaVersion != authenticationSnapshotSchemaVersion {
-		return fmt.Errorf("unsupported authentication snapshot version")
+	if _, _, err := snapshotAuthenticationServer(snapshot); err != nil {
+		return err
 	}
 	if err := validateDeviceID(snapshot.DeviceID); err != nil {
 		return err
@@ -420,7 +491,11 @@ func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
 	if len(snapshot.Cookies) == 0 || len(snapshot.Cookies) > 64 {
 		return fmt.Errorf("cookie count is invalid")
 	}
-	expectedHost := net.JoinHostPort(zjuAtrustServer, fmt.Sprint(zjuAtrustServerPort))
+	server, port, err := snapshotAuthenticationServer(snapshot)
+	if err != nil {
+		return err
+	}
+	expectedHost := net.JoinHostPort(server, fmt.Sprint(port))
 	hasSID := false
 	for _, cookie := range snapshot.Cookies {
 		if cookie.Host != expectedHost || cookie.Scheme != "https" || cookie.Name == "" || cookie.Value == "" {
@@ -444,6 +519,65 @@ func validateDeviceID(deviceID string) error {
 		return fmt.Errorf("device ID is invalid")
 	}
 	return nil
+}
+
+// resolveAuthenticationServer maps an optional client-supplied target onto the
+// effective aTrust endpoint. Empty values keep the ZJU production endpoint, so
+// callers that predate the experimental custom-server setting stay valid.
+func resolveAuthenticationServer(server string, port int) (string, int, error) {
+	if server == "" && port == 0 {
+		return zjuAtrustServer, zjuAtrustServerPort, nil
+	}
+	if err := validateAuthenticationServer(server, port); err != nil {
+		return "", 0, err
+	}
+	return server, port, nil
+}
+
+// validateAuthenticationServer accepts only a bare host (hostname, IPv4 or
+// IPv6 literal) and a concrete port. Schemes, paths, credentials, and
+// whitespace are rejected: the custom-server option points the aTrust client
+// at another aTrust endpoint, not at an arbitrary URL.
+func validateAuthenticationServer(server string, port int) error {
+	if server == "" {
+		return fmt.Errorf("server host is required")
+	}
+	if len(server) > 253 {
+		return fmt.Errorf("server host is too long")
+	}
+	host := server
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if net.ParseIP(host) == nil && !isHostnameLabelChain(host) {
+		return fmt.Errorf("server host is not a hostname or IP address")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("server port is out of range")
+	}
+	return nil
+}
+
+func isHostnameLabelChain(host string) bool {
+	// A trailing dot is a legal root-of-DNS notation; validate without it.
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) < 1 || len(label) > 63 {
+			return false
+		}
+		for index, char := range label {
+			switch {
+			case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+			case char == '-' && index != 0 && index != len(label)-1:
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var errAuthenticationCancelled = errors.New("authentication coordinator cancelled")
@@ -702,6 +836,8 @@ func (c *authenticationCoordinator) completeLogin(loginResult auth.LoginResult, 
 		SID:          loginResult.SID,
 		AuthData:     authData,
 		ResourceData: resourceData,
+		Server:       c.server,
+		Port:         c.port,
 	}
 	if !cacheAuthenticatedResultForCoordinator(c, result) {
 		clearAuthenticatedResult(&result)

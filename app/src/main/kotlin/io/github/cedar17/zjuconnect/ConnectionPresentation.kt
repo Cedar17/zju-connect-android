@@ -84,6 +84,7 @@ internal fun connectionErrorText(code: String): UiText = UiText.Resource(
     "sessionStoreUnavailable" -> R.string.error_session_store
     "credentialStoreUnavailable" -> R.string.error_credential_store
     "deviceIdentityUnavailable" -> R.string.error_device_identity
+    "customServerInvalid" -> R.string.error_custom_server_invalid
     "accountSwitchClearFailed" -> R.string.error_account_switch_clear
     "sessionRestoreUnavailable" -> R.string.error_session_restore
     "alwaysOnAuthenticationRequired" -> R.string.error_always_on_authentication

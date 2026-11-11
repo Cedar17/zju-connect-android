@@ -18,6 +18,9 @@
             android:name=".AboutActivity"
             android:exported="false" />
         <activity
+            android:name=".AdvancedSettingsActivity"
+            android:exported="false" />
+        <activity
             android:name=".DiagnosticsActivity"
             android:exported="false" />
         <activity

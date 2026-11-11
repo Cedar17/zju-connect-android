@@ -18,7 +18,7 @@ internal data class AlwaysOnSessionRestoreResult(
 /** Maps only the safe, structured Go authentication events used by recovery. */
 internal fun classifyAlwaysOnSessionRestoreEvent(event: GoAuthEvent): AlwaysOnSessionRestoreOutcome? = when {
     event.type == "authenticated" -> AlwaysOnSessionRestoreOutcome.Authenticated
-    event.type == "sessionInvalid" || event.code in setOf("invalidSession", "sessionInvalid") ->
+    event.type == "sessionInvalid" || event.code in setOf("invalidSession", "sessionInvalid", "serverMismatch") ->
         AlwaysOnSessionRestoreOutcome.InvalidSession
     event.type == "authMethodsReady" && event.code == "sessionExpired" ->
         AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication
@@ -76,6 +76,7 @@ internal class AlwaysOnSessionRestorer(
     private val sessionStore: AuthSessionStore,
     private val deviceIdentityProvider: DeviceIdentityProvider,
     private val bridge: GoCoreBridge,
+    private val serverTargetProvider: () -> CustomServerTarget?,
 ) {
     private val generation = AtomicLong(0)
 
@@ -127,7 +128,22 @@ internal class AlwaysOnSessionRestorer(
                 return
             }
 
-            val initialEvent = bridge.resumeAuthentication(snapshot, deviceID) { event ->
+            // An invalid custom-server configuration cannot define a target;
+            // leave the stored session untouched and let the foreground UI
+            // surface the configuration error.
+            val serverTarget = serverTargetProvider()
+            if (serverTarget == null) {
+                finish(
+                    AlwaysOnSessionRestoreResult(
+                        outcome = AlwaysOnSessionRestoreOutcome.WaitingForUserAuthentication,
+                        code = "customServerInvalid",
+                        message = "The custom server settings are invalid",
+                    ),
+                )
+                return
+            }
+
+            val initialEvent = bridge.resumeAuthentication(snapshot, serverTarget, deviceID) { event ->
                 classifyAlwaysOnSessionRestoreEvent(event)?.let { outcome ->
                     finish(
                         AlwaysOnSessionRestoreResult(

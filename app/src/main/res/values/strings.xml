@@ -13,6 +13,7 @@
     <string name="menu_overflow">More actions</string>
     <string name="menu_diagnostics">Diagnostics</string>
     <string name="menu_about">About</string>
+    <string name="menu_advanced_settings">Advanced settings</string>
     <string name="menu_switch_account">Switch account</string>
     <string name="switch_account_title">Switch account?</string>
     <string name="switch_account_message">This clears the current saved login state and starts authentication for another account.</string>
@@ -77,6 +78,7 @@
     <string name="error_session_store">Saved login unavailable. Try again later.</string>
     <string name="error_credential_store">Could not save login. Try again later.</string>
     <string name="error_device_identity">Device info unavailable. Restart and retry.</string>
+    <string name="error_custom_server_invalid">The custom server settings are invalid. Fix them in advanced settings.</string>
     <string name="error_account_switch_clear">Could not switch accounts. Try again later.</string>
     <string name="error_session_restore">Login restore failed. Check network and retry.</string>
     <string name="error_always_on_authentication">Open app to finish signing in, then retry.</string>
@@ -178,6 +180,18 @@
     <string name="about_repository">Repository</string>
     <string name="about_report_problem">Report an issue</string>
     <string name="about_app_icon_description">ZJU Connect app icon</string>
+    <string name="about_advanced_unlocked">Advanced settings enabled</string>
+    <string name="about_advanced_locked">Advanced settings disabled</string>
+
+    <string name="advanced_title">Advanced settings</string>
+    <string name="advanced_enable_custom_server">Enable custom server (experimental)</string>
+    <string name="advanced_enable_custom_server_summary">Connect to another aTrust server instead of the ZJU default. Switching servers signs in again and saved login state is kept per server. Only for self-hosted or mirrored deployments.</string>
+    <string name="advanced_server_host_label">Server address</string>
+    <string name="advanced_server_port_label">Server port</string>
+    <string name="advanced_invalid_host">Enter a valid hostname or IP address</string>
+    <string name="advanced_invalid_port">Enter a port between 1 and 65535</string>
+    <string name="advanced_current_server">Current server: %1$s:%2$d</string>
+    <string name="advanced_server_invalid_notice">The custom server is invalid. Fix it before connecting.</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
     <string name="notification_channel_description">Shows VPN connection status</string>

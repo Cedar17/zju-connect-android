@@ -146,9 +146,11 @@ func PrepareRealVpn() string {
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), realVpnPrepareTimeout)
 	defer cancelSetup()
 	setupStartedAt := time.Now()
+	// Reconnect to the endpoint the session was authenticated against; the
+	// experimental custom-server setting may have moved it off the ZJU default.
 	if _, err := vpnClient.SetupContext(setupCtx, atrust.SetupOptions{
-		ServerAddress: zjuAtrustServer,
-		ServerPort:    zjuAtrustServerPort,
+		ServerAddress: result.Server,
+		ServerPort:    result.Port,
 		ClientData:    result.AuthData,
 		ResourceData:  result.ResourceData,
 	}); err != nil {
@@ -567,6 +569,9 @@ func currentAuthenticatedVpnResult() (authenticatedResult, error) {
 	result, ok := currentAuthenticatedResult()
 	if !ok || result.SID == "" || len(result.AuthData) == 0 || len(result.ResourceData) == 0 {
 		return authenticatedResult{}, fmt.Errorf("authentication has not completed")
+	}
+	if result.Server == "" || result.Port == 0 {
+		return authenticatedResult{}, fmt.Errorf("authentication result is missing its server endpoint")
 	}
 	return result, nil
 }
