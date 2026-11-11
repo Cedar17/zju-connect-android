@@ -125,6 +125,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun dispatchStartProxyService(effect: ConnectionEffect.StartProxyService) {
+        if (shouldRequestNotificationPermission()) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        runCatching {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, ProxyForegroundService::class.java)
+                    .setAction(ProxyForegroundService.ACTION_START),
+            )
+        }.onSuccess {
+            connectionViewModel.onProxyServiceStartDispatched(effect)
+        }.onFailure { error ->
+            Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start proxy service", error)
+            connectionViewModel.onVpnServiceDispatchFailed(effect)
+        }
+    }
+
     private fun shouldRequestNotificationPermission(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -177,6 +196,20 @@ class MainActivity : ComponentActivity() {
                     )
                 }.onFailure { error ->
                     Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to stop VPN service", error)
+                    connectionViewModel.onVpnServiceDispatchFailed(effect)
+                }
+            }
+            is ConnectionEffect.StartProxyService -> {
+                dispatchStartProxyService(effect)
+            }
+            is ConnectionEffect.StopProxyService -> {
+                runCatching {
+                    startService(
+                        Intent(this, ProxyForegroundService::class.java)
+                            .setAction(ProxyForegroundService.ACTION_STOP),
+                    )
+                }.onFailure { error ->
+                    Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to stop proxy service", error)
                     connectionViewModel.onVpnServiceDispatchFailed(effect)
                 }
             }

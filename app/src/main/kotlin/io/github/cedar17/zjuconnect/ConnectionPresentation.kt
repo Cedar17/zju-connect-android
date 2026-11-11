@@ -36,6 +36,8 @@ private fun supportingTextFor(state: ConnectionUiState): UiText = when (state.ph
         state.internalCode == ALWAYS_ON_DISCONNECT_BLOCKED_CODE
     ) {
         UiText.Resource(R.string.always_on_disconnect_guidance)
+    } else if (state.phase == ConnectionPhase.CONNECTED && state.proxyMode) {
+        UiText.Resource(R.string.connection_status_proxy_connected)
     } else {
         rememberedAccountText(state.rememberedUsername)
     }
@@ -54,7 +56,11 @@ private fun supportingTextFor(state: ConnectionUiState): UiText = when (state.ph
     ConnectionPhase.AWAITING_CAPTCHA -> UiText.Resource(R.string.connection_status_awaiting_captcha)
     ConnectionPhase.PREPARING_VPN_PERMISSION,
     ConnectionPhase.ESTABLISHING_VPN,
-    -> UiText.Resource(R.string.connection_status_establishing_vpn)
+    -> if (state.proxyMode) {
+        UiText.Resource(R.string.connection_status_starting_proxy)
+    } else {
+        UiText.Resource(R.string.connection_status_establishing_vpn)
+    }
     ConnectionPhase.RECOVERING_VPN -> UiText.Resource(R.string.connection_status_recovering_connection)
     ConnectionPhase.DISCONNECTING -> UiText.Resource(R.string.connection_status_disconnecting_vpn)
 }
@@ -85,6 +91,11 @@ internal fun connectionErrorText(code: String): UiText = UiText.Resource(
     "credentialStoreUnavailable" -> R.string.error_credential_store
     "deviceIdentityUnavailable" -> R.string.error_device_identity
     "customServerInvalid" -> R.string.error_custom_server_invalid
+    "proxySettingsInvalid" -> R.string.error_proxy_settings_invalid
+    "proxyListenFailed" -> R.string.error_proxy_listen_failed
+    "proxyDataPlaneFailed" -> R.string.error_proxy_data_plane
+    "proxyStartDispatchFailed" -> R.string.error_proxy_start_dispatch
+    "proxyStopDispatchFailed" -> R.string.error_proxy_stop_dispatch
     "accountSwitchClearFailed" -> R.string.error_account_switch_clear
     "sessionRestoreUnavailable" -> R.string.error_session_restore
     "alwaysOnAuthenticationRequired" -> R.string.error_always_on_authentication

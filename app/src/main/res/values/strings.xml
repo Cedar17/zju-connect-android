@@ -192,6 +192,23 @@
     <string name="advanced_invalid_port">Enter a port between 1 and 65535</string>
     <string name="advanced_current_server">Current server: %1$s:%2$d</string>
     <string name="advanced_server_invalid_notice">The custom server is invalid. Fix it before connecting.</string>
+    <string name="advanced_enable_proxy_mode">Proxy-only mode (experimental)</string>
+    <string name="advanced_enable_proxy_mode_summary">Serve the campus network through a local SOCKS5/HTTP proxy instead of a system VPN, so another VPN app can run at the same time. Apps must be pointed at 127.0.0.1 themselves.</string>
+    <string name="advanced_proxy_socks_port_label">SOCKS5 port</string>
+    <string name="advanced_proxy_http_port_label">HTTP port (0 disables HTTP)</string>
+    <string name="advanced_invalid_proxy_port">Enter a port between 1 and 65535</string>
+    <string name="advanced_invalid_proxy_ports">The proxy ports are invalid or identical.</string>
+    <string name="connection_status_starting_proxy">Starting local proxy…</string>
+    <string name="connection_status_proxy_connected">Connected through the local proxy</string>
+    <string name="error_proxy_settings_invalid">The proxy-only settings are invalid. Fix them in advanced settings.</string>
+    <string name="error_proxy_listen_failed">The local proxy port is unavailable. Change it in advanced settings.</string>
+    <string name="error_proxy_data_plane">The proxy connection dropped. Connect again.</string>
+    <string name="error_proxy_start_dispatch">Could not start the proxy. Try again later.</string>
+    <string name="error_proxy_stop_dispatch">Could not stop the proxy. Try again later.</string>
+    <string name="notification_proxy_channel_name">ZJU Connect proxy</string>
+    <string name="notification_proxy_channel_description">Shows the local proxy status</string>
+    <string name="notification_proxy_connecting">Starting the local ZJU proxy</string>
+    <string name="notification_proxy_connected">Local ZJU proxy is running</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
     <string name="notification_channel_description">Shows VPN connection status</string>

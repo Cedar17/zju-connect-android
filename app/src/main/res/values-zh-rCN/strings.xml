@@ -192,6 +192,23 @@
     <string name="advanced_invalid_port">请输入 1–65535 之间的端口号</string>
     <string name="advanced_current_server">当前服务器：%1$s:%2$d</string>
     <string name="advanced_server_invalid_notice">自定义服务器配置无效，连接前请先修正。</string>
+    <string name="advanced_enable_proxy_mode">仅代理模式（实验性）</string>
+    <string name="advanced_enable_proxy_mode_summary">通过本地 SOCKS5/HTTP 代理提供校园网访问，不占用系统 VPN，可与其他 VPN 应用同时使用。其他应用需自行配置代理指向 127.0.0.1。</string>
+    <string name="advanced_proxy_socks_port_label">SOCKS5 端口</string>
+    <string name="advanced_proxy_http_port_label">HTTP 端口（0 表示禁用）</string>
+    <string name="advanced_invalid_proxy_port">请输入 1–65535 之间的端口号</string>
+    <string name="advanced_invalid_proxy_ports">代理端口无效或完全相同。</string>
+    <string name="connection_status_starting_proxy">正在启动本地代理…</string>
+    <string name="connection_status_proxy_connected">已通过本地代理连接</string>
+    <string name="error_proxy_settings_invalid">仅代理模式配置无效，请在高级设置中修正。</string>
+    <string name="error_proxy_listen_failed">本地代理端口不可用，请在高级设置中修改。</string>
+    <string name="error_proxy_data_plane">代理连接中断，请重新连接。</string>
+    <string name="error_proxy_start_dispatch">无法启动代理服务，请稍后重试。</string>
+    <string name="error_proxy_stop_dispatch">无法停止代理服务，请稍后重试。</string>
+    <string name="notification_proxy_channel_name">ZJU Connect 代理</string>
+    <string name="notification_proxy_channel_description">显示本地代理状态</string>
+    <string name="notification_proxy_connecting">正在启动浙大本地代理</string>
+    <string name="notification_proxy_connected">浙大本地代理运行中</string>
 
     <string name="notification_channel_name">ZJU Connect VPN</string>
     <string name="notification_channel_description">显示 VPN 连接状态</string>
