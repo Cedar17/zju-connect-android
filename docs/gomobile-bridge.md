@@ -135,15 +135,20 @@ redacted report. CAPTCHA bytes are retrieved only through `GetPendingCaptchaImag
 | --- | --- |
 | `StartAuthentication(requestJSON, listener)` | JSON response; starts the single asynchronous authentication flow |
 | `SubmitAuthentication(responseJSON)` | JSON response; advances or retries the current flow |
-| `ResumeAuthentication(snapshotBytes, deviceID, listener)` | JSON response; validates snapshot and starts server-side session recovery |
+| `ResumeAuthentication(snapshotBytes, deviceID, server, port, listener)` | JSON response; validates snapshot against the configured server and starts server-side session recovery |
 | `ExportAuthenticatedSession()` | Opaque snapshot bytes for Android encryption |
 | `GetPendingCaptchaImage()` | Current challenge image bytes |
 | `CancelAuthentication()` | Cancels interactive flow and clears its verification input |
 | `HasReusableAuthenticatedResult()` | Boolean availability, without exposing session fields |
 | `ClearAuthenticatedResult()` | Clears reusable result and result retained by the active flow |
 
-The start request carries the fixed ZJU server/port and Android-derived device ID;
-resume receives the current device ID explicitly. The bridge calls upstream
+The start request carries the aTrust server/port (ZJU default, or the
+experimental custom server from advanced settings) and Android-derived device
+ID; resume additionally receives the currently configured server so a snapshot
+belonging to a different endpoint is rejected as `serverMismatch` instead of
+silently reconnecting there. Only a bare host and concrete port are accepted;
+schemes, paths and credentials are rejected on both the Kotlin and Go sides.
+The bridge calls upstream
 `auth.NewSessionContext`, `NewLoginMethod`, `Session.Login` and
 `authchallenge.Handler`; it selects supported methods and maps interactive
 challenges into structured events. Authentication result retention, snapshot
@@ -176,6 +181,27 @@ protocol checks. Packets outside aTrust resources are split-tunnel drops; TUN/L3
 I/O errors produce stable failure codes. Inbound validation updates counters and
 retains the existing write behavior. Lifecycle/failure callbacks carry numeric
 counter snapshots, not per-packet metadata, endpoint parsing or checksum samples.
+
+### Proxy API (experimental)
+
+| Go entry point | Result / effect |
+| --- | --- |
+| `PrepareProxy()` | JSON event; runs the non-TUN client setup and builds the local proxy stack |
+| `StartProxy(requestJSON, listener)` | JSON response; serves SOCKS5/HTTP on 127.0.0.1 and emits lifecycle events |
+| `StopProxy(listener)` | Idempotently closes listeners, stack, L3 tunnel, and resolver |
+| `CancelPreparingProxy()` | Cancels the in-flight proxy preparation |
+| `DiscardPreparedProxy()` | Releases a prepared, unstarted proxy client |
+
+The proxy-only mode (`proxy.go`) mirrors the VPN plane without a TUN: upstream
+gVisor stack, resolver, and the ACL dialer that refuses non-whitelisted
+destinations (protecting the tunnel from server-side SHUTDOWN). It requires the
+embeddable-lifecycle hooks from upstream (`ServeSocks5OnListener`,
+`ServeHTTPOnListener`, gVisor `Close`/`SetShutdownHandler`) and is mutually
+exclusive with the VPN plane; the proxy side checks VPN state before preparing
+and the app layer arbitrates ownership. Fatal data-plane errors arrive as
+`proxyState` error events instead of process exits. This mode is Android-host
+testable: the aTrust client sits behind a narrow interface faked in
+`proxy_test.go` on the host.
 
 ### Measurements
 

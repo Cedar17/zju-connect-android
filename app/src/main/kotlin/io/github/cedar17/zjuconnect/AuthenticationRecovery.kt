@@ -40,7 +40,7 @@ internal enum class AuthenticationInvalidationCause(
 internal fun isDefinitivelyInvalidStoredSession(
     eventType: String,
     code: String,
-): Boolean = eventType == "sessionInvalid" || code in setOf("invalidSession", "sessionInvalid")
+): Boolean = eventType == "sessionInvalid" || code in setOf("invalidSession", "sessionInvalid", "serverMismatch")
 
 internal fun shouldFallbackFromReusableAuthentication(code: String, cause: String): Boolean =
     code == "vpnSessionInvalid" || cause in setOf("authentication", "serverRejected")

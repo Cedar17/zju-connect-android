@@ -51,6 +51,7 @@ data class ConnectionUiState(
     val diagnosticStage: String = "",
     val diagnosticCause: String = "",
     val diagnosticDurationMillis: Long = 0,
+    val proxyMode: Boolean = false,
     val rememberedUsername: String = "",
     val username: String = "",
     val password: String = "",
@@ -73,6 +74,10 @@ sealed interface ConnectionEffect {
     data class StartVpnService(override val attemptId: Long) : ConnectionEffect
 
     data class StopVpnService(override val attemptId: Long) : ConnectionEffect
+
+    data class StartProxyService(override val attemptId: Long) : ConnectionEffect
+
+    data class StopProxyService(override val attemptId: Long) : ConnectionEffect
 }
 
 internal enum class CredentialOrigin {
@@ -193,6 +198,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val sessionStore = AuthSessionStore(application)
     private val credentialStore = SavedCredentialStore(application)
     private val accountStore = AccountStore(application)
+    private val customServerStore = CustomServerSettingsStore(application)
+    private val proxySettingsStore = ProxySettingsStore(application)
     private val deviceIdentityProvider = DeviceIdentityProvider(application)
     private val rememberedUsername = accountStore.readUsername()
     private val attempts = ConnectionAttemptTracker()
@@ -210,6 +217,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private var restoringStoredSession = false
     private var activeDeviceID = ""
+    private var activeServerTarget = CustomServerTarget.DEFAULT
+    private var activeProxyMode = false
     private var pendingCredential: PendingCredential? = null
     private var savedCredentialAttempted = false
     private var pendingVpnPermission: PendingVpnPermission? = null
@@ -220,6 +229,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         // the Go authentication bridge are deliberately untouched until connect.
         viewModelScope.launch {
             RealVpnStateStore.state.collect(::consumeVpnState)
+        }
+        viewModelScope.launch {
+            ProxyStateStore.state.collect(::consumeProxyState)
         }
         viewModelScope.launch {
             state
@@ -306,7 +318,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun beginAccountSwitch() {
-        RealVpnService.prepareForForegroundAuthentication()
         if (!reserveConnectionEntry()) return
         val attemptId = attempts.invalidate()
         pendingVpnPermission = null
@@ -317,6 +328,24 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
+        cancelReusableProxyPreparation()
+        bridge.discardPreparedProxy()
+        bridge.cancelAuthentication()
+        val proxySettings = proxySettingsStore.read()
+        activeProxyMode = proxySettings.enabled
+        if (activeProxyMode && !proxySettings.isValid()) {
+            showError("proxySettingsInvalid")
+            return
+        }
+        if (!activeProxyMode) {
+            RealVpnService.prepareForForegroundAuthentication()
+        }
+        val serverTarget = customServerStore.read().effectiveTarget()
+        if (serverTarget == null) {
+            showError("customServerInvalid")
+            return
+        }
+        activeServerTarget = serverTarget
         invalidateReusableAuthentication()
         recordAuthenticationRecovery(
             source = AuthenticationRecoverySource.PERSISTED_SESSION,
@@ -354,6 +383,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         pendingCredential = null
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
+        cancelReusableProxyPreparation()
+        bridge.discardPreparedProxy()
 
         // A normal disconnect is the boundary for the next one-tap reconnect,
         // not an account logout. Only an account switch or an explicit server
@@ -369,9 +400,16 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     internalCode = "",
                 )
             }
-            effectChannel.trySend(ConnectionEffect.StopVpnService(stopAttemptId))
+            effectChannel.trySend(
+                if (activeProxyMode) {
+                    ConnectionEffect.StopProxyService(stopAttemptId)
+                } else {
+                    ConnectionEffect.StopVpnService(stopAttemptId)
+                },
+            )
         } else {
             RealVpnStateStore.reset()
+            ProxyStateStore.reset()
             QuickSettingsTileService.requestRefresh(appContext)
             _state.update {
                 it.withoutSensitiveInputs().copy(
@@ -421,6 +459,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 _state.value.phase == ConnectionPhase.ESTABLISHING_VPN
             is ConnectionEffect.StopVpnService ->
                 _state.value.phase == ConnectionPhase.DISCONNECTING
+            is ConnectionEffect.StartProxyService ->
+                _state.value.phase == ConnectionPhase.ESTABLISHING_VPN && _state.value.proxyMode
+            is ConnectionEffect.StopProxyService ->
+                _state.value.phase == ConnectionPhase.DISCONNECTING && _state.value.proxyMode
         }
     }
 
@@ -430,22 +472,30 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         connectionEntryReserved = false
     }
 
+    fun onProxyServiceStartDispatched(effect: ConnectionEffect.StartProxyService) {
+        if (!attempts.accepts(effect.attemptId)) return
+        connectionEntryReserved = false
+    }
+
     fun onVpnServiceDispatchFailed(effect: ConnectionEffect) {
         if (!canHandleEffect(effect)) return
         if (effect is ConnectionEffect.StartVpnService) {
             bridge.discardPreparedRealVpn()
         }
+        if (effect is ConnectionEffect.StartProxyService) {
+            bridge.discardPreparedProxy()
+        }
         showError(
-            if (effect is ConnectionEffect.StopVpnService) {
-                "vpnStopDispatchFailed"
-            } else {
-                "vpnStartDispatchFailed"
+            when (effect) {
+                is ConnectionEffect.StopVpnService -> "vpnStopDispatchFailed"
+                is ConnectionEffect.StopProxyService -> "proxyStopDispatchFailed"
+                is ConnectionEffect.StartProxyService -> "proxyStartDispatchFailed"
+                else -> "vpnStartDispatchFailed"
             },
         )
     }
 
     private fun beginConnection() {
-        RealVpnService.prepareForForegroundAuthentication()
         if (!reserveConnectionEntry()) return
         val attemptId = attempts.begin()
         pendingVpnPermission = null
@@ -455,17 +505,37 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
+        val proxySettings = proxySettingsStore.read()
+        activeProxyMode = proxySettings.enabled
+        if (activeProxyMode && !proxySettings.isValid()) {
+            showError("proxySettingsInvalid")
+            return
+        }
+        if (!activeProxyMode) {
+            RealVpnService.prepareForForegroundAuthentication()
+        }
+        cancelReusableProxyPreparation()
+        bridge.discardPreparedProxy()
+        bridge.cancelAuthentication()
+        val serverTarget = customServerStore.read().effectiveTarget()
+        if (serverTarget == null) {
+            showError("customServerInvalid")
+            return
+        }
+        activeServerTarget = serverTarget
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
         if (activeDeviceID.isEmpty()) {
             showError("deviceIdentityUnavailable")
             return
         }
         RealVpnStateStore.reset()
+        ProxyStateStore.reset()
         QuickSettingsTileService.requestRefresh(appContext)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.RESTORING_SESSION,
                 internalCode = "",
+                proxyMode = activeProxyMode,
             )
         }
         if (bridge.hasReusableAuthenticatedResult()) {
@@ -616,7 +686,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 consumeAuthEvent(
                     attemptId,
-                    bridge.resumeAuthentication(snapshot, activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
+                    bridge.resumeAuthentication(snapshot, activeServerTarget, activeDeviceID) { event ->
+                        consumeAuthEvent(attemptId, event)
+                    },
                 )
             } finally {
                 snapshot.fill(0)
@@ -635,7 +707,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         consumeAuthEvent(
             attemptId,
-            bridge.startAuthentication(activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
+            bridge.startAuthentication(activeServerTarget, activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
         )
     }
 
@@ -1003,10 +1075,52 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 username = authenticatedUsername,
             )
         }
+        if (activeProxyMode) {
+            startProxySession(attemptId)
+            return
+        }
         requestVpnPermission(
             attemptId = attemptId,
             continuation = VpnPermissionContinuation.START_AUTHENTICATED_VPN,
         )
+    }
+
+    private fun startProxySession(attemptId: Long) {
+        if (!attempts.accepts(attemptId)) return
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.ESTABLISHING_VPN,
+                internalCode = "",
+            )
+        }
+        effectChannel.trySend(ConnectionEffect.StartProxyService(attemptId))
+    }
+
+    private fun consumeProxyState(proxyState: ProxyUiState) {
+        when (proxyState.state) {
+            "active" -> _state.update {
+                it.withoutSensitiveInputs().copy(
+                    phase = ConnectionPhase.CONNECTED,
+                    internalCode = "",
+                )
+            }
+            "error" -> {
+                if (_state.value.phase !in AUTHENTICATION_PHASES) {
+                    showError(proxyState.code)
+                }
+            }
+            "stopped" -> {
+                if (_state.value.phase in VPN_PHASES) {
+                    _state.update {
+                        it.withoutSensitiveInputs().copy(
+                            phase = ConnectionPhase.DISCONNECTED,
+                            internalCode = "",
+                        )
+                    }
+                }
+                releaseConnectionEntry()
+            }
+        }
     }
 
     private fun requestVpnPermission(
@@ -1197,6 +1311,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
+        cancelReusableProxyPreparation()
+        bridge.discardPreparedProxy()
         pendingCredential = null
         releaseConnectionEntry()
         super.onCleared()
@@ -1204,6 +1320,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun cancelReusableVpnPreparation() {
         reusableVpnPreparation.cancelIfInFlight(bridge::cancelPreparingRealVpn)
+    }
+
+    private fun cancelReusableProxyPreparation() {
+        bridge.cancelPreparingProxy()
     }
 
     private fun reserveConnectionEntry(): Boolean {

@@ -43,12 +43,16 @@ class GoCoreBridge {
         Core.cancelPreparingRealVpn()
     }
 
-    fun startAuthentication(deviceID: String, onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
+    fun startAuthentication(
+        target: CustomServerTarget,
+        deviceID: String,
+        onEvent: (GoAuthEvent) -> Unit,
+    ): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
                 JSONObject()
-                    .put("server", ZJU_ATRUST_SERVER)
-                    .put("port", ZJU_ATRUST_PORT)
+                    .put("server", target.host)
+                    .put("port", target.port)
                     .put("deviceId", deviceID)
                     .toString(),
                 authListener(onEvent),
@@ -57,9 +61,14 @@ class GoCoreBridge {
 
     fun resumeAuthentication(
         snapshot: ByteArray,
+        target: CustomServerTarget,
         deviceID: String,
         onEvent: (GoAuthEvent) -> Unit,
-    ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, deviceID, authListener(onEvent)))
+    ): GoAuthEvent =
+        parseAuthEvent(
+            // gomobile binds the Go int port as a Java long.
+            Core.resumeAuthentication(snapshot, deviceID, target.host, target.port.toLong(), authListener(onEvent)),
+        )
 
     fun exportAuthenticatedSession(): ByteArray = Core.exportAuthenticatedSession()
 
@@ -78,6 +87,66 @@ class GoCoreBridge {
 
     fun clearAuthenticatedResult() {
         Core.clearAuthenticatedResult()
+    }
+
+    fun prepareProxy(): GoProxyEvent = parseProxyEvent(Core.prepareProxy())
+
+    fun startProxy(
+        socksPort: Int,
+        httpPort: Int,
+        onEvent: (GoProxyEvent) -> Unit,
+    ): GoProxyEvent =
+        parseProxyEvent(
+            Core.startProxy(
+                JSONObject()
+                    .put("socksPort", socksPort)
+                    .put("httpPort", httpPort)
+                    .toString(),
+                proxyListener(onEvent),
+            ),
+        )
+
+    fun stopProxy(onEvent: (GoProxyEvent) -> Unit) {
+        Core.stopProxy(proxyListener(onEvent))
+    }
+
+    fun discardPreparedProxy() {
+        Core.discardPreparedProxy()
+    }
+
+    fun cancelPreparingProxy() {
+        Core.cancelPreparingProxy()
+    }
+
+    private fun proxyListener(onEvent: (GoProxyEvent) -> Unit): BridgeListener =
+        object : BridgeListener {
+            override fun onEvent(eventJson: String) {
+                onEvent(parseProxyEvent(eventJson))
+            }
+        }
+
+    internal fun parseProxyEvent(eventJson: String): GoProxyEvent = runCatching {
+        val event = JSONObject(eventJson)
+        GoProxyEvent(
+            type = event.optString("type", "unknown"),
+            state = event.optString("state", "unknown"),
+            code = event.optString("code", ""),
+            stage = event.optString("stage", ""),
+            cause = event.optString("cause", ""),
+            durationMillis = event.optLong("durationMs", 0),
+            setupDurationMillis = event.optLong("setupDurationMs", 0),
+            reusedPrepared = event.optBoolean("reusedPrepared", false),
+            socksPort = event.optInt("socksPort", 0),
+            httpPort = event.optInt("httpPort", 0),
+            message = event.optString("message", "Proxy response received"),
+        )
+    }.getOrElse {
+        GoProxyEvent(
+            type = "error",
+            state = "error",
+            code = "invalidEvent",
+            message = "Go bridge returned an invalid proxy event",
+        )
     }
 
     private fun authListener(onEvent: (GoAuthEvent) -> Unit): BridgeListener =
@@ -211,11 +280,6 @@ class GoCoreBridge {
                 tunWriteBytes = diagnostics.optLong("tunWriteBytes", 0),
             )
         }
-
-    private companion object {
-        const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
-        const val ZJU_ATRUST_PORT = 443
-    }
 }
 
 data class GoVpnRoute(
@@ -266,6 +330,20 @@ data class GoAuthMethod(
     val authType: String,
     val loginDomain: String,
     val authName: String,
+)
+
+data class GoProxyEvent(
+    val type: String,
+    val state: String,
+    val code: String = "",
+    val stage: String = "",
+    val cause: String = "",
+    val durationMillis: Long = 0,
+    val setupDurationMillis: Long = 0,
+    val reusedPrepared: Boolean = false,
+    val socksPort: Int = 0,
+    val httpPort: Int = 0,
+    val message: String = "",
 )
 
 data class GoAuthEvent(

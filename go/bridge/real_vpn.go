@@ -6,10 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,9 +144,11 @@ func PrepareRealVpn() string {
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), realVpnPrepareTimeout)
 	defer cancelSetup()
 	setupStartedAt := time.Now()
+	// Reconnect to the endpoint the session was authenticated against; the
+	// experimental custom-server setting may have moved it off the ZJU default.
 	if _, err := vpnClient.SetupContext(setupCtx, atrust.SetupOptions{
-		ServerAddress: zjuAtrustServer,
-		ServerPort:    zjuAtrustServerPort,
+		ServerAddress: result.Server,
+		ServerPort:    result.Port,
 		ClientData:    result.AuthData,
 		ResourceData:  result.ResourceData,
 	}); err != nil {
@@ -563,12 +563,15 @@ func closeTunFile(tunFile *os.File) {
 	}
 }
 
-func currentAuthenticatedVpnResult() (authenticatedResult, error) {
-	result, ok := currentAuthenticatedResult()
-	if !ok || result.SID == "" || len(result.AuthData) == 0 || len(result.ResourceData) == 0 {
-		return authenticatedResult{}, fmt.Errorf("authentication has not completed")
-	}
-	return result, nil
+// realVpnDataplaneBusy reports whether the TUN data plane holds any state so
+// the proxy-only plane can refuse to start alongside it. Cross-mode
+// arbitration is additionally enforced at the app layer.
+func realVpnDataplaneBusy() bool {
+	realVpnState.Lock()
+	busy := realVpnState.prepared != nil || realVpnState.active != nil ||
+		realVpnState.preparation.current != nil
+	realVpnState.Unlock()
+	return busy
 }
 
 func emitRealVpnState(listener BridgeListener, state, code, stage, message string, session *realVpnSession) {
@@ -634,37 +637,6 @@ func realVpnErrorAt(code, stage, message string) string {
 // classifyRealVpnSetupError produces a stable, non-sensitive log category.
 // Do not pass err.Error() across the mobile callback boundary: upstream errors
 // can contain server responses that are not safe to put in UI or logcat.
-func classifyRealVpnSetupError(err error) string {
-	if err == nil {
-		return "unknown"
-	}
-	errText := strings.ToLower(err.Error())
-	switch {
-	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(errText, "timeout") || strings.Contains(errText, "deadline exceeded"):
-		return "timeout"
-	case errors.Is(err, context.Canceled):
-		return "cancelled"
-	case strings.Contains(errText, "no route to host") ||
-		strings.Contains(errText, "network is unreachable") ||
-		strings.Contains(errText, "connection refused") ||
-		strings.Contains(errText, "connection reset") ||
-		strings.Contains(errText, "network unavailable"):
-		return "networkUnavailable"
-	case strings.Contains(errText, "permission denied") || strings.Contains(errText, "operation not permitted"):
-		return "permissionDenied"
-	case strings.Contains(errText, "x509") || strings.Contains(errText, "tls") || strings.Contains(errText, "certificate"):
-		return "tlsValidation"
-	case strings.Contains(errText, "no reachable node"):
-		return "noReachableNode"
-	case strings.Contains(errText, "failed to connect to the server"):
-		return "serverRejected"
-	case strings.Contains(errText, "unexpected response"):
-		return "protocolRejected"
-	default:
-		return "unexpected"
-	}
-}
-
 func realVpnErrorWithCause(code, stage, cause, message string) string {
 	return marshal(realVpnPreparedEvent{
 		SchemaVersion: schemaVersion,

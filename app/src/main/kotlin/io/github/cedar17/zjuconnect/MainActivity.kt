@@ -82,6 +82,7 @@ private const val PRIMARY_ACTION_VERTICAL_PADDING_LINE_HEIGHT_FRACTION = 0.35f
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
+    private val advancedSettingsUnlocked = mutableStateOf(false)
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -105,6 +106,7 @@ class MainActivity : ComponentActivity() {
                 ZjuConnectApp(
                     state = state,
                     viewModel = connectionViewModel,
+                    advancedSettingsUnlocked = advancedSettingsUnlocked.value,
                 )
             }
         }
@@ -112,12 +114,33 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The unlock toggles in About; re-read so the menu follows on return.
+        advancedSettingsUnlocked.value = CustomServerSettingsStore(applicationContext).readUnlocked()
         RealVpnService.refreshNotificationIfRunning()
     }
 
     private fun dispatchStartVpnService(effect: ConnectionEffect.StartVpnService) {
         if (startVpnService(effect) && shouldRequestNotificationPermission()) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun dispatchStartProxyService(effect: ConnectionEffect.StartProxyService) {
+        if (shouldRequestNotificationPermission()) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (!connectionViewModel.canHandleEffect(effect)) return
+        runCatching {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, ProxyForegroundService::class.java)
+                    .setAction(ProxyForegroundService.ACTION_START),
+            )
+        }.onSuccess {
+            connectionViewModel.onProxyServiceStartDispatched(effect)
+        }.onFailure { error ->
+            Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to start proxy service", error)
+            connectionViewModel.onVpnServiceDispatchFailed(effect)
         }
     }
 
@@ -176,6 +199,20 @@ class MainActivity : ComponentActivity() {
                     connectionViewModel.onVpnServiceDispatchFailed(effect)
                 }
             }
+            is ConnectionEffect.StartProxyService -> {
+                dispatchStartProxyService(effect)
+            }
+            is ConnectionEffect.StopProxyService -> {
+                runCatching {
+                    startService(
+                        Intent(this, ProxyForegroundService::class.java)
+                            .setAction(ProxyForegroundService.ACTION_STOP),
+                    )
+                }.onFailure { error ->
+                    Log.e(MAIN_ACTIVITY_LOG_TAG, "Unable to stop proxy service", error)
+                    connectionViewModel.onVpnServiceDispatchFailed(effect)
+                }
+            }
         }
     }
 }
@@ -202,6 +239,7 @@ internal fun ZjuConnectTheme(content: @Composable () -> Unit) {
 private fun ZjuConnectApp(
     state: ConnectionUiState,
     viewModel: ConnectionViewModel,
+    advancedSettingsUnlocked: Boolean,
 ) {
     val context = LocalContext.current
     val menuDescription = stringResource(R.string.menu_overflow)
@@ -274,6 +312,20 @@ private fun ZjuConnectApp(
                                 context.startActivity(Intent(context, AboutActivity::class.java))
                             },
                         )
+                        // Hidden unless unlocked from About; keeps the
+                        // experimental custom-server option away from normal
+                        // users.
+                        if (advancedSettingsUnlocked) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_advanced_settings)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    context.startActivity(
+                                        Intent(context, AdvancedSettingsActivity::class.java),
+                                    )
+                                },
+                            )
+                        }
                         if (canSwitchAccount(state)) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_switch_account)) },

@@ -18,6 +18,9 @@
             android:name=".AboutActivity"
             android:exported="false" />
         <activity
+            android:name=".AdvancedSettingsActivity"
+            android:exported="false" />
+        <activity
             android:name=".DiagnosticsActivity"
             android:exported="false" />
         <activity
@@ -61,6 +64,14 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Maintains the ZJU aTrust VPN connection" />
+        </service>
+        <service
+            android:name=".ProxyForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains the ZJU aTrust local proxy connection" />
         </service>
     </application>
 
