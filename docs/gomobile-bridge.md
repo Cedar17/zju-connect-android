@@ -182,6 +182,27 @@ I/O errors produce stable failure codes. Inbound validation updates counters and
 retains the existing write behavior. Lifecycle/failure callbacks carry numeric
 counter snapshots, not per-packet metadata, endpoint parsing or checksum samples.
 
+### Proxy API (experimental)
+
+| Go entry point | Result / effect |
+| --- | --- |
+| `PrepareProxy()` | JSON event; runs the non-TUN client setup and builds the local proxy stack |
+| `StartProxy(requestJSON, listener)` | JSON response; serves SOCKS5/HTTP on 127.0.0.1 and emits lifecycle events |
+| `StopProxy(listener)` | Idempotently closes listeners, stack, L3 tunnel, and resolver |
+| `CancelPreparingProxy()` | Cancels the in-flight proxy preparation |
+| `DiscardPreparedProxy()` | Releases a prepared, unstarted proxy client |
+
+The proxy-only mode (`proxy.go`) mirrors the VPN plane without a TUN: upstream
+gVisor stack, resolver, and the ACL dialer that refuses non-whitelisted
+destinations (protecting the tunnel from server-side SHUTDOWN). It requires the
+embeddable-lifecycle hooks from upstream (`ServeSocks5OnListener`,
+`ServeHTTPOnListener`, gVisor `Close`/`SetShutdownHandler`) and is mutually
+exclusive with the VPN plane; the proxy side checks VPN state before preparing
+and the app layer arbitrates ownership. Fatal data-plane errors arrive as
+`proxyState` error events instead of process exits. This mode is Android-host
+testable: the aTrust client sits behind a narrow interface faked in
+`proxy_test.go` on the host.
+
 ### Measurements
 
 Preparation exposes optional `setupDurationMs` and `reusedPrepared` with safe
