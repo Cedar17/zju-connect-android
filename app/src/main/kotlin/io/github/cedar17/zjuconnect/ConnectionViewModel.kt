@@ -193,6 +193,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val sessionStore = AuthSessionStore(application)
     private val credentialStore = SavedCredentialStore(application)
     private val accountStore = AccountStore(application)
+    private val customServerStore = CustomServerSettingsStore(application)
     private val deviceIdentityProvider = DeviceIdentityProvider(application)
     private val rememberedUsername = accountStore.readUsername()
     private val attempts = ConnectionAttemptTracker()
@@ -210,6 +211,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private var restoringStoredSession = false
     private var activeDeviceID = ""
+    private var activeServerTarget = CustomServerTarget.DEFAULT
     private var pendingCredential: PendingCredential? = null
     private var savedCredentialAttempted = false
     private var pendingVpnPermission: PendingVpnPermission? = null
@@ -317,6 +319,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
+        val serverTarget = customServerStore.read().effectiveTarget()
+        if (serverTarget == null) {
+            showError("customServerInvalid")
+            return
+        }
+        activeServerTarget = serverTarget
         invalidateReusableAuthentication()
         recordAuthenticationRecovery(
             source = AuthenticationRecoverySource.PERSISTED_SESSION,
@@ -455,6 +463,12 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         cancelReusableVpnPreparation()
         bridge.discardPreparedRealVpn()
         bridge.cancelAuthentication()
+        val serverTarget = customServerStore.read().effectiveTarget()
+        if (serverTarget == null) {
+            showError("customServerInvalid")
+            return
+        }
+        activeServerTarget = serverTarget
         activeDeviceID = deviceIdentityProvider.read().orEmpty()
         if (activeDeviceID.isEmpty()) {
             showError("deviceIdentityUnavailable")
@@ -616,7 +630,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 consumeAuthEvent(
                     attemptId,
-                    bridge.resumeAuthentication(snapshot, activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
+                    bridge.resumeAuthentication(snapshot, activeServerTarget, activeDeviceID) { event ->
+                        consumeAuthEvent(attemptId, event)
+                    },
                 )
             } finally {
                 snapshot.fill(0)
@@ -635,7 +651,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         consumeAuthEvent(
             attemptId,
-            bridge.startAuthentication(activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
+            bridge.startAuthentication(activeServerTarget, activeDeviceID) { event -> consumeAuthEvent(attemptId, event) },
         )
     }
 

@@ -501,6 +501,9 @@ class RealVpnService : VpnService() {
                 sessionStore = AuthSessionStore(applicationContext),
                 deviceIdentityProvider = DeviceIdentityProvider(applicationContext),
                 bridge = goCoreBridge,
+                serverTargetProvider = {
+                    CustomServerSettingsStore(applicationContext).read().effectiveTarget()
+                },
             ).also { alwaysOnSessionRestorer = it }
         }
 

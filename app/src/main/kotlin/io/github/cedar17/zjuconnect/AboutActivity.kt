@@ -2,9 +2,14 @@ package io.github.cedar17.zjuconnect
 
 import android.os.Bundle
 import android.widget.ImageView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +25,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -42,11 +48,24 @@ class AboutActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val settingsStore = CustomServerSettingsStore(applicationContext)
         setContent {
             ZjuConnectTheme {
                 AboutScreen(
                     version = packageVersionName(),
                     onBack = ::finish,
+                    onVersionLongPress = {
+                        val unlocked = !settingsStore.readUnlocked()
+                        settingsStore.writeUnlocked(unlocked)
+                        val message = getString(
+                            if (unlocked) {
+                                R.string.about_advanced_unlocked
+                            } else {
+                                R.string.about_advanced_locked
+                            },
+                        )
+                        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    },
                 )
             }
         }
@@ -58,10 +77,11 @@ class AboutActivity : ComponentActivity() {
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 private fun AboutScreen(
     version: String,
     onBack: () -> Unit,
+    onVersionLongPress: () -> Unit,
 ) {
     val iconDescription = stringResource(R.string.about_app_icon_description)
     val description = stringResource(R.string.about_description, CORE_REPOSITORY_NAME)
@@ -141,6 +161,14 @@ private fun AboutScreen(
                 Text(
                     text = stringResource(R.string.about_version, version),
                     style = MaterialTheme.typography.bodyLarge,
+                    // Long-press toggles the hidden advanced settings; normal
+                    // users never discover it and the menu stays unchanged.
+                    modifier = Modifier.combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = LocalIndication.current,
+                        onClick = {},
+                        onLongClick = onVersionLongPress,
+                    ),
                 )
                 Text(
                     text = stringResource(R.string.about_author),

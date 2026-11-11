@@ -82,6 +82,7 @@ private const val PRIMARY_ACTION_VERTICAL_PADDING_LINE_HEIGHT_FRACTION = 0.35f
 
 class MainActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModels()
+    private val advancedSettingsUnlocked = mutableStateOf(false)
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -105,6 +106,7 @@ class MainActivity : ComponentActivity() {
                 ZjuConnectApp(
                     state = state,
                     viewModel = connectionViewModel,
+                    advancedSettingsUnlocked = advancedSettingsUnlocked.value,
                 )
             }
         }
@@ -112,6 +114,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // The unlock toggles in About; re-read so the menu follows on return.
+        advancedSettingsUnlocked.value = CustomServerSettingsStore(applicationContext).readUnlocked()
         RealVpnService.refreshNotificationIfRunning()
     }
 
@@ -202,6 +206,7 @@ internal fun ZjuConnectTheme(content: @Composable () -> Unit) {
 private fun ZjuConnectApp(
     state: ConnectionUiState,
     viewModel: ConnectionViewModel,
+    advancedSettingsUnlocked: Boolean,
 ) {
     val context = LocalContext.current
     val menuDescription = stringResource(R.string.menu_overflow)
@@ -274,6 +279,20 @@ private fun ZjuConnectApp(
                                 context.startActivity(Intent(context, AboutActivity::class.java))
                             },
                         )
+                        // Hidden unless unlocked from About; keeps the
+                        // experimental custom-server option away from normal
+                        // users.
+                        if (advancedSettingsUnlocked) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_advanced_settings)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    context.startActivity(
+                                        Intent(context, AdvancedSettingsActivity::class.java),
+                                    )
+                                },
+                            )
+                        }
                         if (canSwitchAccount(state)) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_switch_account)) },

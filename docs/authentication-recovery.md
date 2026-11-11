@@ -21,11 +21,19 @@ assets above before starting another account. Partial clearing stops the switch.
 
 ### Snapshot, storage and identity
 
-The exported snapshot contains only `schemaVersion`, `deviceId` and the complete
-fixed-endpoint cookie set, including SID. Password, username, resources,
-connection ID, sign key, verification input, creation time and server identity
-are excluded. `ServerVersionInfo` is not persisted; upstream VPN setup fetches
-its manifest again. A core upgrade does not expand this app-owned snapshot.
+The exported snapshot contains only `schemaVersion`, `deviceId`, the aTrust
+endpoint the cookies belong to (`server`, `port` — v2; v1 snapshots without them
+always refer to the ZJU endpoint) and the complete cookie set for that endpoint,
+including SID. Password, username, resources, connection ID, sign key,
+verification input and creation time are excluded. `ServerVersionInfo` is not
+persisted; upstream VPN setup fetches its manifest again. A core upgrade does
+not expand this app-owned snapshot.
+
+Resume validates the snapshot against the currently configured server. A
+snapshot from a different endpoint is definitively invalid (`serverMismatch`):
+it is cleared and the next connection signs in fresh against the configured
+server. The VPN data plane reconnects to the endpoint recorded in the
+authenticated result, so one session never leaks across servers.
 
 `AuthSessionStore` and `SavedCredentialStore` use separate Android Keystore
 non-exportable AES-GCM keys, fixed authenticated data and atomic encrypted files

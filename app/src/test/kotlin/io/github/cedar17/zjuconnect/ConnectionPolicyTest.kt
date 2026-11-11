@@ -165,6 +165,7 @@ class ConnectionPolicyTest {
     fun onlyDefinitivelyInvalidStoredSessionsAreDeleted() {
         assertTrue(isDefinitivelyInvalidStoredSession("sessionInvalid", "sessionInvalid"))
         assertTrue(isDefinitivelyInvalidStoredSession("error", "invalidSession"))
+        assertTrue(isDefinitivelyInvalidStoredSession("error", "serverMismatch"))
         assertFalse(isDefinitivelyInvalidStoredSession("authMethodsReady", "sessionExpired"))
         assertFalse(isDefinitivelyInvalidStoredSession("error", "sessionRestoreUnavailable"))
         assertFalse(isDefinitivelyInvalidStoredSession("error", "certificateRejected"))
