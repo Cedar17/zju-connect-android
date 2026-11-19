@@ -17,8 +17,8 @@ android {
         applicationId = "io.github.cedar17.zjuconnect"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.2"
+        versionCode = 10
+        versionName = "0.2.3"
 
         ndk {
             abiFilters += "arm64-v8a"

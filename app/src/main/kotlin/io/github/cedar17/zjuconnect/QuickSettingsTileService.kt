@@ -2,8 +2,6 @@ package io.github.cedar17.zjuconnect
 
 import android.annotation.SuppressLint
 import android.app.PendingIntent
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.net.VpnService
@@ -12,6 +10,14 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 private const val QUICK_SETTINGS_TILE_LOG_TAG = "ZjuConnectTile"
 
@@ -20,29 +26,33 @@ private const val QUICK_SETTINGS_TILE_LOG_TAG = "ZjuConnectTile"
  * reads saved passwords or completes an interactive authentication challenge.
  */
 class QuickSettingsTileService : TileService() {
-    companion object {
-        /** Active tiles can ask System UI to deliver a fresh listening callback. */
-        fun requestRefresh(context: Context) {
-            runCatching {
-                TileService.requestListeningState(
-                    context.applicationContext,
-                    ComponentName(context.applicationContext, QuickSettingsTileService::class.java),
-                )
-            }.onFailure { error ->
-                Log.w(QUICK_SETTINGS_TILE_LOG_TAG, "Unable to refresh Quick Settings tile", error)
-            }
-        }
-    }
+    private val tileScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var listeningJob: Job? = null
 
     override fun onStartListening() {
         super.onStartListening()
-        renderTile()
+        listeningJob?.cancel()
+        listeningJob = tileScope.launch {
+            combine(RealVpnStateStore.state, ConnectionEntryArbiter.owner) { vpnState, owner ->
+                quickSettingsTilePresentation(vpnState, entryInProgress = owner != null)
+            }.distinctUntilChanged().collect(::renderTile)
+        }
+    }
+
+    override fun onStopListening() {
+        listeningJob?.cancel()
+        listeningJob = null
+        super.onStopListening()
+    }
+
+    override fun onDestroy() {
+        tileScope.cancel()
+        super.onDestroy()
     }
 
     override fun onClick() {
-        if (currentPresentation().action == QuickSettingsTileAction.NONE) {
-            renderTile()
-        } else if (isLocked && isSecure) {
+        if (currentPresentation().action == QuickSettingsTileAction.NONE) return
+        if (isLocked && isSecure) {
             unlockAndRun { dispatchTileAction() }
         } else {
             dispatchTileAction()
@@ -59,16 +69,12 @@ class QuickSettingsTileService : TileService() {
             QuickSettingsTileAction.CONNECT -> beginTileConnection()
             QuickSettingsTileAction.DISCONNECT -> requestDisconnect()
             QuickSettingsTileAction.OPEN_APP -> openAppForConnection()
-            QuickSettingsTileAction.NONE -> renderTile()
+            QuickSettingsTileAction.NONE -> Unit
         }
     }
 
     private fun beginTileConnection() {
-        if (!ConnectionEntryArbiter.tryBegin(ConnectionEntryOwner.TILE_SERVICE)) {
-            renderTile()
-            requestRefresh(this)
-            return
-        }
+        if (!ConnectionEntryArbiter.tryBegin(ConnectionEntryOwner.TILE_SERVICE)) return
         val permissionIntent = runCatching { VpnService.prepare(this) }
             .getOrElse { error ->
                 Log.e(QUICK_SETTINGS_TILE_LOG_TAG, "Unable to check VPN permission", error)
@@ -79,14 +85,10 @@ class QuickSettingsTileService : TileService() {
                 )
                 RealVpnStateStore.setError("vpnStartDispatchFailed")
                 ConnectionEntryArbiter.finish(ConnectionEntryOwner.TILE_SERVICE)
-                renderTile()
-                requestRefresh(this)
                 return
             }
         if (permissionIntent != null) {
             ConnectionEntryArbiter.finish(ConnectionEntryOwner.TILE_SERVICE)
-            renderTile()
-            requestRefresh(this)
             openAppForConnection()
             return
         }
@@ -108,8 +110,6 @@ class QuickSettingsTileService : TileService() {
             RealVpnStateStore.setError("vpnStartDispatchFailed")
             ConnectionEntryArbiter.finish(ConnectionEntryOwner.TILE_SERVICE)
         }
-        renderTile()
-        requestRefresh(this)
     }
 
     private fun requestDisconnect() {
@@ -121,8 +121,6 @@ class QuickSettingsTileService : TileService() {
         }.onFailure { error ->
             Log.e(QUICK_SETTINGS_TILE_LOG_TAG, "Unable to stop VPN service", error)
         }
-        renderTile()
-        requestRefresh(this)
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
@@ -150,12 +148,11 @@ class QuickSettingsTileService : TileService() {
         }
     }
 
-    private fun renderTile() {
-        val presentation = currentPresentation()
+    private fun renderTile(presentation: QuickSettingsTilePresentation) {
         val status = getString(quickSettingsTileStatusRes(presentation.status))
         qsTile?.apply {
             label = getString(R.string.quick_settings_tile_label)
-            subtitle = null
+            subtitle = status.takeIf { presentation.status == QuickSettingsTileStatus.CONNECTING }
             contentDescription = getString(
                 R.string.quick_settings_tile_content_description,
                 getString(R.string.quick_settings_tile_label),
@@ -178,6 +175,7 @@ internal fun quickSettingsTileStatusRes(status: QuickSettingsTileStatus): Int = 
     QuickSettingsTileStatus.DISCONNECTED -> R.string.quick_settings_tile_status_disconnected
     QuickSettingsTileStatus.CONNECTING -> R.string.quick_settings_tile_status_connecting
     QuickSettingsTileStatus.CONNECTED -> R.string.quick_settings_tile_status_connected
+    QuickSettingsTileStatus.DISCONNECTING -> R.string.connection_title_disconnecting
     QuickSettingsTileStatus.RECOVERING -> R.string.quick_settings_tile_status_recovering
     QuickSettingsTileStatus.OPEN_APP_FOR_LOGIN -> R.string.quick_settings_tile_status_open_app
     QuickSettingsTileStatus.ALWAYS_ON_MANAGED -> R.string.quick_settings_tile_status_always_on
