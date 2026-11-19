@@ -372,7 +372,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             effectChannel.trySend(ConnectionEffect.StopVpnService(stopAttemptId))
         } else {
             RealVpnStateStore.reset()
-            QuickSettingsTileService.requestRefresh(appContext)
             _state.update {
                 it.withoutSensitiveInputs().copy(
                     phase = ConnectionPhase.DISCONNECTED,
@@ -461,7 +460,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         RealVpnStateStore.reset()
-        QuickSettingsTileService.requestRefresh(appContext)
         _state.update {
             it.withoutSensitiveInputs().copy(
                 phase = ConnectionPhase.RESTORING_SESSION,
@@ -1214,7 +1212,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             return false
         }
         connectionEntryReserved = true
-        QuickSettingsTileService.requestRefresh(appContext)
         return true
     }
 
@@ -1222,7 +1219,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         if (!connectionEntryReserved) return
         connectionEntryReserved = false
         ConnectionEntryArbiter.finish(ConnectionEntryOwner.ACTIVITY)
-        QuickSettingsTileService.requestRefresh(appContext)
     }
 
 }

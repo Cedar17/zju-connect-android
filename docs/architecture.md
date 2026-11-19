@@ -35,7 +35,7 @@ Android system ─────── Always-on start ─────────
 | Compose UI | Render state and collect input through resource-backed text |
 | `ConnectionViewModel` | Foreground connection attempt and authentication recovery |
 | `MainActivity` | System VPN permission and one-shot service-dispatch effects |
-| `QuickSettingsTileService` | User-added tile, permission check and direct connect/disconnect |
+| `QuickSettingsTileService` | User-added Quick Settings tile, VPN permission check and direct connect/disconnect |
 | `RealVpnService` | TUN, foreground notification, socket protection and underlay recovery |
 | Go bridge | Single authentication coordinator, prepared/active client ownership and JSON boundary |
 | Official Go core | aTrust protocol, authentication, resource parsing/routing, L3 transport and internal L3 reconnect |
@@ -78,6 +78,10 @@ recovery. Cleanup retains that failure instead of replacing it with a generic
 discard and active stop are defined in the [bridge API](gomobile-bridge.md#vpn-api).
 
 ### Start paths and notifications
+
+The Quick Settings tile uses standard Android listening mode. Each listening
+session reads the current VPN and connection-entry state and observes changes
+until listening ends. The tile shows a connecting subtitle during startup.
 
 | Entry | Marker | Service restart policy |
 | --- | --- | --- |
