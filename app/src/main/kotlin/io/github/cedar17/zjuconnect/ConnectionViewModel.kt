@@ -27,11 +27,14 @@ enum class ConnectionPhase {
     RESTORING_SESSION,
     FETCHING_AUTH_METHODS,
     AUTHENTICATING,
+    AWAITING_METHOD_PICK,
     AWAITING_CREDENTIALS,
     AWAITING_PHONE,
     AWAITING_SMS,
     AWAITING_TOKEN,
+    AWAITING_TEXT_CAPTCHA,
     AWAITING_CAPTCHA,
+    AWAITING_EXTERNAL_LOGIN,
     PREPARING_VPN_PERMISSION,
     ESTABLISHING_VPN,
     RECOVERING_VPN,
@@ -58,6 +61,9 @@ data class ConnectionUiState(
     val smsCode: String = "",
     val token: String = "",
     val challengeKind: String = "",
+    val loginUrl: String = "",
+    val savedUsernames: List<String> = emptyList(),
+    val authMethodOptions: List<GoAuthMethod> = emptyList(),
     val phoneNumbers: List<String> = emptyList(),
     val captchaImage: ByteArray? = null,
     val captchaWidth: Int = 0,
@@ -157,8 +163,21 @@ internal class ReusableVpnPreparationInFlight {
     }
 }
 
-internal fun savedCredentialMatchesAccount(credential: StoredCredential, rememberedUsername: String): Boolean =
-    rememberedUsername.isBlank() || credential.username == rememberedUsername
+/**
+ * Picks the credential that may auto-submit against the current server.
+ * A credential is only reused on endpoints it was accepted on before, so
+ * the first login on a new server is always typed by the user.
+ */
+internal fun selectAutoSubmitCredential(
+    credentials: List<StoredCredential>,
+    rememberedUsername: String,
+    server: String,
+): StoredCredential? = when {
+    rememberedUsername.isNotBlank() ->
+        credentials.firstOrNull { it.username == rememberedUsername && it.isAcceptedOn(server) }
+    else ->
+        credentials.singleOrNull()?.takeIf { it.isAcceptedOn(server) }
+}
 
 internal fun selectAutomaticAuthMethod(methods: List<GoAuthMethod>): GoAuthMethod? {
     methods.firstOrNull {
@@ -264,7 +283,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ConnectionPhase.AWAITING_PHONE -> submitPhone()
             ConnectionPhase.AWAITING_SMS -> submitSmsCode()
             ConnectionPhase.AWAITING_TOKEN -> submitToken()
+            ConnectionPhase.AWAITING_TEXT_CAPTCHA -> submitTextCaptcha()
             ConnectionPhase.AWAITING_CAPTCHA -> submitCaptcha()
+            ConnectionPhase.AWAITING_EXTERNAL_LOGIN -> submitExternalLogin()
             else -> Unit
         }
     }
@@ -752,6 +773,73 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    private fun submitTextCaptcha() {
+        val code = _state.value.token.trim()
+        if (code.isBlank()) return
+        val attemptId = attempts.activeAttemptId
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.AUTHENTICATING,
+                internalCode = "",
+                token = "",
+                captchaImage = null,
+            )
+        }
+        submit(attemptId, JSONObject().put("action", "submitTextCaptcha").put("captcha", code))
+    }
+
+    private fun submitExternalLogin() {
+        val callbackUrl = _state.value.token.trim()
+        if (callbackUrl.isBlank()) return
+        val attemptId = attempts.activeAttemptId
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.AUTHENTICATING,
+                internalCode = "",
+                token = "",
+                loginUrl = "",
+            )
+        }
+        submit(attemptId, JSONObject().put("action", "submitExternalLogin").put("callbackUrl", callbackUrl))
+    }
+
+    /** User pick from the advertised-method list shown by AWAITING_METHOD_PICK. */
+    fun selectAuthMethod(method: GoAuthMethod) {
+        if (_state.value.phase != ConnectionPhase.AWAITING_METHOD_PICK) return
+        if (method.authType !in SELECTABLE_AUTH_TYPES) return
+        submitMethodSelection(method)
+    }
+
+    private fun submitMethodSelection(method: GoAuthMethod) {
+        _state.update {
+            it.copy(
+                phase = ConnectionPhase.AUTHENTICATING,
+                internalCode = "",
+                authMethodOptions = emptyList(),
+            )
+        }
+        submit(
+            attempts.activeAttemptId,
+            JSONObject()
+                .put("action", "selectMethod")
+                .put("authType", method.authType)
+                .put("loginDomain", method.loginDomain),
+        )
+    }
+
+    /** Prefills the login form from a vault entry; the user reviews and submits. */
+    fun fillSavedCredential(username: String) {
+        if (_state.value.phase != ConnectionPhase.AWAITING_CREDENTIALS) return
+        viewModelScope.launch {
+            val entry = withContext(Dispatchers.IO) {
+                runCatching { credentialStore.readAll() }.getOrElse { emptyList() }
+                    .firstOrNull { it.username == username }
+            } ?: return@launch
+            if (_state.value.phase != ConnectionPhase.AWAITING_CREDENTIALS) return@launch
+            _state.update { it.copy(username = entry.username, password = entry.password) }
+        }
+    }
+
     private fun submit(attemptId: Long, response: JSONObject) {
         consumeAuthEvent(
             attemptId,
@@ -804,6 +892,32 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         captchaWidth = event.captchaWidth,
                         captchaHeight = event.captchaHeight,
                         captchaPoints = emptyList(),
+                    )
+                }
+                "textCaptchaRequired" -> showServerChallenge {
+                    it.copy(
+                        phase = ConnectionPhase.AWAITING_TEXT_CAPTCHA,
+                        internalCode = "",
+                        token = "",
+                        challengeKind = "textCaptcha",
+                        captchaImage = bridge.pendingCaptchaImage().takeIf(ByteArray::isNotEmpty),
+                        captchaWidth = event.captchaWidth,
+                        captchaHeight = event.captchaHeight,
+                    )
+                }
+                "externalLoginRequired" -> showServerChallenge {
+                    it.copy(
+                        phase = ConnectionPhase.AWAITING_EXTERNAL_LOGIN,
+                        internalCode = "",
+                        token = "",
+                        challengeKind = event.challengeKind,
+                        loginUrl = event.loginUrl,
+                    )
+                }
+                "authMethodStarted" -> _state.update {
+                    it.copy(
+                        phase = ConnectionPhase.AUTHENTICATING,
+                        internalCode = "",
                     )
                 }
                 "authenticated" -> persistAuthenticatedSession(attemptId, event)
@@ -865,7 +979,14 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private suspend fun handleCredentialsRequired(attemptId: Long, event: GoAuthEvent) {
         if (!attempts.accepts(attemptId)) return
         if (isCredentialExplicitlyRejected(event.code)) {
-            val cleared = clearSavedCredential()
+            // Drop only the rejected entry; the rest of the vault stays
+            // available for manual picking.
+            val rejectedUsername = pendingCredential?.credential?.username
+            val cleared = if (rejectedUsername != null) {
+                clearSavedCredentialEntry(rejectedUsername)
+            } else {
+                clearSavedCredential()
+            }
             recordAuthenticationRecovery(
                 source = AuthenticationRecoverySource.SAVED_CREDENTIALS,
                 outcome = AuthenticationRecoveryOutcome.REJECTED,
@@ -877,28 +998,27 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
             pendingCredential = null
             savedCredentialAttempted = true
-            _state.update {
-                it.copy(
-                    phase = ConnectionPhase.AWAITING_CREDENTIALS,
-                    internalCode = "",
-                    password = "",
-                )
-            }
+            showAwaitingCredentials()
             return
         }
 
         if (!savedCredentialAttempted) {
             savedCredentialAttempted = true
             val credential = try {
-                withContext(Dispatchers.IO) { credentialStore.read() }
+                withContext(Dispatchers.IO) {
+                    selectAutoSubmitCredential(
+                        credentialStore.readAll(),
+                        _state.value.rememberedUsername,
+                        serverKey(activeServerTarget),
+                    )
+                }
             } catch (_: InvalidStoredCredential) {
                 null
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 null
             }
-            val remembered = _state.value.rememberedUsername
-            if (credential != null && savedCredentialMatchesAccount(credential, remembered)) {
+            if (credential != null) {
                 pendingCredential = PendingCredential(credential, CredentialOrigin.SAVED_STORE)
                 recordAuthenticationRecovery(
                     source = AuthenticationRecoverySource.SAVED_CREDENTIALS,
@@ -916,11 +1036,20 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
 
+        showAwaitingCredentials()
+    }
+
+    /** Enters the credentials phase and exposes the vault's usernames for manual fill. */
+    private suspend fun showAwaitingCredentials() {
+        val usernames = withContext(Dispatchers.IO) {
+            runCatching { credentialStore.readAll() }.getOrElse { emptyList() }.map { it.username }
+        }
         _state.update {
             it.copy(
                 phase = ConnectionPhase.AWAITING_CREDENTIALS,
                 internalCode = "",
                 password = "",
+                savedUsernames = usernames,
             )
         }
     }
@@ -928,9 +1057,30 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private fun handleAuthMethods(attemptId: Long, methods: List<GoAuthMethod>) {
         val method = selectAutomaticAuthMethod(methods)
         if (method == null) {
-            bridge.cancelAuthentication()
-            showError("unsupportedAuthMethod")
-            return
+            val candidates = methods.filter { it.authType in SELECTABLE_AUTH_TYPES }
+            when {
+                candidates.isEmpty() -> {
+                    bridge.cancelAuthentication()
+                    showError("unsupportedAuthMethod")
+                    return
+                }
+                candidates.size == 1 -> {
+                    submitMethodSelection(candidates.first())
+                    return
+                }
+                else -> {
+                    // Several advertised methods (password domains, SMS, SSO):
+                    // let the user choose instead of guessing.
+                    _state.update {
+                        it.copy(
+                            phase = ConnectionPhase.AWAITING_METHOD_PICK,
+                            internalCode = "",
+                            authMethodOptions = candidates,
+                        )
+                    }
+                    return
+                }
+            }
         }
         _state.update {
             it.copy(
@@ -990,7 +1140,19 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
         if (credentialToSave != null) {
             try {
-                withContext(Dispatchers.IO) { credentialStore.write(credentialToSave) }
+                withContext(Dispatchers.IO) {
+                    // Record that this endpoint accepted the credential so
+                    // future logins here may auto-submit; other servers the
+                    // account works on stay in the accepted list.
+                    val bound = StoredCredential(
+                        username = credentialToSave.username,
+                        password = credentialToSave.password,
+                        acceptedServers = (
+                            credentialToSave.acceptedServers + serverKey(activeServerTarget)
+                            ).distinct(),
+                    )
+                    credentialStore.upsert(bound)
+                }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
             }
@@ -1166,13 +1328,17 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         tryClear(credentialStore::clear)
     }
 
+    private suspend fun clearSavedCredentialEntry(username: String): Boolean = withContext(Dispatchers.IO) {
+        tryClear { credentialStore.remove(username) }
+    }
+
     private suspend fun clearAllAuthenticationForAccountSwitch(): Boolean = withContext(Dispatchers.IO) {
-        // Keep these as separate statements: every old-identity store must be
-        // attempted even when an earlier clear fails.
+        // The credential vault intentionally survives an account switch: the
+        // remembered identity is cleared, so no entry auto-submits until the
+        // user picks or types one again.
         val sessionCleared = tryClear(sessionStore::clear)
-        val credentialCleared = tryClear(credentialStore::clear)
         val accountCleared = tryClear(accountStore::clear)
-        sessionCleared && credentialCleared && accountCleared
+        sessionCleared && accountCleared
     }
 
     private fun tryClear(clear: () -> Boolean): Boolean = try {
@@ -1245,6 +1411,9 @@ private fun ConnectionUiState.withoutSensitiveInputs(): ConnectionUiState = copy
     smsCode = "",
     token = "",
     challengeKind = "",
+    loginUrl = "",
+    savedUsernames = emptyList(),
+    authMethodOptions = emptyList(),
     phoneNumbers = emptyList(),
     captchaImage = null,
     captchaWidth = 0,
@@ -1275,11 +1444,14 @@ internal fun shouldRetryAccountSwitchClear(state: ConnectionUiState): Boolean =
 internal fun usesScrollableHomeLayout(phase: ConnectionPhase): Boolean = phase in AUTH_INPUT_PHASES
 
 private val AUTH_INPUT_PHASES = setOf(
+    ConnectionPhase.AWAITING_METHOD_PICK,
     ConnectionPhase.AWAITING_CREDENTIALS,
     ConnectionPhase.AWAITING_PHONE,
     ConnectionPhase.AWAITING_SMS,
     ConnectionPhase.AWAITING_TOKEN,
+    ConnectionPhase.AWAITING_TEXT_CAPTCHA,
     ConnectionPhase.AWAITING_CAPTCHA,
+    ConnectionPhase.AWAITING_EXTERNAL_LOGIN,
 )
 
 private val AUTHENTICATION_PHASES = setOf(
@@ -1297,3 +1469,6 @@ private val VPN_PHASES = setOf(
 )
 
 private val SUPPORTED_AUTH_TYPES = setOf("auth/psw", "auth/smsCheckCode")
+
+/** Every method the app can drive, including SSO methods handled via external login. */
+private val SELECTABLE_AUTH_TYPES = SUPPORTED_AUTH_TYPES + setOf("auth/cas", "auth/httpsOauth2")

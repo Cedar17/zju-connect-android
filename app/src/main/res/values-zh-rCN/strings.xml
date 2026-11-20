@@ -49,8 +49,22 @@
     <string name="captcha_image_unavailable">验证码图片暂不可用。</string>
     <string name="captcha_selected_count">已选择 %1$d 个位置</string>
     <string name="captcha_reset">重新选择</string>
+    <string name="credential_fill_button">填充已保存的账号</string>
+    <string name="field_text_captcha">图片中的字符</string>
+    <string name="external_login_instructions">该登录方式需要在浏览器中完成。打开登录页面并登录后，浏览器最终会停在服务器的回调页面，请复制其完整地址并粘贴到下方。</string>
+    <string name="external_login_open_button">打开登录页面</string>
+    <string name="external_login_callback_label">回调地址</string>
+    <string name="action_select_method">选择登录方式</string>
+    <string name="method_type_password">账号密码登录</string>
+    <string name="method_type_sms">短信验证码登录</string>
+    <string name="method_type_cas">CAS 单点登录</string>
+    <string name="method_type_oauth2">OAuth2 单点登录</string>
+    <string name="method_type_other">其他登录方式</string>
 
     <string name="connection_status_signing_in">正在登录…</string>
+    <string name="connection_status_awaiting_method_pick">请选择登录方式</string>
+    <string name="connection_status_awaiting_text_captcha">输入图片中的字符</string>
+    <string name="connection_status_awaiting_external_login">请在浏览器中完成登录</string>
     <string name="connection_status_establishing_vpn">正在建立 VPN…</string>
     <string name="connection_status_awaiting_phone">请输入手机号</string>
     <string name="connection_status_awaiting_sms">请输入短信验证码</string>

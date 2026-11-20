@@ -46,12 +46,18 @@ private fun supportingTextFor(state: ConnectionUiState): UiText = when (state.ph
     ConnectionPhase.AUTHENTICATING,
     -> UiText.Resource(R.string.connection_status_signing_in)
 
+    ConnectionPhase.AWAITING_METHOD_PICK ->
+        UiText.Resource(R.string.connection_status_awaiting_method_pick)
     ConnectionPhase.AWAITING_CREDENTIALS ->
         UiText.Resource(R.string.connection_status_awaiting_credentials)
     ConnectionPhase.AWAITING_PHONE -> UiText.Resource(R.string.connection_status_awaiting_phone)
     ConnectionPhase.AWAITING_SMS -> UiText.Resource(R.string.connection_status_awaiting_sms)
     ConnectionPhase.AWAITING_TOKEN -> tokenChallengeUiText(state.challengeKind)
+    ConnectionPhase.AWAITING_TEXT_CAPTCHA ->
+        UiText.Resource(R.string.connection_status_awaiting_text_captcha)
     ConnectionPhase.AWAITING_CAPTCHA -> UiText.Resource(R.string.connection_status_awaiting_captcha)
+    ConnectionPhase.AWAITING_EXTERNAL_LOGIN ->
+        UiText.Resource(R.string.connection_status_awaiting_external_login)
     ConnectionPhase.PREPARING_VPN_PERMISSION,
     ConnectionPhase.ESTABLISHING_VPN,
     -> UiText.Resource(R.string.connection_status_establishing_vpn)
@@ -112,12 +118,15 @@ private fun primaryActionText(phase: ConnectionPhase): UiText? = when (phase) {
     -> null
     ConnectionPhase.DISCONNECTED -> UiText.Resource(R.string.action_connect)
     ConnectionPhase.ERROR -> UiText.Resource(R.string.action_retry)
+    ConnectionPhase.AWAITING_METHOD_PICK -> UiText.Resource(R.string.action_select_method)
     ConnectionPhase.AWAITING_CREDENTIALS -> UiText.Resource(R.string.action_login_and_connect)
     ConnectionPhase.AWAITING_PHONE -> UiText.Resource(R.string.action_send_code)
     ConnectionPhase.AWAITING_SMS,
     ConnectionPhase.AWAITING_TOKEN,
     -> UiText.Resource(R.string.action_verify_and_connect)
+    ConnectionPhase.AWAITING_TEXT_CAPTCHA -> UiText.Resource(R.string.action_submit_and_continue)
     ConnectionPhase.AWAITING_CAPTCHA -> UiText.Resource(R.string.action_submit_and_continue)
+    ConnectionPhase.AWAITING_EXTERNAL_LOGIN -> UiText.Resource(R.string.action_submit_and_continue)
     ConnectionPhase.RECOVERING_VPN,
     ConnectionPhase.CONNECTED,
     -> UiText.Resource(R.string.action_disconnect)
@@ -141,6 +150,8 @@ private fun isPrimaryActionEnabled(state: ConnectionUiState): Boolean = when (st
     ConnectionPhase.AWAITING_PHONE -> state.phone.isNotBlank()
     ConnectionPhase.AWAITING_SMS -> state.smsCode.isNotBlank()
     ConnectionPhase.AWAITING_TOKEN -> state.token.isNotBlank()
+    ConnectionPhase.AWAITING_TEXT_CAPTCHA -> state.token.isNotBlank()
     ConnectionPhase.AWAITING_CAPTCHA -> state.captchaPoints.isNotEmpty()
+    ConnectionPhase.AWAITING_EXTERNAL_LOGIN -> state.token.isNotBlank()
     else -> false
 }

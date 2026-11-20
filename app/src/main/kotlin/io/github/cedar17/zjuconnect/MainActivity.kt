@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -39,6 +40,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -436,8 +438,10 @@ private fun ConnectionHomeContent(
 @Composable
 private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionViewModel) {
     when (state.phase) {
+        ConnectionPhase.AWAITING_METHOD_PICK -> MethodPicker(state, viewModel)
         ConnectionPhase.AWAITING_CREDENTIALS -> {
             var passwordVisible by remember { mutableStateOf(false) }
+            var fillMenuExpanded by remember { mutableStateOf(false) }
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -471,6 +475,30 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                     },
                     singleLine = true,
                 )
+                // The vault never auto-submits against a server it has not
+                // been accepted on; picking an entry only prefills the form
+                // for the user to review and submit.
+                if (state.savedUsernames.isNotEmpty()) {
+                    Box {
+                        TextButton(onClick = { fillMenuExpanded = true }) {
+                            Text(stringResource(R.string.credential_fill_button))
+                        }
+                        DropdownMenu(
+                            expanded = fillMenuExpanded,
+                            onDismissRequest = { fillMenuExpanded = false },
+                        ) {
+                            state.savedUsernames.forEach { username ->
+                                DropdownMenuItem(
+                                    text = { Text(username) },
+                                    onClick = {
+                                        fillMenuExpanded = false
+                                        viewModel.fillSavedCredential(username)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
         ConnectionPhase.AWAITING_PHONE -> OutlinedTextField(
@@ -507,6 +535,21 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
             label = { Text(tokenChallengeUiText(state.challengeKind).resolve()) },
             singleLine = true,
         )
+        ConnectionPhase.AWAITING_TEXT_CAPTCHA -> {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CaptchaChallenge(state, viewModel)
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = state.token,
+                    onValueChange = viewModel::updateToken,
+                    label = { Text(stringResource(R.string.field_text_captcha)) },
+                    singleLine = true,
+                )
+            }
+        }
         ConnectionPhase.AWAITING_CAPTCHA -> {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -525,7 +568,87 @@ private fun AuthenticationStep(state: ConnectionUiState, viewModel: ConnectionVi
                 }
             }
         }
+        ConnectionPhase.AWAITING_EXTERNAL_LOGIN -> ExternalLoginStep(state, viewModel)
         else -> Unit
+    }
+}
+
+@Composable
+private fun MethodPicker(state: ConnectionUiState, viewModel: ConnectionViewModel) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        state.authMethodOptions.forEach { method ->
+            OutlinedCard(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { viewModel.selectAuthMethod(method) },
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = method.authName.ifBlank {
+                            methodTitleFallback(method.authType).resolve()
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = method.loginDomain,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun methodTitleFallback(authType: String): UiText = UiText.Resource(
+    id = when (authType) {
+        "auth/psw" -> R.string.method_type_password
+        "auth/smsCheckCode" -> R.string.method_type_sms
+        "auth/cas" -> R.string.method_type_cas
+        "auth/httpsOauth2" -> R.string.method_type_oauth2
+        else -> R.string.method_type_other
+    },
+)
+
+@Composable
+private fun ExternalLoginStep(state: ConnectionUiState, viewModel: ConnectionViewModel) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.external_login_instructions),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (state.loginUrl.isNotBlank()) {
+            val launchable = state.loginUrl.startsWith("https://") || state.loginUrl.startsWith("http://")
+            Button(
+                onClick = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.loginUrl)))
+                    }
+                },
+                enabled = launchable,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.external_login_open_button))
+            }
+        }
+        OutlinedTextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = state.token,
+            onValueChange = viewModel::updateToken,
+            label = { Text(stringResource(R.string.external_login_callback_label)) },
+            singleLine = true,
+        )
     }
 }
 

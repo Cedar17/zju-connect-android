@@ -49,8 +49,22 @@
     <string name="captcha_image_unavailable">The verification image is unavailable.</string>
     <string name="captcha_selected_count">%1$d positions selected</string>
     <string name="captcha_reset">Select again</string>
+    <string name="credential_fill_button">Fill a saved account</string>
+    <string name="field_text_captcha">Characters in the image</string>
+    <string name="external_login_instructions">This login method finishes in your browser. Open the login page, sign in there, and when the browser ends up on a server callback page, copy its full address and paste it below.</string>
+    <string name="external_login_open_button">Open the login page</string>
+    <string name="external_login_callback_label">Callback URL</string>
+    <string name="action_select_method">Select a login method</string>
+    <string name="method_type_password">Account and password</string>
+    <string name="method_type_sms">SMS verification code</string>
+    <string name="method_type_cas">CAS single sign-on</string>
+    <string name="method_type_oauth2">OAuth2 single sign-on</string>
+    <string name="method_type_other">Other login method</string>
 
     <string name="connection_status_signing_in">Signing in…</string>
+    <string name="connection_status_awaiting_method_pick">Choose a login method</string>
+    <string name="connection_status_awaiting_text_captcha">Enter the characters in the image</string>
+    <string name="connection_status_awaiting_external_login">Finish the login in your browser</string>
     <string name="connection_status_establishing_vpn">Establishing VPN…</string>
     <string name="connection_status_awaiting_phone">Enter your phone number</string>
     <string name="connection_status_awaiting_sms">Enter the SMS code</string>
