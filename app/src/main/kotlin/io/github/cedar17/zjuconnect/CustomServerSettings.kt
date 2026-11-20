@@ -81,6 +81,74 @@ fun normalizeCustomServerHost(raw: String): String? {
 
 fun parseCustomServerPort(raw: String): Int? = raw.trim().toIntOrNull()?.takeIf { it in MIN_CUSTOM_SERVER_PORT..MAX_CUSTOM_SERVER_PORT }
 
+/** A clipboard import result: the bare host plus an optional port to apply. */
+data class ParsedServerInput(
+    val host: String,
+    val port: Int?,
+)
+
+/**
+ * Recognizes a server address pasted from the clipboard in the formats users
+ * actually copy: "host", "host:port", "host:port/path", full URLs with a
+ * scheme, and scheme-less URLs. Returns null when nothing usable remains or
+ * the host fails the same validation the store enforces. An explicit port
+ * wins; a scheme without one maps to its well-known default (https → 443,
+ * http → 80), while a bare host keeps the current port.
+ */
+fun parseCustomServerInput(raw: String): ParsedServerInput? {
+    var text = raw.trim()
+    if (text.isEmpty()) return null
+    var scheme = ""
+    val schemeEnd = text.indexOf("://")
+    if (schemeEnd >= 0) {
+        scheme = text.substring(0, schemeEnd).lowercase()
+        text = text.substring(schemeEnd + 3)
+    }
+    val authorityEnd = text.indexOfFirst { it == '/' || it == '\\' || it == '?' || it == '#' }
+    if (authorityEnd >= 0) text = text.substring(0, authorityEnd)
+    val atIndex = text.lastIndexOf('@')
+    if (atIndex >= 0) text = text.substring(atIndex + 1)
+    text = text.trim()
+    if (text.isEmpty()) return null
+
+    var host = text
+    var port: Int? = null
+    if (host.startsWith("[")) {
+        // Bracketed IPv6, optionally "[::1]:8443".
+        val closeBracket = host.indexOf(']')
+        if (closeBracket < 0) return null
+        val literal = host.substring(1, closeBracket)
+        val remainder = host.substring(closeBracket + 1)
+        if (remainder.isNotEmpty()) {
+            if (!remainder.startsWith(":")) return null
+            port = remainder.substring(1).trim().toIntOrNull()?.takeIf {
+                it in MIN_CUSTOM_SERVER_PORT..MAX_CUSTOM_SERVER_PORT
+            } ?: return null
+        }
+        host = "[$literal]"
+    } else {
+        val lastColon = host.lastIndexOf(':')
+        if (lastColon >= 0 && host.count { it == ':' } == 1) {
+            val portPart = host.substring(lastColon + 1).trim()
+            val parsedPort = portPart.toIntOrNull()
+            if (parsedPort != null) {
+                port = parsedPort.takeIf { it in MIN_CUSTOM_SERVER_PORT..MAX_CUSTOM_SERVER_PORT } ?: return null
+                host = host.substring(0, lastColon)
+            }
+        }
+    }
+    host = host.trim()
+    if (host.isEmpty() || !isValidCustomServerHost(host)) return null
+    if (port == null) {
+        port = when (scheme) {
+            "https" -> 443
+            "http" -> 80
+            else -> null
+        }
+    }
+    return ParsedServerInput(host, port)
+}
+
 /**
  * The same host rules the Go bridge enforces: hostname labels, an IPv4
  * literal, or a bracketed IPv6 literal. A scheme, path, or credentials in the

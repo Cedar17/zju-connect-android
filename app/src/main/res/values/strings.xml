@@ -202,6 +202,9 @@
     <string name="advanced_enable_custom_server_summary">Connect to another aTrust server instead of the ZJU default. Switching servers signs in again and saved login state is kept per server. Only for self-hosted or mirrored deployments.</string>
     <string name="advanced_server_host_label">Server address</string>
     <string name="advanced_server_port_label">Server port</string>
+    <string name="advanced_clipboard_paste">Paste</string>
+    <string name="advanced_clipboard_imported">Server address imported</string>
+    <string name="advanced_clipboard_unrecognized">Clipboard content is not a recognizable server address</string>
     <string name="advanced_invalid_host">Enter a valid hostname or IP address</string>
     <string name="advanced_invalid_port">Enter a port between 1 and 65535</string>
     <string name="advanced_current_server">Current server: %1$s:%2$d</string>

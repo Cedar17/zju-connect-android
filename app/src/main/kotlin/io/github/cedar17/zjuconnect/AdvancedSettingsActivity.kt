@@ -1,6 +1,7 @@
 package io.github.cedar17.zjuconnect
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -30,8 +31,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -157,6 +162,9 @@ private fun AdvancedSettingsScreen(
                 )
             }
             if (enabled) {
+                val clipboard = LocalClipboardManager.current
+                val toastContext = LocalContext.current
+                val pasteDescription = stringResource(R.string.advanced_clipboard_paste)
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth(),
                     value = hostText,
@@ -168,6 +176,41 @@ private fun AdvancedSettingsScreen(
                         }
                     },
                     isError = hostText.isNotEmpty() && !hostValid,
+                    // Accepts "host:port", full URLs, and scheme-less URLs:
+                    // one paste fills both fields when the clipboard holds a
+                    // recognizable address.
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                val parsed = parseCustomServerInput(
+                                    clipboard.getText()?.toString().orEmpty(),
+                                )
+                                if (parsed == null) {
+                                    Toast.makeText(
+                                        toastContext,
+                                        R.string.advanced_clipboard_unrecognized,
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                } else {
+                                    hostText = parsed.host
+                                    parsed.port?.let { portText = it.toString() }
+                                    Toast.makeText(
+                                        toastContext,
+                                        R.string.advanced_clipboard_imported,
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription = pasteDescription
+                            },
+                        ) {
+                            Text(
+                                text = stringResource(R.string.advanced_clipboard_paste),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                    },
                     singleLine = true,
                 )
                 OutlinedTextField(

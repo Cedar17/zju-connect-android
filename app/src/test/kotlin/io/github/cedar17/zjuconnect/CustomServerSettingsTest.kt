@@ -77,4 +77,72 @@ class CustomServerSettingsTest {
         assertNull(parseCustomServerPort("443x"))
         assertNull(parseCustomServerPort(""))
     }
+
+    @Test
+    fun clipboardImportRecognizesBareHostsAndHostPortPairs() {
+        assertEquals(ParsedServerInput("vpn.zju.edu.cn", null), parseCustomServerInput("vpn.zju.edu.cn"))
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 8443),
+            parseCustomServerInput("vpn.zju.edu.cn:8443"),
+        )
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 8443),
+            parseCustomServerInput("  vpn.zju.edu.cn:8443  "),
+        )
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 8443),
+            parseCustomServerInput("vpn.zju.edu.cn:8443/portal"),
+        )
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", null),
+            parseCustomServerInput("vpn.zju.edu.cn/portal"),
+        )
+        assertEquals(ParsedServerInput("10.10.0.1", 8080), parseCustomServerInput("10.10.0.1:8080"))
+    }
+
+    @Test
+    fun clipboardImportRecognizesUrlsWithAndWithoutScheme() {
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 8443),
+            parseCustomServerInput("https://vpn.zju.edu.cn:8443"),
+        )
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 8443),
+            parseCustomServerInput("https://vpn.zju.edu.cn:8443/portal/index.html?q=1#frag"),
+        )
+        // An explicit port beats the scheme default; a scheme without one maps
+        // to its well-known port.
+        assertEquals(ParsedServerInput("vpn.zju.edu.cn", 443), parseCustomServerInput("https://vpn.zju.edu.cn"))
+        assertEquals(ParsedServerInput("vpn.zju.edu.cn", 80), parseCustomServerInput("http://vpn.zju.edu.cn"))
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", 443),
+            parseCustomServerInput("https://user:pass@vpn.zju.edu.cn"),
+        )
+        // Scheme-less URLs have no default port, so the current port stays.
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", null),
+            parseCustomServerInput("user:pass@vpn.zju.edu.cn/portal"),
+        )
+        // Unknown schemes carry no port hint.
+        assertEquals(
+            ParsedServerInput("vpn.zju.edu.cn", null),
+            parseCustomServerInput("ftp://vpn.zju.edu.cn"),
+        )
+    }
+
+    @Test
+    fun clipboardImportHandlesIpv6AndRejectsGarbage() {
+        assertEquals(ParsedServerInput("[::1]", 8443), parseCustomServerInput("[::1]:8443"))
+        // A scheme without an explicit port maps to its well-known default,
+        // exactly like "https://host" does.
+        assertEquals(ParsedServerInput("[::1]", 443), parseCustomServerInput("https://[::1]/portal"))
+        assertEquals(ParsedServerInput("[::1]", null), parseCustomServerInput("[::1]/portal"))
+        assertNull(parseCustomServerInput(""))
+        assertNull(parseCustomServerInput("   "))
+        assertNull(parseCustomServerInput("https://"))
+        assertNull(parseCustomServerInput("not a host"))
+        assertNull(parseCustomServerInput("https://vpn.zju.edu.cn:70000"))
+        assertNull(parseCustomServerInput("10.0.0.256:8443"))
+        assertNull(parseCustomServerInput("https://[::1"))
+    }
 }
