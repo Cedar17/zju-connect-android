@@ -10,22 +10,32 @@ This guide owns authentication state, persistence, reuse and invalidation.
 | --- | --- |
 | Reusable authenticated result | Process-local Go client/resource result; first choice for foreground preparation |
 | Persisted context | Encrypted session snapshot, validated with the server after process death or reboot |
-| Saved credentials | Separate encrypted username/password, used once per foreground recovery attempt when requested |
+| Saved credentials | Encrypted per-account vault; each entry records the servers that accepted it and auto-submits only on those |
 | Remembered account | Last server-confirmed username, privately stored for display and prefill |
-| Interactive challenge | Current flow's phone selection, SMS, token or CAPTCHA input; not persisted |
+| Interactive challenge | Current flow's phone selection, SMS, token, text/click CAPTCHA or external-login callback; not persisted |
 
 Ordinary disconnect, cancellation and Activity/ViewModel recreation preserve
 existing authentication assets. The reusable result disappears on process death;
-the encrypted stores survive. Account switch clears all four account-specific
-assets above before starting another account. Partial clearing stops the switch.
+the encrypted stores survive. Account switch clears the session snapshot, the
+reusable result and the remembered username; the credential vault intentionally
+survives, but nothing auto-submits until the user picks or types an account for
+the new login. Partial clearing stops the switch.
 
 ### Snapshot, storage and identity
 
-The exported snapshot contains only `schemaVersion`, `deviceId` and the complete
-fixed-endpoint cookie set, including SID. Password, username, resources,
-connection ID, sign key, verification input, creation time and server identity
-are excluded. `ServerVersionInfo` is not persisted; upstream VPN setup fetches
-its manifest again. A core upgrade does not expand this app-owned snapshot.
+The exported snapshot contains only `schemaVersion`, `deviceId`, the aTrust
+endpoint the cookies belong to (`server`, `port` — v2; v1 snapshots without them
+always refer to the ZJU endpoint) and the complete cookie set for that endpoint,
+including SID. Password, username, resources, connection ID, sign key,
+verification input and creation time are excluded. `ServerVersionInfo` is not
+persisted; upstream VPN setup fetches its manifest again. A core upgrade does
+not expand this app-owned snapshot.
+
+Resume validates the snapshot against the currently configured server. A
+snapshot from a different endpoint is definitively invalid (`serverMismatch`):
+it is cleared and the next connection signs in fresh against the configured
+server. The VPN data plane reconnects to the endpoint recorded in the
+authenticated result, so one session never leaks across servers.
 
 `AuthSessionStore` and `SavedCredentialStore` use separate Android Keystore
 non-exportable AES-GCM keys, fixed authenticated data and atomic encrypted files
@@ -41,9 +51,13 @@ to generate an unrelated temporary ID.
 
 Successful authentication refreshes the reusable result and attempts to save the
 recovery snapshot and confirmed username. Successful foreground password login
-also automatically attempts to save the accepted credentials. There is currently
-no remember-password toggle. Saved credentials match the remembered username
-(or an empty remembered account) before automatic submission.
+also automatically attempts to save the accepted credentials, scoped to the
+endpoint that accepted them. There is currently no remember-password toggle.
+Auto-submission requires both the remembered username and a credential that the
+current server already accepted, so switching to a server the account never
+logged into always starts from a manual, user-entered login; the login screen
+also offers the vault's accounts for manual prefill. A server that explicitly
+rejects a credential removes that entry from the vault.
 
 ## Foreground recovery
 

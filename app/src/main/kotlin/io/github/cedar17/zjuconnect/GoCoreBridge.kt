@@ -43,12 +43,16 @@ class GoCoreBridge {
         Core.cancelPreparingRealVpn()
     }
 
-    fun startAuthentication(deviceID: String, onEvent: (GoAuthEvent) -> Unit): GoAuthEvent =
+    fun startAuthentication(
+        target: CustomServerTarget,
+        deviceID: String,
+        onEvent: (GoAuthEvent) -> Unit,
+    ): GoAuthEvent =
         parseAuthEvent(
             Core.startAuthentication(
                 JSONObject()
-                    .put("server", ZJU_ATRUST_SERVER)
-                    .put("port", ZJU_ATRUST_PORT)
+                    .put("server", target.host)
+                    .put("port", target.port)
                     .put("deviceId", deviceID)
                     .toString(),
                 authListener(onEvent),
@@ -57,9 +61,14 @@ class GoCoreBridge {
 
     fun resumeAuthentication(
         snapshot: ByteArray,
+        target: CustomServerTarget,
         deviceID: String,
         onEvent: (GoAuthEvent) -> Unit,
-    ): GoAuthEvent = parseAuthEvent(Core.resumeAuthentication(snapshot, deviceID, authListener(onEvent)))
+    ): GoAuthEvent =
+        parseAuthEvent(
+            // gomobile binds the Go int port as a Java long.
+            Core.resumeAuthentication(snapshot, deviceID, target.host, target.port.toLong(), authListener(onEvent)),
+        )
 
     fun exportAuthenticatedSession(): ByteArray = Core.exportAuthenticatedSession()
 
@@ -139,6 +148,7 @@ class GoCoreBridge {
             cause = event.optString("cause", ""),
             durationMillis = event.optLong("durationMs", 0),
             challengeKind = event.optString("challengeKind", ""),
+            loginUrl = event.optString("loginUrl", ""),
             authMethods = event.optJSONArray("authMethods").toAuthMethods(),
             phoneNumbers = event.optJSONArray("phoneNumbers").toStrings(),
             captchaWidth = event.optInt("captchaWidth", 0),
@@ -211,11 +221,6 @@ class GoCoreBridge {
                 tunWriteBytes = diagnostics.optLong("tunWriteBytes", 0),
             )
         }
-
-    private companion object {
-        const val ZJU_ATRUST_SERVER = "vpn.zju.edu.cn"
-        const val ZJU_ATRUST_PORT = 443
-    }
 }
 
 data class GoVpnRoute(
@@ -274,6 +279,7 @@ data class GoAuthEvent(
     val code: String,
     val message: String,
     val challengeKind: String = "",
+    val loginUrl: String = "",
     val authMethods: List<GoAuthMethod> = emptyList(),
     val phoneNumbers: List<String> = emptyList(),
     val captchaWidth: Int = 0,

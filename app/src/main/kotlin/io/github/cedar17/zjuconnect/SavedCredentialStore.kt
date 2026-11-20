@@ -16,63 +16,141 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+/**
+ * A saved account credential plus the aTrust endpoints that have actually
+ * accepted it ("host:port" strings). Sessions are server-bound, so a
+ * credential only auto-submits against servers listed here; the first login
+ * on any new server is always typed by the user.
+ */
 internal data class StoredCredential(
     val username: String,
     val password: String,
-)
+    val acceptedServers: List<String> = listOf(),
+) {
+    fun isAcceptedOn(serverKey: String): Boolean = serverKey in acceptedServers
+}
+
+/** Canonical per-server key used for credential scoping. */
+internal fun serverKey(target: CustomServerTarget): String = "${target.host}:${target.port}"
 
 internal object StoredCredentialCodec {
     private const val MAGIC = 0x5A4A4352 // ZJCR
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val MAX_USERNAME_BYTES = 1024
     private const val MAX_PASSWORD_BYTES = 16 * 1024
+    private const val MAX_SERVER_BYTES = 256
+    private const val MAX_SERVERS = 8
+    const val MAX_ENTRIES = 10
 
-    fun encode(credential: StoredCredential): ByteArray {
-        val username = credential.username.toByteArray(Charsets.UTF_8)
-        val password = credential.password.toByteArray(Charsets.UTF_8)
-        require(username.isNotEmpty() && username.size <= MAX_USERNAME_BYTES) { "Invalid stored username" }
-        require(password.isNotEmpty() && password.size <= MAX_PASSWORD_BYTES) { "Invalid stored password" }
+    fun encode(credentials: List<StoredCredential>): ByteArray {
+        require(credentials.isNotEmpty() && credentials.size <= MAX_ENTRIES) { "Invalid stored credential count" }
         return try {
             ByteArrayOutputStream().use { bytes ->
                 DataOutputStream(bytes).use { output ->
                     output.writeInt(MAGIC)
                     output.writeInt(VERSION)
-                    output.writeInt(username.size)
-                    output.writeInt(password.size)
-                    output.write(username)
-                    output.write(password)
+                    output.writeInt(credentials.size)
+                    for (credential in credentials) {
+                        val username = credential.username.toByteArray(Charsets.UTF_8)
+                        val password = credential.password.toByteArray(Charsets.UTF_8)
+                        require(username.isNotEmpty() && username.size <= MAX_USERNAME_BYTES) { "Invalid stored username" }
+                        require(password.isNotEmpty() && password.size <= MAX_PASSWORD_BYTES) { "Invalid stored password" }
+                        output.writeInt(username.size)
+                        output.writeInt(password.size)
+                        output.write(username)
+                        output.write(password)
+                        val servers = credential.acceptedServers.distinct()
+                        require(servers.size <= MAX_SERVERS) { "Invalid accepted server count" }
+                        output.writeInt(servers.size)
+                        for (server in servers) {
+                            val encoded = server.toByteArray(Charsets.UTF_8)
+                            require(encoded.isNotEmpty() && encoded.size <= MAX_SERVER_BYTES) { "Invalid accepted server" }
+                            output.writeInt(encoded.size)
+                            output.write(encoded)
+                        }
+                    }
                 }
                 bytes.toByteArray()
             }
         } finally {
-            username.fill(0)
-            password.fill(0)
+            // String fields cannot be scrubbed; the codec zeroes every
+            // intermediate byte array it created above.
         }
     }
 
-    fun decode(encoded: ByteArray): StoredCredential = try {
+    fun decode(encoded: ByteArray): List<StoredCredential> = try {
         DataInputStream(ByteArrayInputStream(encoded)).use { input ->
             require(input.readInt() == MAGIC) { "Invalid stored credential" }
-            require(input.readInt() == VERSION) { "Unsupported stored credential" }
-            val usernameSize = input.readInt()
-            val passwordSize = input.readInt()
-            require(usernameSize in 1..MAX_USERNAME_BYTES) { "Invalid stored username size" }
-            require(passwordSize in 1..MAX_PASSWORD_BYTES) { "Invalid stored password size" }
-            require(usernameSize + passwordSize == input.available()) { "Truncated stored credential" }
-            val username = ByteArray(usernameSize).also(input::readFully)
-            val password = ByteArray(passwordSize).also(input::readFully)
-            try {
-                StoredCredential(
-                    username = username.toString(Charsets.UTF_8),
-                    password = password.toString(Charsets.UTF_8),
-                )
-            } finally {
-                username.fill(0)
-                password.fill(0)
+            when (val version = input.readInt()) {
+                1 -> listOf(decodeLegacy(input))
+                2 -> decodeEntries(input)
+                else -> throw IllegalArgumentException("Unsupported stored credential version $version")
             }
         }
     } catch (error: IOException) {
         throw IllegalArgumentException("Invalid stored credential", error)
+    }
+
+    private fun decodeEntries(input: DataInputStream): List<StoredCredential> {
+        val count = input.readInt()
+        require(count in 1..MAX_ENTRIES) { "Invalid stored credential count" }
+        return buildList(count) {
+            repeat(count) {
+                val usernameSize = input.readInt()
+                val passwordSize = input.readInt()
+                require(usernameSize in 1..MAX_USERNAME_BYTES) { "Invalid stored username size" }
+                require(passwordSize in 1..MAX_PASSWORD_BYTES) { "Invalid stored password size" }
+                val username = ByteArray(usernameSize).also(input::readFully)
+                val password = ByteArray(passwordSize).also(input::readFully)
+                try {
+                    val serverCount = input.readInt()
+                    require(serverCount in 0..MAX_SERVERS) { "Invalid accepted server count" }
+                    val servers = buildList(serverCount) {
+                        repeat(serverCount) {
+                            val serverSize = input.readInt()
+                            require(serverSize in 1..MAX_SERVER_BYTES) { "Invalid accepted server size" }
+                            val server = ByteArray(serverSize).also(input::readFully)
+                            try {
+                                add(server.toString(Charsets.UTF_8))
+                            } finally {
+                                server.fill(0)
+                            }
+                        }
+                    }
+                    add(
+                        StoredCredential(
+                            username = username.toString(Charsets.UTF_8),
+                            password = password.toString(Charsets.UTF_8),
+                            acceptedServers = servers,
+                        ),
+                    )
+                } finally {
+                    username.fill(0)
+                    password.fill(0)
+                }
+            }
+        }
+    }
+
+    /** v1 held one credential with no server scope; it only ever saw the ZJU endpoint. */
+    private fun decodeLegacy(input: DataInputStream): StoredCredential {
+        val usernameSize = input.readInt()
+        val passwordSize = input.readInt()
+        require(usernameSize in 1..MAX_USERNAME_BYTES) { "Invalid stored username size" }
+        require(passwordSize in 1..MAX_PASSWORD_BYTES) { "Invalid stored password size" }
+        require(usernameSize + passwordSize == input.available()) { "Truncated stored credential" }
+        val username = ByteArray(usernameSize).also(input::readFully)
+        val password = ByteArray(passwordSize).also(input::readFully)
+        try {
+            return StoredCredential(
+                username = username.toString(Charsets.UTF_8),
+                password = password.toString(Charsets.UTF_8),
+                acceptedServers = listOf(serverKey(CustomServerTarget.DEFAULT)),
+            )
+        } finally {
+            username.fill(0)
+            password.fill(0)
+        }
     }
 }
 
@@ -100,11 +178,16 @@ internal object StoredCredentialEncryption {
     }
 }
 
+/**
+ * Encrypted vault of account credentials, one entry per username, each
+ * scoped to the servers that accepted it. Doubles as the manual account
+ * picker source on the login screen.
+ */
 internal class SavedCredentialStore(context: Context) {
     private val credentialFile = AtomicFile(context.noBackupFilesDir.resolve(FILE_NAME))
 
-    fun read(): StoredCredential? {
-        if (!credentialFile.baseFile.isFile) return null
+    fun readAll(): List<StoredCredential> {
+        if (!credentialFile.baseFile.isFile) return listOf()
         val envelopeBytes = credentialFile.readFully()
         var envelope: EncryptedAuthSession? = null
         var plaintext: ByteArray? = null
@@ -127,8 +210,11 @@ internal class SavedCredentialStore(context: Context) {
         }
     }
 
-    fun write(credential: StoredCredential) {
-        val plaintext = StoredCredentialCodec.encode(credential)
+    /** Single-credential convenience for callers that expect at most one match. */
+    fun read(): StoredCredential? = readAll().firstOrNull()
+
+    fun writeAll(credentials: List<StoredCredential>) {
+        val plaintext = StoredCredentialCodec.encode(credentials)
         val encrypted = try {
             StoredCredentialEncryption.encrypt(plaintext, getOrCreateKey())
         } finally {
@@ -152,6 +238,28 @@ internal class SavedCredentialStore(context: Context) {
         } finally {
             envelope.fill(0)
         }
+    }
+
+    fun write(credential: StoredCredential) = writeAll(listOf(credential))
+
+    /** Replaces the entry with the same username, or appends up to the cap. */
+    fun upsert(credential: StoredCredential): Boolean {
+        val current = readAll()
+        val without = current.filterNot { it.username == credential.username }
+        val updated = (listOf(credential) + without).take(StoredCredentialCodec.MAX_ENTRIES)
+        writeAll(updated)
+        return true
+    }
+
+    fun remove(username: String): Boolean {
+        val current = readAll()
+        if (current.none { it.username == username }) return true
+        val remaining = current.filterNot { it.username == username }
+        if (remaining.isEmpty()) {
+            return clear()
+        }
+        writeAll(remaining)
+        return true
     }
 
     fun clear(): Boolean {

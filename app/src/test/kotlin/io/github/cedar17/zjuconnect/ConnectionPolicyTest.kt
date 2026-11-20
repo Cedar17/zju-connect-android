@@ -113,11 +113,14 @@ class ConnectionPolicyTest {
     @Test
     fun onlyAuthenticationInputPhasesUseScrollableHomeLayout() {
         val inputPhases = setOf(
+            ConnectionPhase.AWAITING_METHOD_PICK,
             ConnectionPhase.AWAITING_CREDENTIALS,
             ConnectionPhase.AWAITING_PHONE,
             ConnectionPhase.AWAITING_SMS,
             ConnectionPhase.AWAITING_TOKEN,
+            ConnectionPhase.AWAITING_TEXT_CAPTCHA,
             ConnectionPhase.AWAITING_CAPTCHA,
+            ConnectionPhase.AWAITING_EXTERNAL_LOGIN,
         )
 
         ConnectionPhase.entries.forEach { phase ->
@@ -165,6 +168,7 @@ class ConnectionPolicyTest {
     fun onlyDefinitivelyInvalidStoredSessionsAreDeleted() {
         assertTrue(isDefinitivelyInvalidStoredSession("sessionInvalid", "sessionInvalid"))
         assertTrue(isDefinitivelyInvalidStoredSession("error", "invalidSession"))
+        assertTrue(isDefinitivelyInvalidStoredSession("error", "serverMismatch"))
         assertFalse(isDefinitivelyInvalidStoredSession("authMethodsReady", "sessionExpired"))
         assertFalse(isDefinitivelyInvalidStoredSession("error", "sessionRestoreUnavailable"))
         assertFalse(isDefinitivelyInvalidStoredSession("error", "certificateRejected"))
@@ -190,12 +194,26 @@ class ConnectionPolicyTest {
     }
 
     @Test
-    fun savedCredentialCannotCrossRememberedAccounts() {
-        val credential = StoredCredential("student-a", "secret")
+    fun autoSubmitCredentialRequiresBothAccountAndServerAcceptance() {
+        val zju = serverKey(CustomServerTarget.DEFAULT)
+        val custom = "atrust.example.edu:8443"
+        val credentials = listOf(
+            StoredCredential("student-a", "secret-a", acceptedServers = listOf(zju)),
+            StoredCredential("student-b", "secret-b", acceptedServers = listOf(custom)),
+        )
 
-        assertTrue(savedCredentialMatchesAccount(credential, ""))
-        assertTrue(savedCredentialMatchesAccount(credential, "student-a"))
-        assertFalse(savedCredentialMatchesAccount(credential, "student-b"))
+        // The remembered account matches, but its credential was never
+        // accepted by the custom server: the first login there is manual.
+        assertNull(selectAutoSubmitCredential(credentials, "student-a", custom))
+        assertEquals("student-a", selectAutoSubmitCredential(credentials, "student-a", zju)?.username)
+        assertEquals("student-b", selectAutoSubmitCredential(credentials, "student-b", custom)?.username)
+        assertNull(selectAutoSubmitCredential(credentials, "student-b", zju))
+
+        // Blank remembered identity auto-submits only when the vault holds
+        // exactly one entry (the legacy single-credential behavior).
+        assertEquals("student-a", selectAutoSubmitCredential(listOf(credentials[0]), "", zju)?.username)
+        assertNull(selectAutoSubmitCredential(credentials, "", zju))
+        assertNull(selectAutoSubmitCredential(credentials, "", custom))
     }
 
     @Test
