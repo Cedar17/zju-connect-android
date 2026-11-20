@@ -67,6 +67,7 @@ type authenticationSubmission struct {
 	SMSCode     string `json:"smsCode,omitempty"`
 	Captcha     string `json:"captcha,omitempty"`
 	Token       string `json:"token,omitempty"`
+	CallbackURL string `json:"callbackUrl,omitempty"`
 }
 
 type authenticationEvent struct {
@@ -79,6 +80,7 @@ type authenticationEvent struct {
 	Cause         string          `json:"cause,omitempty"`
 	DurationMs    int64           `json:"durationMs,omitempty"`
 	ChallengeKind string          `json:"challengeKind,omitempty"`
+	LoginURL      string          `json:"loginUrl,omitempty"`
 	AuthMethods   []auth.AuthInfo `json:"authMethods,omitempty"`
 	PhoneNumbers  []string        `json:"phoneNumbers,omitempty"`
 	CaptchaWidth  int             `json:"captchaWidth,omitempty"`
@@ -271,8 +273,12 @@ func SubmitAuthentication(responseJSON string) string {
 		err = coordinator.submitChallenge(response.Action, response.SMSCode)
 	case "submitCaptcha":
 		err = coordinator.submitChallenge(response.Action, response.Captcha)
+	case "submitTextCaptcha":
+		err = coordinator.submitChallenge(response.Action, response.Captcha)
 	case "submitToken":
 		err = coordinator.submitChallenge(response.Action, response.Token)
+	case "submitExternalLogin":
+		err = coordinator.submitChallenge(response.Action, response.CallbackURL)
 	default:
 		return authError("invalidRequest", "Unknown authentication response")
 	}
@@ -730,18 +736,38 @@ func (c *authenticationCoordinator) selectMethod(authType, loginDomain string) e
 		Stage:         "auth.select_method",
 		Type:          "credentialsRequired",
 	}
+	// cas/httpsOauth2 need no local input: their Login implementation drives
+	// the ExternalLogin challenge, whose callback URL the user supplies.
+	externalSSO := false
 	switch selected.AuthType {
 	case "auth/psw":
 	case "auth/smsCheckCode":
 		event.Type = "phoneRequired"
 		event.State = "awaitingPhone"
 		event.Message = "Enter the phone number registered for this method"
+	case "auth/cas", "auth/httpsOauth2":
+		externalSSO = true
+		event.Type = "authMethodStarted"
+		event.State = "authenticating"
+		event.Message = "Continue this login in your browser"
 	default:
 		return fmt.Errorf("unsupported authentication method")
 	}
 	go func() {
-		if c.active() {
-			emitAuthenticationEvent(c.listener, event)
+		if !c.active() {
+			return
+		}
+		emitAuthenticationEvent(c.listener, event)
+		if externalSSO {
+			method, err := auth.NewLoginMethod(auth.LoginMethodOptions{
+				AuthType: selected.AuthType,
+				Domain:   selected.LoginDomain,
+			})
+			if err != nil {
+				emitAuthenticationEvent(c.listener, authenticationFailure(event.Stage, 0, err))
+				return
+			}
+			c.login(method, event.Stage)
 		}
 	}()
 	return nil
@@ -984,6 +1010,18 @@ func (c *authenticationCoordinator) submitChallenge(action, raw string) error {
 			points = append(points, authchallenge.Point{X: pair[0], Y: pair[1]})
 		}
 		response.captcha = authchallenge.ClickCaptchaResponse{Points: points, Width: payload.Width, Height: payload.Height}
+	case "submitTextCaptcha":
+		response.code = strings.TrimSpace(raw)
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("captcha code is required")
+		}
+	case "submitExternalLogin":
+		response.code = strings.TrimSpace(raw)
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("callback URL is required")
+		}
 	default:
 		c.mu.Unlock()
 		return fmt.Errorf("unsupported authentication challenge response")
@@ -1004,10 +1042,15 @@ func (c *authenticationCoordinator) submitChallenge(action, raw string) error {
 func (c *authenticationCoordinator) pendingCaptchaImage() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.pending == nil || c.pending.action != "submitCaptcha" || c.pending.ctx.Err() != nil {
+	if c.pending == nil || c.pending.ctx.Err() != nil {
 		return nil
 	}
-	return append([]byte(nil), c.pending.image...)
+	switch c.pending.action {
+	case "submitCaptcha", "submitTextCaptcha":
+		return append([]byte(nil), c.pending.image...)
+	default:
+		return nil
+	}
 }
 
 func (c *authenticationCoordinator) HandleCodeChallenge(challenge authchallenge.CodeChallenge) (authchallenge.CodeResponse, error) {
@@ -1060,12 +1103,50 @@ func (c *authenticationCoordinator) HandleClickCaptcha(challenge authchallenge.C
 	return response.captcha, err
 }
 
-func (c *authenticationCoordinator) HandleTextCaptcha(authchallenge.TextCaptchaChallenge) (authchallenge.TextCaptchaResponse, error) {
-	return authchallenge.TextCaptchaResponse{}, fmt.Errorf("unsupported text captcha challenge")
+func (c *authenticationCoordinator) HandleTextCaptcha(challenge authchallenge.TextCaptchaChallenge) (authchallenge.TextCaptchaResponse, error) {
+	event := authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "textCaptchaRequired",
+		State:         "awaitingTextCaptcha",
+		Message:       "Enter the characters shown in the verification image",
+	}
+	if challenge.Message != "" {
+		event.Message = challenge.Message
+	}
+	if len(challenge.Image) > 0 {
+		config, _, err := image.DecodeConfig(bytes.NewReader(challenge.Image))
+		if err != nil {
+			return authchallenge.TextCaptchaResponse{}, fmt.Errorf("decode captcha image: %w", err)
+		}
+		event.CaptchaWidth = config.Width
+		event.CaptchaHeight = config.Height
+	}
+	pending, err := c.beginChallenge("submitTextCaptcha", event, challenge.Image)
+	if err != nil {
+		return authchallenge.TextCaptchaResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return authchallenge.TextCaptchaResponse{Code: response.code}, err
 }
 
 func (c *authenticationCoordinator) HandleExternalLogin(challenge authchallenge.ExternalLoginChallenge) (authchallenge.ExternalLoginResponse, error) {
-	return authchallenge.ExternalLoginResponse{}, fmt.Errorf("unsupported external login challenge: %s", challenge.Kind)
+	kind := string(challenge.Kind)
+	if kind == "" {
+		return authchallenge.ExternalLoginResponse{}, fmt.Errorf("external login challenge is missing its kind")
+	}
+	pending, err := c.beginChallenge("submitExternalLogin", authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "externalLoginRequired",
+		State:         "awaitingExternalLogin",
+		Message:       "Finish the login in your browser, then paste the final callback URL",
+		ChallengeKind: kind,
+		LoginURL:      challenge.LoginURL,
+	}, nil)
+	if err != nil {
+		return authchallenge.ExternalLoginResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return authchallenge.ExternalLoginResponse{CallbackURL: response.code}, err
 }
 
 func sessionRestoreFailure(duration time.Duration, err error) authenticationEvent {

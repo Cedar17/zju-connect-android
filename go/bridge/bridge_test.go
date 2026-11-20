@@ -435,6 +435,116 @@ func TestClickCaptchaUsesExistingCoordinateSubmission(t *testing.T) {
 	}
 }
 
+func TestTextCaptchaUsesImageAndCodeSubmission(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	imageBuffer := new(bytes.Buffer)
+	pixels := image.NewRGBA(image.Rect(0, 0, 24, 12))
+	pixels.Set(2, 2, color.White)
+	if err := png.Encode(imageBuffer, pixels); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan authchallenge.TextCaptchaResponse, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleTextCaptcha(authchallenge.TextCaptchaChallenge{
+			Image:   imageBuffer.Bytes(),
+			Message: "Type the characters",
+		})
+		result <- response
+		errResult <- err
+	}()
+	event := listener.waitForType(t, "textCaptchaRequired")
+	if event.CaptchaWidth != 24 || event.CaptchaHeight != 12 || len(coordinator.pendingCaptchaImage()) == 0 {
+		t.Fatalf("text captcha event/image = %#v, bytes=%d", event, len(coordinator.pendingCaptchaImage()))
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitTextCaptcha","captcha":" a1b2 "}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("text captcha submission was not accepted: %s", accepted)
+	}
+	if err := <-errResult; err != nil {
+		t.Fatal(err)
+	}
+	response := <-result
+	if response.Code != "a1b2" {
+		t.Fatalf("text captcha code = %q, want a1b2", response.Code)
+	}
+	if coordinator.pendingCaptchaImage() != nil {
+		t.Fatal("text captcha image survived the completed challenge")
+	}
+}
+
+func TestExternalLoginRoundTripsCallbackURL(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	result := make(chan authchallenge.ExternalLoginResponse, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleExternalLogin(authchallenge.ExternalLoginChallenge{
+			Kind:     authchallenge.ExternalLoginCAS,
+			LoginURL: "https://sso.example.edu/cas/login",
+		})
+		result <- response
+		errResult <- err
+	}()
+	event := listener.waitForType(t, "externalLoginRequired")
+	if event.ChallengeKind != "cas" || event.LoginURL != "https://sso.example.edu/cas/login" {
+		t.Fatalf("external login event = %#v", event)
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitExternalLogin","callbackUrl":"https://vpn.zju.edu.cn/cas-callback?ticket=ST-1"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("external login submission was not accepted: %s", accepted)
+	}
+	if err := <-errResult; err != nil {
+		t.Fatal(err)
+	}
+	response := <-result
+	if response.CallbackURL != "https://vpn.zju.edu.cn/cas-callback?ticket=ST-1" {
+		t.Fatalf("callback URL = %q", response.CallbackURL)
+	}
+}
+
+func TestSSOMethodStartsLoginAndDrivesExternalLogin(t *testing.T) {
+	const expectedTicket = "https://vpn.zju.edu.cn/cas-callback?ticket=ST-42"
+	receivedCallback := make(chan string, 1)
+	session := &fakeAuthSession{
+		methods: []auth.AuthInfo{{AuthType: "auth/cas", LoginDomain: "default", AuthName: "CAS"}},
+		login: func(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
+			response, err := options.ChallengeHandler.HandleExternalLogin(authchallenge.ExternalLoginChallenge{
+				Kind:     authchallenge.ExternalLoginCAS,
+				LoginURL: "https://sso.example.edu/cas/login",
+			})
+			if err != nil {
+				return auth.LoginResult{}, err
+			}
+			receivedCallback <- response.CallbackURL
+			return auth.LoginResult{
+				Username: "student",
+				SID:      "sso-session-id",
+				Cookies: []auth.Cookie{{
+					Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "sso-cookie",
+				}},
+			}, nil
+		},
+		resourceData: []byte(`{"resource":"opaque"}`),
+	}
+	coordinator, listener := installTestCoordinator(t, session)
+	coordinator.running = true
+	coordinator.fetchAuthMethods("")
+	listener.waitForType(t, "authMethodsReady")
+
+	if err := coordinator.selectMethod("auth/cas", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if started := listener.waitForType(t, "authMethodStarted"); started.State != "authenticating" {
+		t.Fatalf("authMethodStarted event = %#v", started)
+	}
+	listener.waitForType(t, "externalLoginRequired")
+	if accepted := SubmitAuthentication(`{"action":"submitExternalLogin","callbackUrl":"` + expectedTicket + `"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("external login submission was not accepted: %s", accepted)
+	}
+	listener.waitForType(t, "authenticated")
+	if callback := <-receivedCallback; callback != expectedTicket {
+		t.Fatalf("login callback = %q, want %q", callback, expectedTicket)
+	}
+}
+
 func TestAuthenticationFailureIsRedacted(t *testing.T) {
 	secret := "session-cookie-and-password"
 	event := authenticationFailure("auth.config", 0, fmt.Errorf("x509: certificate rejected: %s", secret))
