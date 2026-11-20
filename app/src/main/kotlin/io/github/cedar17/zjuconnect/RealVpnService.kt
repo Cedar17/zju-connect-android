@@ -119,7 +119,6 @@ class RealVpnService : VpnService() {
             val acceptsProgress = synchronized(stateLock) { lifecycle.acceptsProgress() }
             if (acceptsProgress) {
                 RealVpnStateStore.update(event)
-                QuickSettingsTileService.requestRefresh(applicationContext)
                 if (event.state == "active") {
                     startForegroundCompat(R.string.notification_connected)
                     val commands = synchronized(recoveryLock) {
@@ -185,7 +184,6 @@ class RealVpnService : VpnService() {
         }
         stopInternal()
         releaseServiceEntry()
-        QuickSettingsTileService.requestRefresh(applicationContext)
         executor.shutdownNow()
         cleanupExecutor.shutdownNow()
         watchdogExecutor.shutdownNow()
@@ -772,7 +770,6 @@ class RealVpnService : VpnService() {
             null -> Unit
         }
         releaseServiceEntry()
-        QuickSettingsTileService.requestRefresh(applicationContext)
         stopSelf()
     }
 
@@ -964,14 +961,12 @@ class RealVpnService : VpnService() {
         Log.i(REAL_VPN_LOG_TAG, "service state=$state")
         RedactedDiagnostics.recordVpnServiceState(applicationContext, state)
         RealVpnStateStore.setStatus(state)
-        QuickSettingsTileService.requestRefresh(applicationContext)
     }
 
     private fun publishFailure(origin: String, failure: RealVpnFailure) {
         Log.e(REAL_VPN_LOG_TAG, "terminal failure origin=$origin code=${failure.code}")
         RedactedDiagnostics.recordVpnServiceState(applicationContext, "error", failure.code)
         RealVpnStateStore.setError(failure.code)
-        QuickSettingsTileService.requestRefresh(applicationContext)
     }
 
     private fun publishAlwaysOnDisconnectBlocked() {

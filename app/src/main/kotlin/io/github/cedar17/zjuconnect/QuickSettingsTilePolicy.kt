@@ -1,5 +1,9 @@
 package io.github.cedar17.zjuconnect
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 /** The Android-independent presentation contract for the Quick Settings tile. */
 internal enum class QuickSettingsTileVisualState {
     ACTIVE,
@@ -17,6 +21,7 @@ internal enum class QuickSettingsTileStatus {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    DISCONNECTING,
     RECOVERING,
     OPEN_APP_FOR_LOGIN,
     ALWAYS_ON_MANAGED,
@@ -61,10 +66,15 @@ internal fun quickSettingsTilePresentation(
         action = QuickSettingsTileAction.OPEN_APP,
         status = QuickSettingsTileStatus.OPEN_APP_FOR_LOGIN,
     )
-    "preparing", "attaching", "starting", "stopping" -> QuickSettingsTilePresentation(
+    "preparing", "attaching", "starting" -> QuickSettingsTilePresentation(
         visualState = QuickSettingsTileVisualState.INACTIVE,
         action = QuickSettingsTileAction.NONE,
         status = QuickSettingsTileStatus.CONNECTING,
+    )
+    "stopping" -> QuickSettingsTilePresentation(
+        visualState = QuickSettingsTileVisualState.INACTIVE,
+        action = QuickSettingsTileAction.NONE,
+        status = QuickSettingsTileStatus.DISCONNECTING,
     )
     else -> if (entryInProgress) {
         QuickSettingsTilePresentation(
@@ -92,25 +102,15 @@ internal enum class ConnectionEntryOwner {
 }
 
 internal object ConnectionEntryArbiter {
-    private val lock = Any()
-    private var owner: ConnectionEntryOwner? = null
+    private val mutableOwner = MutableStateFlow<ConnectionEntryOwner?>(null)
+    val owner: StateFlow<ConnectionEntryOwner?> = mutableOwner.asStateFlow()
 
-    fun tryBegin(nextOwner: ConnectionEntryOwner): Boolean = synchronized(lock) {
-        if (owner != null) {
-            false
-        } else {
-            owner = nextOwner
-            true
-        }
-    }
+    fun tryBegin(nextOwner: ConnectionEntryOwner): Boolean =
+        mutableOwner.compareAndSet(null, nextOwner)
 
     fun finish(expectedOwner: ConnectionEntryOwner) {
-        synchronized(lock) {
-            if (owner == expectedOwner) {
-                owner = null
-            }
-        }
+        mutableOwner.compareAndSet(expectedOwner, null)
     }
 
-    fun isInProgress(): Boolean = synchronized(lock) { owner != null }
+    fun isInProgress(): Boolean = owner.value != null
 }

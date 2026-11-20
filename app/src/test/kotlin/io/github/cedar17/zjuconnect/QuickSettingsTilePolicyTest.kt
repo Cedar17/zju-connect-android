@@ -20,7 +20,7 @@ class QuickSettingsTilePolicyTest {
 
     @Test
     fun transientStatesStayClickableButDoNotStartAnotherOperation() {
-        listOf("preparing", "attaching", "starting", "stopping").forEach { state ->
+        listOf("preparing", "attaching", "starting").forEach { state ->
             assertEquals(
                 QuickSettingsTilePresentation(
                     QuickSettingsTileVisualState.INACTIVE,
@@ -30,6 +30,14 @@ class QuickSettingsTilePolicyTest {
                 quickSettingsTilePresentation(RealVpnUiState(state = state), entryInProgress = false),
             )
         }
+        assertEquals(
+            QuickSettingsTilePresentation(
+                QuickSettingsTileVisualState.INACTIVE,
+                QuickSettingsTileAction.NONE,
+                QuickSettingsTileStatus.DISCONNECTING,
+            ),
+            quickSettingsTilePresentation(RealVpnUiState(state = "stopping"), entryInProgress = false),
+        )
         assertEquals(
             QuickSettingsTilePresentation(
                 QuickSettingsTileVisualState.INACTIVE,
@@ -107,12 +115,15 @@ class QuickSettingsTilePolicyTest {
         try {
             assertTrue(ConnectionEntryArbiter.tryBegin(ConnectionEntryOwner.TILE_SERVICE))
             assertTrue(ConnectionEntryArbiter.isInProgress())
+            assertEquals(ConnectionEntryOwner.TILE_SERVICE, ConnectionEntryArbiter.owner.value)
             assertFalse(ConnectionEntryArbiter.tryBegin(ConnectionEntryOwner.ACTIVITY))
             ConnectionEntryArbiter.finish(ConnectionEntryOwner.ACTIVITY)
             assertTrue(ConnectionEntryArbiter.isInProgress())
+            assertEquals(ConnectionEntryOwner.TILE_SERVICE, ConnectionEntryArbiter.owner.value)
         } finally {
             ConnectionEntryArbiter.finish(ConnectionEntryOwner.TILE_SERVICE)
         }
         assertFalse(ConnectionEntryArbiter.isInProgress())
+        assertEquals(null, ConnectionEntryArbiter.owner.value)
     }
 }
