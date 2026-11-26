@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mythologyli/zju-connect/client"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
@@ -995,5 +996,49 @@ func TestRealVpnLifecycleCountersContainNoAuthenticationOrPacketFields(t *testin
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("diagnostic event contained forbidden value %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestMatchRealVpnIPResourceMirrorsUpstreamSemantics(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 32, 39, 83), IPMax: net.IPv4(10, 32, 39, 83), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "tcp", PortMin: 443, PortMax: 443, EnableTCPPrefL3: false},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "udp", PortMin: 53, PortMax: 53, EnableTCPPrefL3: false},
+	}
+
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(10, 32, 39, 83), "tcp", 443); !ok {
+		t.Fatal("exact /32 resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "tcp", 443); !ok {
+		t.Fatal("tcp/443 range resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "tcp", 80); ok {
+		t.Fatal("tcp/80 matched a 443-only resource")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "udp", 53); !ok {
+		t.Fatal("udp/53 resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(192, 0, 2, 1), "tcp", 443); ok {
+		t.Fatal("unlisted destination matched a resource")
+	}
+}
+
+func TestShouldUseTCPTunnelForMatchesNonPrefL3Resources(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 0, 0, 0), IPMax: net.IPv4(10, 255, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: false},
+	}
+
+	if shouldUseTCPTunnelFor(resources, true, net.IPv4(10, 1, 2, 3), 443) {
+		t.Fatal("prefL3 resource must keep the raw L3 tunnel")
+	}
+	if !shouldUseTCPTunnelFor(resources, true, net.IPv4(172, 21, 1, 2), 8443) {
+		t.Fatal("non-prefL3 resource must use the TCP tunnel")
+	}
+	if shouldUseTCPTunnelFor(resources, false, net.IPv4(172, 21, 1, 2), 8443) {
+		t.Fatal("without TCP tunnel support the flow must stay on the L3 path")
+	}
+	if shouldUseTCPTunnelFor(resources, true, net.IPv4(192, 0, 2, 9), 8443) {
+		t.Fatal("unlisted destinations must not enter the TCP bridge")
 	}
 }

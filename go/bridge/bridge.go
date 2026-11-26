@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mythologyli/zju-connect/client"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
@@ -1335,4 +1336,62 @@ func marshal(value any) string {
 		return fmt.Sprintf("{\"schemaVersion\":%d,\"type\":\"error\",\"code\":\"serializationFailed\",\"message\":\"Unable to encode Go bridge response\"}", schemaVersion)
 	}
 	return string(encoded)
+}
+
+// ---- aTrust data-plane resource matching ----
+//
+// Mirrors upstream internal/ipresource matching (which this module cannot
+// import: internal packages are module-private). First listed resource wins;
+// "all" matches any protocol; ICMP ignores ports.
+
+func realVpnIPv4Uint32(ip net.IP) (uint32, bool) {
+	ip = ip.To4()
+	if ip == nil {
+		return 0, false
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3]), true
+}
+
+func matchRealVpnIPResource(
+	resources []client.IPResource,
+	destination net.IP,
+	protocol string,
+	port int,
+) (client.IPResource, bool) {
+	destinationValue, ok := realVpnIPv4Uint32(destination)
+	if !ok {
+		return client.IPResource{}, false
+	}
+	for _, resource := range resources {
+		start, startOK := realVpnIPv4Uint32(resource.IPMin)
+		end, endOK := realVpnIPv4Uint32(resource.IPMax)
+		if !startOK || !endOK || destinationValue < start || destinationValue > end {
+			continue
+		}
+		if resource.Protocol != protocol && resource.Protocol != "all" {
+			continue
+		}
+		if protocol != "icmp" && (port < resource.PortMin || port > resource.PortMax) {
+			continue
+		}
+		return resource, true
+	}
+	return client.IPResource{}, false
+}
+
+// shouldUseTCPTunnelFor reports whether an outbound TCP flow must use the
+// TCP tunnel instead of the raw L3 tunnel: the server did not mark the
+// matching resource as TCP-over-L3 (EnableTCPPrefL3), so the L3 writer would
+// refuse it, and the client supports the TCP tunnel.
+func shouldUseTCPTunnelFor(
+	resources []client.IPResource,
+	canUseTCPTunnel bool,
+	destination net.IP,
+	port int,
+) bool {
+	if !canUseTCPTunnel {
+		return false
+	}
+	resource, matched := matchRealVpnIPResource(resources, destination, "tcp", port)
+	return matched && !resource.EnableTCPPrefL3
 }
