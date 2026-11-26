@@ -18,11 +18,14 @@ class GoCoreBridge {
     fun startRealVpn(
         tunFd: Long,
         socketProtector: SocketProtector,
+        mtu: Int,
         onEvent: (GoVpnEvent) -> Unit,
     ) {
         Core.startRealVpn(
             tunFd,
             socketProtector,
+            // gomobile binds the Go int MTU as a Java long.
+            mtu.toLong(),
             object : BridgeListener {
                 override fun onEvent(eventJson: String) {
                     onEvent(parseVpnEvent(eventJson))

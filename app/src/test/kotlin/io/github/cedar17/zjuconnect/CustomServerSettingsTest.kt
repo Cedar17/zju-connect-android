@@ -146,3 +146,26 @@ class CustomServerSettingsTest {
         assertNull(parseCustomServerInput("https://[::1"))
     }
 }
+
+class VpnMtuSettingsTest {
+    @Test
+    fun mtuParsingAcceptsOnlyTheConfigurableRange() {
+        assertEquals(1400, parseVpnMtu("1400"))
+        assertEquals(1500, parseVpnMtu(" 1500 "))
+        assertEquals(576, parseVpnMtu("576"))
+        assertNull(parseVpnMtu("0"))
+        assertNull(parseVpnMtu("575"))
+        assertNull(parseVpnMtu("1501"))
+        assertNull(parseVpnMtu(""))
+        assertNull(parseVpnMtu("14x0"))
+    }
+
+    @Test
+    fun mtuSettingsValidityFollowsTheBridgeRange() {
+        assertTrue(VpnMtuSettings(mtu = 1400).isValid())
+        assertTrue(VpnMtuSettings(mtu = 576).isValid())
+        assertTrue(VpnMtuSettings(mtu = 1500).isValid())
+        assertFalse(VpnMtuSettings(mtu = 575).isValid())
+        assertFalse(VpnMtuSettings(mtu = 1501).isValid())
+    }
+}

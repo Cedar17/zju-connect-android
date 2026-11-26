@@ -77,6 +77,7 @@ type realVpnSession struct {
 	ipResources []client.IPResource
 	tcpBridge   *realVpnTCPBridge
 	dnsServers  []string
+	mtu         int
 }
 
 type preparedRealVpn struct {
@@ -331,7 +332,7 @@ func realVpnPreparationCancelled(stage string, durationMillis int64) string {
 
 // StartRealVpn attaches an Android TUN to the prepared authenticated client.
 // The caller transfers ownership of tunFD to this bridge until StopRealVpn.
-func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener) {
+func StartRealVpn(tunFD int, protector SocketProtector, mtu int, listener BridgeListener) {
 	if tunFD < 0 {
 		emitRealVpnState(listener, "error", "invalidTunFd", "attach.tun", "The VPN file descriptor is invalid", nil)
 		return
@@ -369,6 +370,12 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 		emitRealVpnState(listener, "error", "tunInitializationFailed", "attach.tun", "Unable to open the Android VPN interface", nil)
 		return
 	}
+	// The caller's MTU (from user settings) governs the TUN interface; the
+	// data plane must size its read buffer and TCP-bridge endpoint to match,
+	// otherwise packets at the interface MTU are truncated or refused.
+	if mtu < 576 || mtu > 1500 {
+		mtu = realVpnMTU
+	}
 	session := &realVpnSession{
 		client:      prepared.client,
 		tun:         tunFile,
@@ -376,6 +383,7 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 		doneCh:      make(chan struct{}),
 		ipResources: prepared.ipResources,
 		dnsServers:  prepared.dnsServers,
+		mtu:         mtu,
 	}
 
 	realVpnState.Lock()
@@ -517,7 +525,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 
 	var tcpBridge *realVpnTCPBridge
 	if session.client.CanUseTCPTunnel() {
-		tcpBridge = newRealVpnTCPBridge(session.tun, session.client, session.ipResources)
+		tcpBridge = newRealVpnTCPBridge(session.tun, session.client, session.ipResources, session.mtu)
 		session.tcpBridge = tcpBridge
 	}
 
@@ -527,7 +535,7 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 		failureOnce.Do(func() { failureCh <- failure })
 	}
 	go func() {
-		buf := make([]byte, realVpnMTU)
+		buf := make([]byte, session.mtu)
 		for {
 			n, readErr := session.tun.Read(buf)
 			if readErr != nil {
@@ -762,12 +770,13 @@ type realVpnTCPBridge struct {
 
 type realVpnTCPTunEndpoint struct {
 	tun        *os.File
+	mtu        uint32
 	dispatcher gvisorstack.NetworkDispatcher
 }
 
 func (e *realVpnTCPTunEndpoint) ParseHeader(*gvisorstack.PacketBuffer) bool { return true }
 
-func (e *realVpnTCPTunEndpoint) MTU() uint32 { return uint32(realVpnMTU) }
+func (e *realVpnTCPTunEndpoint) MTU() uint32 { return e.mtu }
 
 func (e *realVpnTCPTunEndpoint) SetMTU(uint32) {}
 
@@ -822,8 +831,13 @@ func (e *realVpnTCPTunEndpoint) WritePackets(list gvisorstack.PacketBufferList) 
 	return written, nil
 }
 
-func newRealVpnTCPBridge(tun *os.File, vpnClient client.Client, ipResources []client.IPResource) *realVpnTCPBridge {
-	endpoint := &realVpnTCPTunEndpoint{tun: tun}
+func newRealVpnTCPBridge(
+	tun *os.File,
+	vpnClient client.Client,
+	ipResources []client.IPResource,
+	mtu int,
+) *realVpnTCPBridge {
+	endpoint := &realVpnTCPTunEndpoint{tun: tun, mtu: uint32(mtu)}
 	nicStack := gvisorstack.New(gvisorstack.Options{
 		NetworkProtocols:   []gvisorstack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []gvisorstack.TransportProtocolFactory{tcp.NewProtocol},

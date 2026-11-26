@@ -207,6 +207,8 @@
     <string name="advanced_clipboard_unrecognized">Clipboard content is not a recognizable server address</string>
     <string name="advanced_invalid_host">Enter a valid hostname or IP address</string>
     <string name="advanced_invalid_port">Enter a port between 1 and 65535</string>
+    <string name="advanced_mtu_label">VPN MTU</string>
+    <string name="advanced_invalid_mtu">Enter an MTU between 576 and 1500</string>
     <string name="advanced_current_server">Current server: %1$s:%2$d</string>
     <string name="advanced_server_invalid_notice">The custom server is invalid. Fix it before connecting.</string>
 

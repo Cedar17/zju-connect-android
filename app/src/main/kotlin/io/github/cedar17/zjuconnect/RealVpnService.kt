@@ -662,9 +662,14 @@ class RealVpnService : VpnService() {
                 return
             }
 
+            // User-configured MTU (advanced settings) overrides the prepared
+            // default; the same value is handed to the Go data plane below so
+            // its read buffer and TCP-bridge endpoint match the interface.
+            val tunMtu = VpnMtuSettingsStore(applicationContext).read().mtu
+                .coerceIn(576, 1500)
             val builder = Builder()
                 .setSession("ZJU Connect")
-                .setMtu(config.mtu.coerceIn(576, 1500))
+                .setMtu(tunMtu)
                 .setBlocking(true)
                 .addAddress(config.address, 32)
 
@@ -723,7 +728,7 @@ class RealVpnService : VpnService() {
             }
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.begin")
             val attachStartedAt = SystemClock.elapsedRealtime()
-            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener(generation))
+            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, tunMtu, goListener(generation))
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.complete durationMs=${SystemClock.elapsedRealtime() - attachStartedAt}")
             detachedTunFd = null
         } catch (error: Throwable) {

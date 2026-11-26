@@ -52,7 +52,9 @@ class AdvancedSettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val settingsStore = CustomServerSettingsStore(applicationContext)
+        val mtuStore = VpnMtuSettingsStore(applicationContext)
         val stored = settingsStore.read()
+        val storedMtu = mtuStore.read()
         setContent {
             ZjuConnectTheme {
                 AdvancedSettingsScreen(
@@ -60,10 +62,15 @@ class AdvancedSettingsActivity : ComponentActivity() {
                     initialHost = stored.host,
                     initialPortText = stored.port.toString(),
                     defaultTarget = CustomServerTarget.DEFAULT,
+                    initialMtuText = storedMtu.mtu.toString(),
                     onBack = ::finish,
-                ) { settings ->
-                    settingsStore.write(settings)
-                }
+                    onSettingsChanged = { settings ->
+                        settingsStore.write(settings)
+                    },
+                    onMtuChanged = { mtu ->
+                        mtuStore.write(VpnMtuSettings(mtu = mtu))
+                    },
+                )
             }
         }
     }
@@ -76,12 +83,15 @@ private fun AdvancedSettingsScreen(
     initialHost: String,
     initialPortText: String,
     defaultTarget: CustomServerTarget,
+    initialMtuText: String,
     onBack: () -> Unit,
     onSettingsChanged: (CustomServerSettings) -> Unit,
+    onMtuChanged: (Int) -> Unit,
 ) {
     var enabled by remember { mutableStateOf(initialEnabled) }
     var hostText by remember { mutableStateOf(initialHost) }
     var portText by remember { mutableStateOf(initialPortText) }
+    var mtuText by remember { mutableStateOf(initialMtuText) }
 
     // Normalize before persisting so the store only ever holds bare hosts.
     val normalizedHost = normalizeCustomServerHost(hostText) ?: ""
@@ -95,10 +105,19 @@ private fun AdvancedSettingsScreen(
     )
     val effectiveTarget = settings.effectiveTarget()
 
+    val parsedMtu = parseVpnMtu(mtuText)
+
     // Persist off the main thread: commit() syncs to disk on every keystroke.
     LaunchedEffect(settings) {
         withContext(Dispatchers.IO) {
             onSettingsChanged(settings)
+        }
+    }
+    LaunchedEffect(parsedMtu) {
+        parsedMtu?.let { mtu ->
+            withContext(Dispatchers.IO) {
+                onMtuChanged(mtu)
+            }
         }
     }
 
@@ -228,6 +247,20 @@ private fun AdvancedSettingsScreen(
                     singleLine = true,
                 )
             }
+            OutlinedTextField(
+                modifier = Modifier.fillMaxWidth(),
+                value = mtuText,
+                onValueChange = { mtuText = it },
+                label = { Text(stringResource(R.string.advanced_mtu_label)) },
+                supportingText = {
+                    if (parsedMtu == null) {
+                        Text(stringResource(R.string.advanced_invalid_mtu))
+                    }
+                },
+                isError = mtuText.isNotEmpty() && parsedMtu == null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+            )
         }
     }
 }
