@@ -110,6 +110,7 @@ class GoCoreBridge {
             address = event.optString("address", ""),
             mtu = event.optInt("mtu", 1400),
             routes = event.optJSONArray("routes").toVpnRoutes(),
+            dnsServers = event.optJSONArray("dnsServers").toStrings(),
         )
     }.getOrElse {
         GoVpnPrepared(
@@ -240,6 +241,7 @@ data class GoVpnPrepared(
     val address: String = "",
     val mtu: Int = 1400,
     val routes: List<GoVpnRoute> = emptyList(),
+    val dnsServers: List<String> = emptyList(),
 )
 
 data class GoVpnEvent(

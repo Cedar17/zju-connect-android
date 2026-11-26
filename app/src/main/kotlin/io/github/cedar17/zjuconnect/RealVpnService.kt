@@ -671,6 +671,20 @@ class RealVpnService : VpnService() {
             config.routes.forEach { route ->
                 builder.addRoute(route.address, route.prefixLength)
             }
+
+            // Intranet DNS servers pushed by the aTrust server (SDPPolicy
+            // ClientOption). They become the VPN's DNS so intranet-only
+            // domains (e.g. *.js.cmcc) resolve; each also gets an explicit
+            // /32 route so the queries reach the tunnel even when the server
+            // omits the DNS IP from its route list. The first added server
+            // acts as the primary DNS. Without a DNS server there is nothing
+            // to set and behavior is unchanged.
+            config.dnsServers
+                .filter { dns -> dns.isNotBlank() }
+                .forEach { dns ->
+                    builder.addRoute(dns, 32)
+                    builder.addDnsServer(dns)
+                }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 builder.excludeCurrentUnderlaySubnets()
             }

@@ -34,4 +34,28 @@ class GoCoreBridgeTest {
         assertEquals(1750L, prepared.setupDurationMillis)
         assertEquals(0L, prepared.durationMillis)
     }
+    @Test
+    fun preparedConfigParsesIntranetDnsServers() {
+        val prepared = GoCoreBridge().parseVpnPrepared(
+            """
+            {
+              "state":"prepared",
+              "address":"192.168.1.2",
+              "mtu":1400,
+              "routes":[{"address":"10.0.0.0","prefixLength":8}],
+              "dnsServers":["10.32.166.158","10.32.166.159"]
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(listOf("10.32.166.158", "10.32.166.159"), prepared.dnsServers)
+    }
+
+    @Test
+    fun preparedConfigWithoutDnsServersKeepsEmptyList() {
+        val prepared = GoCoreBridge().parseVpnPrepared("""{"state":"prepared"}""")
+
+        assertEquals(emptyList<String>(), prepared.dnsServers)
+    }
+
 }

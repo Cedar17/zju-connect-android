@@ -60,6 +60,7 @@ type realVpnPreparedEvent struct {
 	Address             string                      `json:"address,omitempty"`
 	MTU                 int                         `json:"mtu,omitempty"`
 	Routes              []realVpnRoute              `json:"routes,omitempty"`
+	DnsServers          []string                    `json:"dnsServers,omitempty"`
 	Diagnostics         *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
 }
 
@@ -75,6 +76,7 @@ type realVpnSession struct {
 	diagnostics realVpnDiagnostics
 	ipResources []client.IPResource
 	tcpBridge   *realVpnTCPBridge
+	dnsServers  []string
 }
 
 type preparedRealVpn struct {
@@ -84,6 +86,7 @@ type preparedRealVpn struct {
 	setupDurationMillis int64
 	routes              []realVpnRoute
 	ipResources         []client.IPResource
+	dnsServers          []string
 }
 
 var realVpnState struct {
@@ -217,6 +220,18 @@ func PrepareRealVpn() string {
 	// not advertise it.
 	ipResources, _ := vpnClient.IPResources()
 
+	// The server also pushes intranet DNS servers (SDPPolicy ClientOption);
+	// they become the VpnService DNS so intranet domains resolve. Keep only
+	// literal IPs: VpnService.setDnsServer rejects anything else.
+	dnsServers := make([]string, 0, 2)
+	if advertised, err := vpnClient.DNSServers(); err == nil {
+		for _, server := range advertised {
+			if net.ParseIP(strings.TrimSpace(server)) != nil {
+				dnsServers = append(dnsServers, strings.TrimSpace(server))
+			}
+		}
+	}
+
 	prepared := &preparedRealVpn{
 		client:              vpnClient,
 		setupDurationMillis: setupDurationMillis,
@@ -224,6 +239,7 @@ func PrepareRealVpn() string {
 		address:             address.To4().String(),
 		routes:              routes,
 		ipResources:         ipResources,
+		dnsServers:          dnsServers,
 	}
 	stage, durationMillis := owner.snapshot()
 	realVpnState.Lock()
@@ -254,6 +270,7 @@ func realVpnPreparedResponse(prepared *preparedRealVpn, stage string, durationMi
 		Address:             prepared.address,
 		MTU:                 realVpnMTU,
 		Routes:              append([]realVpnRoute(nil), prepared.routes...),
+		DnsServers:          append([]string(nil), prepared.dnsServers...),
 	})
 }
 
@@ -358,6 +375,7 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 		listener:    listener,
 		doneCh:      make(chan struct{}),
 		ipResources: prepared.ipResources,
+		dnsServers:  prepared.dnsServers,
 	}
 
 	realVpnState.Lock()
