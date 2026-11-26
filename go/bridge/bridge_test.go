@@ -1042,3 +1042,53 @@ func TestShouldUseTCPTunnelForMatchesNonPrefL3Resources(t *testing.T) {
 		t.Fatal("unlisted destinations must not enter the TCP bridge")
 	}
 }
+
+func TestRealVpnTCPTunnelDecisionParsesAndRoutes(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 32, 39, 83), IPMax: net.IPv4(10, 32, 39, 83), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: false},
+	}
+
+	buildPacket := func(protocol byte, dest [4]byte, destPort uint16, ihlWords byte) []byte {
+		ihl := int(ihlWords) * 4
+		packet := make([]byte, ihl+20)
+		packet[0] = 0x40 | ihlWords
+		packet[9] = protocol
+		copy(packet[16:20], dest[:])
+		// TCP destination port sits at payload offset 2.
+		packet[ihl+2] = byte(destPort >> 8)
+		packet[ihl+3] = byte(destPort)
+		return packet
+	}
+
+	// TCP SYN to a non-prefL3 resource: the bridge takes it over.
+	packet := buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 5)
+	dest, port, useTunnel := realVpnTCPTunnelDecision(packet, resources, true)
+	if !useTunnel || dest.String() != "172.21.1.2" || port != 8443 {
+		t.Fatalf("decision = %s:%d %v, want 172.21.1.2:8443 true", dest, port, useTunnel)
+	}
+
+	// TCP to a prefL3 resource stays on the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{10, 32, 39, 83}, 443, 5), resources, true); use {
+		t.Fatal("prefL3 TCP must not enter the bridge")
+	}
+
+	// UDP never enters the bridge.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(17, [4]byte{172, 21, 1, 2}, 53, 5), resources, true); use {
+		t.Fatal("UDP must not enter the bridge")
+	}
+
+	// Truncated and malformed packets keep the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(packet[:12], resources, true); use {
+		t.Fatal("truncated packet must not enter the bridge")
+	}
+	// A packet truncated mid-header keeps the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 15)[:40], resources, true); use {
+		t.Fatal("packet truncated inside its options must not enter the bridge")
+	}
+
+	// Custom IHL (IPv4 options) still locates the TCP port.
+	if dest, port, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 6), resources, true); !use || port != 8443 || dest.String() != "172.21.1.2" {
+		t.Fatalf("options-bearing packet decision = %s:%d %v", dest, port, use)
+	}
+}

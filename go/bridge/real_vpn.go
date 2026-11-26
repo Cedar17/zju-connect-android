@@ -841,16 +841,8 @@ func (b *realVpnTCPBridge) tryInject(packet []byte) bool {
 	if b == nil || len(packet) < 20 || packet[0]>>4 != 4 {
 		return false
 	}
-	if uint8(header.IPv4(packet).Protocol()) != uint8(tcp.ProtocolNumber) {
-		return false
-	}
-	ihl := int(packet[0]&0x0f) * 4
-	if ihl < 20 || len(packet) < ihl+4 {
-		return false
-	}
-	destination := net.IPv4(packet[16], packet[17], packet[18], packet[19])
-	destinationPort := int(uint16(packet[ihl+2])<<8 | uint16(packet[ihl+3]))
-	if !shouldUseTCPTunnelFor(b.ipResources, b.vpnClient.CanUseTCPTunnel(), destination, destinationPort) {
+	_, _, useTunnel := realVpnTCPTunnelDecision(packet, b.ipResources, b.vpnClient.CanUseTCPTunnel())
+	if !useTunnel {
 		return false
 	}
 	if b.endpoint.dispatcher == nil {

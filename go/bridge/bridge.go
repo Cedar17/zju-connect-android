@@ -1395,3 +1395,28 @@ func shouldUseTCPTunnelFor(
 	resource, matched := matchRealVpnIPResource(resources, destination, "tcp", port)
 	return matched && !resource.EnableTCPPrefL3
 }
+
+// realVpnTCPTunnelDecision parses one outbound IPv4 packet and decides
+// whether the realVpnTCPBridge must take the flow over. Non-TCP packets and
+// anything malformed report useTunnel=false and keep the L3 path.
+func realVpnTCPTunnelDecision(
+	packet []byte,
+	resources []client.IPResource,
+	canUseTCPTunnel bool,
+) (destination net.IP, port int, useTunnel bool) {
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return nil, 0, false
+	}
+	// IPv4 protocol byte 9: TCP is 6.
+	if packet[9] != 6 {
+		return nil, 0, false
+	}
+	ihl := int(packet[0]&0x0f) * 4
+	if ihl < 20 || len(packet) < ihl+4 {
+		return nil, 0, false
+	}
+	destination = net.IPv4(packet[16], packet[17], packet[18], packet[19])
+	port = int(uint16(packet[ihl+2])<<8 | uint16(packet[ihl+3]))
+	useTunnel = shouldUseTCPTunnelFor(resources, canUseTCPTunnel, destination, port)
+	return destination, port, useTunnel
+}
