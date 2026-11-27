@@ -499,6 +499,9 @@ class RealVpnService : VpnService() {
                 sessionStore = AuthSessionStore(applicationContext),
                 deviceIdentityProvider = DeviceIdentityProvider(applicationContext),
                 bridge = goCoreBridge,
+                serverTargetProvider = {
+                    CustomServerSettingsStore(applicationContext).read().effectiveTarget()
+                },
             ).also { alwaysOnSessionRestorer = it }
         }
 
@@ -626,7 +629,7 @@ class RealVpnService : VpnService() {
                     "stage=${config.stage.ifBlank { "none" }} cause=${config.cause.ifBlank { "none" }} " +
                     "durationMs=${SystemClock.elapsedRealtime() - prepareStartedAt} " +
                     "cached=${config.reusedPrepared} setupMs=${config.setupDurationMillis} " +
-                    "routes=${config.routes.size} mtu=${config.mtu}",
+                    "routes=${config.routes.size}",
             )
             if (!acceptsStartProgress()) {
                 goCoreBridge.stopRealVpn()
@@ -659,15 +662,34 @@ class RealVpnService : VpnService() {
                 return
             }
 
+            // User-configured MTU (advanced settings) overrides the prepared
+            // default; the same value is handed to the Go data plane below so
+            // its read buffer and TCP-bridge endpoint match the interface.
+            val tunMtu = VpnMtuSettingsStore(applicationContext).read().mtu
+                .coerceIn(576, 1500)
             val builder = Builder()
                 .setSession("ZJU Connect")
-                .setMtu(config.mtu.coerceIn(576, 1500))
+                .setMtu(tunMtu)
                 .setBlocking(true)
                 .addAddress(config.address, 32)
 
             config.routes.forEach { route ->
                 builder.addRoute(route.address, route.prefixLength)
             }
+
+            // Intranet DNS servers pushed by the aTrust server (SDPPolicy
+            // ClientOption). They become the VPN's DNS so intranet-only
+            // domains (e.g. *.js.cmcc) resolve; each also gets an explicit
+            // /32 route so the queries reach the tunnel even when the server
+            // omits the DNS IP from its route list. The first added server
+            // acts as the primary DNS. Without a DNS server there is nothing
+            // to set and behavior is unchanged.
+            config.dnsServers
+                .filter { dns -> dns.isNotBlank() }
+                .forEach { dns ->
+                    builder.addRoute(dns, 32)
+                    builder.addDnsServer(dns)
+                }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 builder.excludeCurrentUnderlaySubnets()
             }
@@ -675,7 +697,7 @@ class RealVpnService : VpnService() {
             if (!recovering) {
                 setStatus("attaching")
             }
-            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
+            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size} mtu=$tunMtu")
             val tunStartedAt = SystemClock.elapsedRealtime()
             val watchdog = scheduleTunEstablishWatchdog()
             val tun = try {
@@ -706,7 +728,7 @@ class RealVpnService : VpnService() {
             }
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.begin")
             val attachStartedAt = SystemClock.elapsedRealtime()
-            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, goListener(generation))
+            goCoreBridge.startRealVpn(tunFd.toLong(), socketProtector, tunMtu, goListener(generation))
             Log.i(REAL_VPN_LOG_TAG, "phase=go.attach.complete durationMs=${SystemClock.elapsedRealtime() - attachStartedAt}")
             detachedTunFd = null
         } catch (error: Throwable) {

@@ -135,15 +135,20 @@ redacted report. CAPTCHA bytes are retrieved only through `GetPendingCaptchaImag
 | --- | --- |
 | `StartAuthentication(requestJSON, listener)` | JSON response; starts the single asynchronous authentication flow |
 | `SubmitAuthentication(responseJSON)` | JSON response; advances or retries the current flow |
-| `ResumeAuthentication(snapshotBytes, deviceID, listener)` | JSON response; validates snapshot and starts server-side session recovery |
+| `ResumeAuthentication(snapshotBytes, deviceID, server, port, listener)` | JSON response; validates snapshot against the configured server and starts server-side session recovery |
 | `ExportAuthenticatedSession()` | Opaque snapshot bytes for Android encryption |
 | `GetPendingCaptchaImage()` | Current challenge image bytes |
 | `CancelAuthentication()` | Cancels interactive flow and clears its verification input |
 | `HasReusableAuthenticatedResult()` | Boolean availability, without exposing session fields |
 | `ClearAuthenticatedResult()` | Clears reusable result and result retained by the active flow |
 
-The start request carries the fixed ZJU server/port and Android-derived device ID;
-resume receives the current device ID explicitly. The bridge calls upstream
+The start request carries the aTrust server/port (ZJU default, or the
+experimental custom server from advanced settings) and Android-derived device
+ID; resume additionally receives the currently configured server so a snapshot
+belonging to a different endpoint is rejected as `serverMismatch` instead of
+silently reconnecting there. Only a bare host and concrete port are accepted;
+schemes, paths and credentials are rejected on both the Kotlin and Go sides.
+The bridge calls upstream
 `auth.NewSessionContext`, `NewLoginMethod`, `Session.Login` and
 `authchallenge.Handler`; it selects supported methods and maps interactive
 challenges into structured events. Authentication result retention, snapshot
@@ -155,15 +160,18 @@ contents, background restrictions and invalidation are defined once in the
 | Go entry point | Result / effect |
 | --- | --- |
 | `PrepareRealVpn()` | JSON configuration; prepares a client or reuses an already prepared one |
-| `StartRealVpn(tunFD, protector, listener)` | Attaches the Android TUN to the prepared client and starts callbacks |
+| `StartRealVpn(tunFD, protector, mtu, listener)` | Attaches the Android TUN using its configured MTU and starts callbacks |
 | `CancelPreparingRealVpn()` | Cancels the current in-flight pre-TUN preparation |
 | `DiscardPreparedRealVpn()` | Releases an already prepared, unattached client; leaves active VPN alone |
 | `StopRealVpn()` | Idempotently cancels preparation and releases prepared/active VPN resources |
 
 Preparation consumes the authenticated result already in Go memory and calls
-upstream `SetupContext` with a 30-second deadline. Success supplies IPv4 address,
-resource prefixes and MTU. Android establishes the TUN, then attaches it with the
-socket protector for future underlay connections.
+upstream `SetupContext` with a 30-second deadline. Success supplies the IPv4
+address and resource prefixes. Each time Android establishes a TUN, it applies
+the global advanced MTU setting (default 1400 bytes, range 576–1500) and passes
+that same value to Go when attaching it with the socket protector. The MTU in a
+preparation response is the Go default. VPN state events for an attached
+session carry its effective MTU.
 
 Cancellation clears preparation ownership before a late result can be published.
 The preparation owner closes its client once; cancellation does not wait for the

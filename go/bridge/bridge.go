@@ -23,13 +23,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mythologyli/zju-connect/client"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
 
 const (
-	schemaVersion                       = 1
-	authenticationSnapshotSchemaVersion = 1
+	schemaVersion = 1
+	// Snapshot v1 predates the experimental custom-server option and always
+	// refers to the ZJU production endpoint; v2 records the endpoint inline.
+	authenticationSnapshotSchemaVersion = 2
 	maxAuthenticationSnapshotSize       = 64 * 1024
 	zjuAtrustServer                     = "vpn.zju.edu.cn"
 	zjuAtrustServerPort                 = 443
@@ -65,6 +68,7 @@ type authenticationSubmission struct {
 	SMSCode     string `json:"smsCode,omitempty"`
 	Captcha     string `json:"captcha,omitempty"`
 	Token       string `json:"token,omitempty"`
+	CallbackURL string `json:"callbackUrl,omitempty"`
 }
 
 type authenticationEvent struct {
@@ -77,6 +81,7 @@ type authenticationEvent struct {
 	Cause         string          `json:"cause,omitempty"`
 	DurationMs    int64           `json:"durationMs,omitempty"`
 	ChallengeKind string          `json:"challengeKind,omitempty"`
+	LoginURL      string          `json:"loginUrl,omitempty"`
 	AuthMethods   []auth.AuthInfo `json:"authMethods,omitempty"`
 	PhoneNumbers  []string        `json:"phoneNumbers,omitempty"`
 	CaptchaWidth  int             `json:"captchaWidth,omitempty"`
@@ -88,9 +93,13 @@ type authenticationEvent struct {
 // Go to Kotlin for persistence. It deliberately excludes password, username,
 // standalone SID, resources, connection ID, and sign key.
 type authenticationSnapshot struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	DeviceID      string        `json:"deviceId"`
-	Cookies       []auth.Cookie `json:"cookies"`
+	SchemaVersion int    `json:"schemaVersion"`
+	DeviceID      string `json:"deviceId"`
+	// Server and Port record the aTrust endpoint the cookies belong to.
+	// v1 snapshots omit both and always refer to the ZJU endpoint.
+	Server  string        `json:"server,omitempty"`
+	Port    int           `json:"port,omitempty"`
+	Cookies []auth.Cookie `json:"cookies"`
 }
 
 type authenticatedResult struct {
@@ -98,6 +107,11 @@ type authenticatedResult struct {
 	SID          string
 	AuthData     []byte
 	ResourceData []byte
+	// Server and Port record the aTrust endpoint this result authenticated
+	// against, so the VPN data plane reconnects to the same service. They
+	// identify the origin of the session and are not secrets.
+	Server string
+	Port   int
 }
 
 type upstreamAuthSession interface {
@@ -124,6 +138,8 @@ func cloneAuthenticatedResult(result authenticatedResult) authenticatedResult {
 		SID:          result.SID,
 		AuthData:     append([]byte(nil), result.AuthData...),
 		ResourceData: append([]byte(nil), result.ResourceData...),
+		Server:       result.Server,
+		Port:         result.Port,
 	}
 }
 
@@ -135,6 +151,8 @@ func clearAuthenticatedResult(result *authenticatedResult) {
 	clear(result.ResourceData)
 	result.Username = ""
 	result.SID = ""
+	result.Server = ""
+	result.Port = 0
 	result.AuthData = nil
 	result.ResourceData = nil
 }
@@ -182,15 +200,18 @@ func currentAuthenticatedResult() (authenticatedResult, bool) {
 }
 
 // StartAuthentication begins a single in-memory aTrust authentication session.
-// The target is deliberately restricted to ZJU's production aTrust endpoint so
-// credentials cannot be redirected to an arbitrary host by the UI layer.
+// The target defaults to ZJU's production aTrust endpoint; the experimental
+// custom-server setting may point it at another aTrust endpoint, and the UI
+// layer is still restricted to a bare host and port so credentials cannot be
+// redirected into arbitrary URLs.
 func StartAuthentication(requestJSON string, listener BridgeListener) string {
 	var request authenticationStartRequest
 	if err := json.Unmarshal([]byte(requestJSON), &request); err != nil {
 		return authError("invalidRequest", "Authentication request is not valid JSON")
 	}
-	if request.Server != zjuAtrustServer || request.Port != zjuAtrustServerPort {
-		return authError("invalidRequest", "Authentication is only available for the ZJU aTrust service")
+	server, port, err := resolveAuthenticationServer(request.Server, request.Port)
+	if err != nil {
+		return authError("invalidRequest", "Authentication requires a valid aTrust server host and port")
 	}
 	if err := validateDeviceID(request.DeviceID); err != nil {
 		return authError("invalidRequest", "Authentication requires a valid device identity")
@@ -199,7 +220,7 @@ func StartAuthentication(requestJSON string, listener BridgeListener) string {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
 
-	coordinator := newAuthenticationCoordinator(request.Server, request.Port, request.DeviceID, listener)
+	coordinator := newAuthenticationCoordinator(server, port, request.DeviceID, listener)
 	currentAuthentication.mu.Lock()
 	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
@@ -253,8 +274,12 @@ func SubmitAuthentication(responseJSON string) string {
 		err = coordinator.submitChallenge(response.Action, response.SMSCode)
 	case "submitCaptcha":
 		err = coordinator.submitChallenge(response.Action, response.Captcha)
+	case "submitTextCaptcha":
+		err = coordinator.submitChallenge(response.Action, response.Captcha)
 	case "submitToken":
 		err = coordinator.submitChallenge(response.Action, response.Token)
+	case "submitExternalLogin":
+		err = coordinator.submitChallenge(response.Action, response.CallbackURL)
 	default:
 		return authError("invalidRequest", "Unknown authentication response")
 	}
@@ -329,7 +354,11 @@ func ExportAuthenticatedSession() []byte {
 		return nil
 	}
 	defer clearAuthenticatedResult(&result)
-	encoded, err := encodeAuthenticationSnapshot(result.AuthData)
+	server, port := result.Server, result.Port
+	if server == "" || port == 0 {
+		server, port = zjuAtrustServer, zjuAtrustServerPort
+	}
+	encoded, err := encodeAuthenticationSnapshot(result.AuthData, server, port)
 	if err != nil {
 		return nil
 	}
@@ -337,16 +366,26 @@ func ExportAuthenticatedSession() []byte {
 }
 
 // ResumeAuthentication validates an encrypted-at-rest snapshot after Kotlin
-// decrypts it. The coordinator is restricted to ZJU's endpoint and emits only safe
-// lifecycle events; snapshot values never enter callback JSON.
-func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener BridgeListener) string {
+// decrypts it. The snapshot records the aTrust endpoint its cookies belong
+// to; Kotlin passes the currently configured target and a snapshot from a
+// different server is rejected as serverMismatch instead of silently
+// reconnecting there. The coordinator emits only safe lifecycle events;
+// snapshot values never enter callback JSON.
+func ResumeAuthentication(snapshotBytes []byte, deviceID string, server string, port int, listener BridgeListener) string {
 	if listener == nil {
 		return authError("invalidRequest", "Authentication listener is required")
 	}
 	if err := validateDeviceID(deviceID); err != nil {
 		return authError("invalidRequest", "Session restoration requires a valid device identity")
 	}
-	authData, err := decodeAuthenticationSnapshot(snapshotBytes, deviceID)
+	expectedServer, expectedPort, err := resolveAuthenticationServer(server, port)
+	if err != nil {
+		return authError("invalidRequest", "Session restoration requires a valid aTrust server host and port")
+	}
+	authData, err := decodeAuthenticationSnapshot(snapshotBytes, deviceID, expectedServer, expectedPort)
+	if errors.Is(err, errSnapshotServerMismatch) {
+		return authError("serverMismatch", "Saved authentication data belongs to a different server")
+	}
 	if err != nil {
 		return authError("invalidSession", "Saved authentication data is invalid")
 	}
@@ -358,7 +397,7 @@ func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener Bridge
 	}
 	clear(authData)
 
-	coordinator := newAuthenticationCoordinator(zjuAtrustServer, zjuAtrustServerPort, deviceID, listener)
+	coordinator := newAuthenticationCoordinator(expectedServer, expectedPort, deviceID, listener)
 	currentAuthentication.mu.Lock()
 	if currentAuthentication.coordinator != nil {
 		currentAuthentication.mu.Unlock()
@@ -377,14 +416,19 @@ func ResumeAuthentication(snapshotBytes []byte, deviceID string, listener Bridge
 	})
 }
 
-func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
+func encodeAuthenticationSnapshot(authData []byte, server string, port int) ([]byte, error) {
 	var clientAuthData auth.ClientAuthData
 	if err := json.Unmarshal(authData, &clientAuthData); err != nil {
+		return nil, err
+	}
+	if err := validateAuthenticationServer(server, port); err != nil {
 		return nil, err
 	}
 	snapshot := authenticationSnapshot{
 		SchemaVersion: authenticationSnapshotSchemaVersion,
 		DeviceID:      clientAuthData.DeviceID,
+		Server:        server,
+		Port:          port,
 		Cookies:       append([]auth.Cookie(nil), clientAuthData.Cookies...),
 	}
 	if err := validateAuthenticationSnapshot(snapshot); err != nil {
@@ -393,13 +437,27 @@ func encodeAuthenticationSnapshot(authData []byte) ([]byte, error) {
 	return json.Marshal(snapshot)
 }
 
-func decodeAuthenticationSnapshot(snapshotBytes []byte, deviceID string) ([]byte, error) {
+var errSnapshotServerMismatch = errors.New("authentication snapshot belongs to a different server")
+
+func decodeAuthenticationSnapshot(
+	snapshotBytes []byte,
+	deviceID string,
+	expectedServer string,
+	expectedPort int,
+) ([]byte, error) {
 	if len(snapshotBytes) == 0 || len(snapshotBytes) > maxAuthenticationSnapshotSize {
 		return nil, fmt.Errorf("authentication snapshot size is invalid")
 	}
 	var snapshot authenticationSnapshot
 	if err := json.Unmarshal(snapshotBytes, &snapshot); err != nil {
 		return nil, err
+	}
+	snapshotServer, snapshotPort, err := snapshotAuthenticationServer(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if snapshotServer != expectedServer || snapshotPort != expectedPort {
+		return nil, fmt.Errorf("%w: %s", errSnapshotServerMismatch, snapshotServer)
 	}
 	if err := validateAuthenticationSnapshot(snapshot); err != nil {
 		return nil, err
@@ -410,9 +468,29 @@ func decodeAuthenticationSnapshot(snapshotBytes []byte, deviceID string) ([]byte
 	})
 }
 
+// snapshotAuthenticationServer resolves the endpoint a snapshot belongs to.
+// v1 snapshots predate the custom-server option and only ever targeted the
+// ZJU endpoint; v2 snapshots carry their server inline and must be valid.
+func snapshotAuthenticationServer(snapshot authenticationSnapshot) (string, int, error) {
+	switch snapshot.SchemaVersion {
+	case 1:
+		return zjuAtrustServer, zjuAtrustServerPort, nil
+	case authenticationSnapshotSchemaVersion:
+		if snapshot.Server == "" || snapshot.Port == 0 {
+			return "", 0, fmt.Errorf("authentication snapshot server is missing")
+		}
+		if err := validateAuthenticationServer(snapshot.Server, snapshot.Port); err != nil {
+			return "", 0, err
+		}
+		return snapshot.Server, snapshot.Port, nil
+	default:
+		return "", 0, fmt.Errorf("unsupported authentication snapshot version")
+	}
+}
+
 func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
-	if snapshot.SchemaVersion != authenticationSnapshotSchemaVersion {
-		return fmt.Errorf("unsupported authentication snapshot version")
+	if _, _, err := snapshotAuthenticationServer(snapshot); err != nil {
+		return err
 	}
 	if err := validateDeviceID(snapshot.DeviceID); err != nil {
 		return err
@@ -420,7 +498,11 @@ func validateAuthenticationSnapshot(snapshot authenticationSnapshot) error {
 	if len(snapshot.Cookies) == 0 || len(snapshot.Cookies) > 64 {
 		return fmt.Errorf("cookie count is invalid")
 	}
-	expectedHost := net.JoinHostPort(zjuAtrustServer, fmt.Sprint(zjuAtrustServerPort))
+	server, port, err := snapshotAuthenticationServer(snapshot)
+	if err != nil {
+		return err
+	}
+	expectedHost := net.JoinHostPort(server, fmt.Sprint(port))
 	hasSID := false
 	for _, cookie := range snapshot.Cookies {
 		if cookie.Host != expectedHost || cookie.Scheme != "https" || cookie.Name == "" || cookie.Value == "" {
@@ -444,6 +526,65 @@ func validateDeviceID(deviceID string) error {
 		return fmt.Errorf("device ID is invalid")
 	}
 	return nil
+}
+
+// resolveAuthenticationServer maps an optional client-supplied target onto the
+// effective aTrust endpoint. Empty values keep the ZJU production endpoint, so
+// callers that predate the experimental custom-server setting stay valid.
+func resolveAuthenticationServer(server string, port int) (string, int, error) {
+	if server == "" && port == 0 {
+		return zjuAtrustServer, zjuAtrustServerPort, nil
+	}
+	if err := validateAuthenticationServer(server, port); err != nil {
+		return "", 0, err
+	}
+	return server, port, nil
+}
+
+// validateAuthenticationServer accepts only a bare host (hostname, IPv4 or
+// IPv6 literal) and a concrete port. Schemes, paths, credentials, and
+// whitespace are rejected: the custom-server option points the aTrust client
+// at another aTrust endpoint, not at an arbitrary URL.
+func validateAuthenticationServer(server string, port int) error {
+	if server == "" {
+		return fmt.Errorf("server host is required")
+	}
+	if len(server) > 253 {
+		return fmt.Errorf("server host is too long")
+	}
+	host := server
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if net.ParseIP(host) == nil && !isHostnameLabelChain(host) {
+		return fmt.Errorf("server host is not a hostname or IP address")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("server port is out of range")
+	}
+	return nil
+}
+
+func isHostnameLabelChain(host string) bool {
+	// A trailing dot is a legal root-of-DNS notation; validate without it.
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) < 1 || len(label) > 63 {
+			return false
+		}
+		for index, char := range label {
+			switch {
+			case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+			case char == '-' && index != 0 && index != len(label)-1:
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var errAuthenticationCancelled = errors.New("authentication coordinator cancelled")
@@ -596,18 +737,38 @@ func (c *authenticationCoordinator) selectMethod(authType, loginDomain string) e
 		Stage:         "auth.select_method",
 		Type:          "credentialsRequired",
 	}
+	// cas/httpsOauth2 need no local input: their Login implementation drives
+	// the ExternalLogin challenge, whose callback URL the user supplies.
+	externalSSO := false
 	switch selected.AuthType {
 	case "auth/psw":
 	case "auth/smsCheckCode":
 		event.Type = "phoneRequired"
 		event.State = "awaitingPhone"
 		event.Message = "Enter the phone number registered for this method"
+	case "auth/cas", "auth/httpsOauth2":
+		externalSSO = true
+		event.Type = "authMethodStarted"
+		event.State = "authenticating"
+		event.Message = "Continue this login in your browser"
 	default:
 		return fmt.Errorf("unsupported authentication method")
 	}
 	go func() {
-		if c.active() {
-			emitAuthenticationEvent(c.listener, event)
+		if !c.active() {
+			return
+		}
+		emitAuthenticationEvent(c.listener, event)
+		if externalSSO {
+			method, err := auth.NewLoginMethod(auth.LoginMethodOptions{
+				AuthType: selected.AuthType,
+				Domain:   selected.LoginDomain,
+			})
+			if err != nil {
+				emitAuthenticationEvent(c.listener, authenticationFailure(event.Stage, 0, err))
+				return
+			}
+			c.login(method, event.Stage)
 		}
 	}()
 	return nil
@@ -702,6 +863,8 @@ func (c *authenticationCoordinator) completeLogin(loginResult auth.LoginResult, 
 		SID:          loginResult.SID,
 		AuthData:     authData,
 		ResourceData: resourceData,
+		Server:       c.server,
+		Port:         c.port,
 	}
 	if !cacheAuthenticatedResultForCoordinator(c, result) {
 		clearAuthenticatedResult(&result)
@@ -848,6 +1011,18 @@ func (c *authenticationCoordinator) submitChallenge(action, raw string) error {
 			points = append(points, authchallenge.Point{X: pair[0], Y: pair[1]})
 		}
 		response.captcha = authchallenge.ClickCaptchaResponse{Points: points, Width: payload.Width, Height: payload.Height}
+	case "submitTextCaptcha":
+		response.code = strings.TrimSpace(raw)
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("captcha code is required")
+		}
+	case "submitExternalLogin":
+		response.code = strings.TrimSpace(raw)
+		if response.code == "" {
+			c.mu.Unlock()
+			return fmt.Errorf("callback URL is required")
+		}
 	default:
 		c.mu.Unlock()
 		return fmt.Errorf("unsupported authentication challenge response")
@@ -868,10 +1043,15 @@ func (c *authenticationCoordinator) submitChallenge(action, raw string) error {
 func (c *authenticationCoordinator) pendingCaptchaImage() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.pending == nil || c.pending.action != "submitCaptcha" || c.pending.ctx.Err() != nil {
+	if c.pending == nil || c.pending.ctx.Err() != nil {
 		return nil
 	}
-	return append([]byte(nil), c.pending.image...)
+	switch c.pending.action {
+	case "submitCaptcha", "submitTextCaptcha":
+		return append([]byte(nil), c.pending.image...)
+	default:
+		return nil
+	}
 }
 
 func (c *authenticationCoordinator) HandleCodeChallenge(challenge authchallenge.CodeChallenge) (authchallenge.CodeResponse, error) {
@@ -924,12 +1104,50 @@ func (c *authenticationCoordinator) HandleClickCaptcha(challenge authchallenge.C
 	return response.captcha, err
 }
 
-func (c *authenticationCoordinator) HandleTextCaptcha(authchallenge.TextCaptchaChallenge) (authchallenge.TextCaptchaResponse, error) {
-	return authchallenge.TextCaptchaResponse{}, fmt.Errorf("unsupported text captcha challenge")
+func (c *authenticationCoordinator) HandleTextCaptcha(challenge authchallenge.TextCaptchaChallenge) (authchallenge.TextCaptchaResponse, error) {
+	event := authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "textCaptchaRequired",
+		State:         "awaitingTextCaptcha",
+		Message:       "Enter the characters shown in the verification image",
+	}
+	if challenge.Message != "" {
+		event.Message = challenge.Message
+	}
+	if len(challenge.Image) > 0 {
+		config, _, err := image.DecodeConfig(bytes.NewReader(challenge.Image))
+		if err != nil {
+			return authchallenge.TextCaptchaResponse{}, fmt.Errorf("decode captcha image: %w", err)
+		}
+		event.CaptchaWidth = config.Width
+		event.CaptchaHeight = config.Height
+	}
+	pending, err := c.beginChallenge("submitTextCaptcha", event, challenge.Image)
+	if err != nil {
+		return authchallenge.TextCaptchaResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return authchallenge.TextCaptchaResponse{Code: response.code}, err
 }
 
 func (c *authenticationCoordinator) HandleExternalLogin(challenge authchallenge.ExternalLoginChallenge) (authchallenge.ExternalLoginResponse, error) {
-	return authchallenge.ExternalLoginResponse{}, fmt.Errorf("unsupported external login challenge: %s", challenge.Kind)
+	kind := string(challenge.Kind)
+	if kind == "" {
+		return authchallenge.ExternalLoginResponse{}, fmt.Errorf("external login challenge is missing its kind")
+	}
+	pending, err := c.beginChallenge("submitExternalLogin", authenticationEvent{
+		SchemaVersion: schemaVersion,
+		Type:          "externalLoginRequired",
+		State:         "awaitingExternalLogin",
+		Message:       "Finish the login in your browser, then paste the final callback URL",
+		ChallengeKind: kind,
+		LoginURL:      challenge.LoginURL,
+	}, nil)
+	if err != nil {
+		return authchallenge.ExternalLoginResponse{}, err
+	}
+	response, err := c.waitForChallenge(pending)
+	return authchallenge.ExternalLoginResponse{CallbackURL: response.code}, err
 }
 
 func sessionRestoreFailure(duration time.Duration, err error) authenticationEvent {
@@ -1118,4 +1336,87 @@ func marshal(value any) string {
 		return fmt.Sprintf("{\"schemaVersion\":%d,\"type\":\"error\",\"code\":\"serializationFailed\",\"message\":\"Unable to encode Go bridge response\"}", schemaVersion)
 	}
 	return string(encoded)
+}
+
+// ---- aTrust data-plane resource matching ----
+//
+// Mirrors upstream internal/ipresource matching (which this module cannot
+// import: internal packages are module-private). First listed resource wins;
+// "all" matches any protocol; ICMP ignores ports.
+
+func realVpnIPv4Uint32(ip net.IP) (uint32, bool) {
+	ip = ip.To4()
+	if ip == nil {
+		return 0, false
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3]), true
+}
+
+func matchRealVpnIPResource(
+	resources []client.IPResource,
+	destination net.IP,
+	protocol string,
+	port int,
+) (client.IPResource, bool) {
+	destinationValue, ok := realVpnIPv4Uint32(destination)
+	if !ok {
+		return client.IPResource{}, false
+	}
+	for _, resource := range resources {
+		start, startOK := realVpnIPv4Uint32(resource.IPMin)
+		end, endOK := realVpnIPv4Uint32(resource.IPMax)
+		if !startOK || !endOK || destinationValue < start || destinationValue > end {
+			continue
+		}
+		if resource.Protocol != protocol && resource.Protocol != "all" {
+			continue
+		}
+		if protocol != "icmp" && (port < resource.PortMin || port > resource.PortMax) {
+			continue
+		}
+		return resource, true
+	}
+	return client.IPResource{}, false
+}
+
+// shouldUseTCPTunnelFor reports whether an outbound TCP flow must use the
+// TCP tunnel instead of the raw L3 tunnel: the server did not mark the
+// matching resource as TCP-over-L3 (EnableTCPPrefL3), so the L3 writer would
+// refuse it, and the client supports the TCP tunnel.
+func shouldUseTCPTunnelFor(
+	resources []client.IPResource,
+	canUseTCPTunnel bool,
+	destination net.IP,
+	port int,
+) bool {
+	if !canUseTCPTunnel {
+		return false
+	}
+	resource, matched := matchRealVpnIPResource(resources, destination, "tcp", port)
+	return matched && !resource.EnableTCPPrefL3
+}
+
+// realVpnTCPTunnelDecision parses one outbound IPv4 packet and decides
+// whether the realVpnTCPBridge must take the flow over. Non-TCP packets and
+// anything malformed report useTunnel=false and keep the L3 path.
+func realVpnTCPTunnelDecision(
+	packet []byte,
+	resources []client.IPResource,
+	canUseTCPTunnel bool,
+) (destination net.IP, port int, useTunnel bool) {
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return nil, 0, false
+	}
+	// IPv4 protocol byte 9: TCP is 6.
+	if packet[9] != 6 {
+		return nil, 0, false
+	}
+	ihl := int(packet[0]&0x0f) * 4
+	if ihl < 20 || len(packet) < ihl+4 {
+		return nil, 0, false
+	}
+	destination = net.IPv4(packet[16], packet[17], packet[18], packet[19])
+	port = int(uint16(packet[ihl+2])<<8 | uint16(packet[ihl+3]))
+	useTunnel = shouldUseTCPTunnelFor(resources, canUseTCPTunnel, destination, port)
+	return destination, port, useTunnel
 }

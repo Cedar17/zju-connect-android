@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mythologyli/zju-connect/client"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/client/authchallenge"
 )
@@ -56,13 +57,81 @@ func (l *recordingListener) waitForType(t *testing.T, eventType string) authenti
 func TestStartAuthenticationValidatesEndpointWithoutNetworking(t *testing.T) {
 	defer CancelAuthentication()
 
-	result := StartAuthentication(`{"server":"example.com","port":443}`, &recordingListener{})
+	tests := []string{
+		`{"server":"https://example.com","port":443}`,
+		`{"server":"example.com/path","port":443}`,
+		`{"server":"example.com","port":0}`,
+		`{"server":"example.com","port":70000}`,
+		`{"server":"","port":443}`,
+		`{"server":"under_score.example","port":443}`,
+	}
+	for _, request := range tests {
+		result := StartAuthentication(request, &recordingListener{})
+		var response authInfoResponse
+		if err := json.Unmarshal([]byte(result), &response); err != nil {
+			t.Fatalf("StartAuthentication(%s) returned invalid JSON: %v", request, err)
+		}
+		if response.Code != "invalidRequest" {
+			t.Errorf("StartAuthentication(%s) code = %q, want invalidRequest", request, response.Code)
+		}
+	}
+}
+
+func TestStartAuthenticationAcceptsExperimentalCustomServer(t *testing.T) {
+	defer CancelAuthentication()
+	ClearAuthenticatedResult()
+	t.Cleanup(ClearAuthenticatedResult)
+
+	previous := newUpstreamAuthSession
+	t.Cleanup(func() { newUpstreamAuthSession = previous })
+	var capturedServer string
+	newUpstreamAuthSession = func(ctx context.Context, server string) upstreamAuthSession {
+		capturedServer = server
+		return &fakeAuthSession{}
+	}
+
+	result := StartAuthentication(
+		`{"server":"atrust.example.edu","port":8443,"deviceId":"0123456789abcdef0123456789abcdef"}`,
+		&recordingListener{},
+	)
 	var response authInfoResponse
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
 		t.Fatalf("StartAuthentication returned invalid JSON: %v", err)
 	}
-	if response.Code != "invalidRequest" {
-		t.Errorf("code = %q, want invalidRequest", response.Code)
+	if response.Type != "authenticationStarted" {
+		t.Fatalf("custom server was not accepted: %s", result)
+	}
+	if capturedServer != "atrust.example.edu:8443" {
+		t.Fatalf("upstream session server = %q, want atrust.example.edu:8443", capturedServer)
+	}
+}
+
+func TestStartAuthenticationDefaultsEmptyServerToZju(t *testing.T) {
+	defer CancelAuthentication()
+	ClearAuthenticatedResult()
+	t.Cleanup(ClearAuthenticatedResult)
+
+	previous := newUpstreamAuthSession
+	t.Cleanup(func() { newUpstreamAuthSession = previous })
+	var capturedServer string
+	newUpstreamAuthSession = func(ctx context.Context, server string) upstreamAuthSession {
+		capturedServer = server
+		return &fakeAuthSession{}
+	}
+
+	result := StartAuthentication(
+		`{"deviceId":"0123456789abcdef0123456789abcdef"}`,
+		&recordingListener{},
+	)
+	var response authInfoResponse
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		t.Fatalf("StartAuthentication returned invalid JSON: %v", err)
+	}
+	if response.Type != "authenticationStarted" {
+		t.Fatalf("default server was not accepted: %s", result)
+	}
+	if capturedServer != net.JoinHostPort(zjuAtrustServer, fmt.Sprint(zjuAtrustServerPort)) {
+		t.Fatalf("upstream session server = %q, want the ZJU default", capturedServer)
 	}
 }
 
@@ -231,6 +300,9 @@ func TestCoordinatorUsesUpstreamLoginAndBuildsReusableResult(t *testing.T) {
 	if authenticated.Username != "student" || !HasReusableAuthenticatedResult() {
 		t.Fatalf("authenticated event/result = %#v, reusable=%v", authenticated, HasReusableAuthenticatedResult())
 	}
+	if cached, ok := currentAuthenticatedResult(); !ok || cached.Server != zjuAtrustServer || cached.Port != zjuAtrustServerPort {
+		t.Fatalf("cached result server = %#v (ok=%v), want the coordinator endpoint", cached, ok)
+	}
 	call := <-loginCall
 	if call.authType != "auth/psw" || call.domain != "default" || call.handler != coordinator {
 		t.Fatalf("upstream login call = %#v", call)
@@ -364,6 +436,116 @@ func TestClickCaptchaUsesExistingCoordinateSubmission(t *testing.T) {
 	}
 }
 
+func TestTextCaptchaUsesImageAndCodeSubmission(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	imageBuffer := new(bytes.Buffer)
+	pixels := image.NewRGBA(image.Rect(0, 0, 24, 12))
+	pixels.Set(2, 2, color.White)
+	if err := png.Encode(imageBuffer, pixels); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan authchallenge.TextCaptchaResponse, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleTextCaptcha(authchallenge.TextCaptchaChallenge{
+			Image:   imageBuffer.Bytes(),
+			Message: "Type the characters",
+		})
+		result <- response
+		errResult <- err
+	}()
+	event := listener.waitForType(t, "textCaptchaRequired")
+	if event.CaptchaWidth != 24 || event.CaptchaHeight != 12 || len(coordinator.pendingCaptchaImage()) == 0 {
+		t.Fatalf("text captcha event/image = %#v, bytes=%d", event, len(coordinator.pendingCaptchaImage()))
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitTextCaptcha","captcha":" a1b2 "}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("text captcha submission was not accepted: %s", accepted)
+	}
+	if err := <-errResult; err != nil {
+		t.Fatal(err)
+	}
+	response := <-result
+	if response.Code != "a1b2" {
+		t.Fatalf("text captcha code = %q, want a1b2", response.Code)
+	}
+	if coordinator.pendingCaptchaImage() != nil {
+		t.Fatal("text captcha image survived the completed challenge")
+	}
+}
+
+func TestExternalLoginRoundTripsCallbackURL(t *testing.T) {
+	coordinator, listener := installTestCoordinator(t, &fakeAuthSession{})
+	result := make(chan authchallenge.ExternalLoginResponse, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		response, err := coordinator.HandleExternalLogin(authchallenge.ExternalLoginChallenge{
+			Kind:     authchallenge.ExternalLoginCAS,
+			LoginURL: "https://sso.example.edu/cas/login",
+		})
+		result <- response
+		errResult <- err
+	}()
+	event := listener.waitForType(t, "externalLoginRequired")
+	if event.ChallengeKind != "cas" || event.LoginURL != "https://sso.example.edu/cas/login" {
+		t.Fatalf("external login event = %#v", event)
+	}
+	if accepted := SubmitAuthentication(`{"action":"submitExternalLogin","callbackUrl":"https://vpn.zju.edu.cn/cas-callback?ticket=ST-1"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("external login submission was not accepted: %s", accepted)
+	}
+	if err := <-errResult; err != nil {
+		t.Fatal(err)
+	}
+	response := <-result
+	if response.CallbackURL != "https://vpn.zju.edu.cn/cas-callback?ticket=ST-1" {
+		t.Fatalf("callback URL = %q", response.CallbackURL)
+	}
+}
+
+func TestSSOMethodStartsLoginAndDrivesExternalLogin(t *testing.T) {
+	const expectedTicket = "https://vpn.zju.edu.cn/cas-callback?ticket=ST-42"
+	receivedCallback := make(chan string, 1)
+	session := &fakeAuthSession{
+		methods: []auth.AuthInfo{{AuthType: "auth/cas", LoginDomain: "default", AuthName: "CAS"}},
+		login: func(method auth.LoginMethod, options auth.LoginOptions) (auth.LoginResult, error) {
+			response, err := options.ChallengeHandler.HandleExternalLogin(authchallenge.ExternalLoginChallenge{
+				Kind:     authchallenge.ExternalLoginCAS,
+				LoginURL: "https://sso.example.edu/cas/login",
+			})
+			if err != nil {
+				return auth.LoginResult{}, err
+			}
+			receivedCallback <- response.CallbackURL
+			return auth.LoginResult{
+				Username: "student",
+				SID:      "sso-session-id",
+				Cookies: []auth.Cookie{{
+					Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "sso-cookie",
+				}},
+			}, nil
+		},
+		resourceData: []byte(`{"resource":"opaque"}`),
+	}
+	coordinator, listener := installTestCoordinator(t, session)
+	coordinator.running = true
+	coordinator.fetchAuthMethods("")
+	listener.waitForType(t, "authMethodsReady")
+
+	if err := coordinator.selectMethod("auth/cas", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if started := listener.waitForType(t, "authMethodStarted"); started.State != "authenticating" {
+		t.Fatalf("authMethodStarted event = %#v", started)
+	}
+	listener.waitForType(t, "externalLoginRequired")
+	if accepted := SubmitAuthentication(`{"action":"submitExternalLogin","callbackUrl":"` + expectedTicket + `"}`); !strings.Contains(accepted, `"type":"responseAccepted"`) {
+		t.Fatalf("external login submission was not accepted: %s", accepted)
+	}
+	listener.waitForType(t, "authenticated")
+	if callback := <-receivedCallback; callback != expectedTicket {
+		t.Fatalf("login callback = %q, want %q", callback, expectedTicket)
+	}
+}
+
 func TestAuthenticationFailureIsRedacted(t *testing.T) {
 	secret := "session-cookie-and-password"
 	event := authenticationFailure("auth.config", 0, fmt.Errorf("x509: certificate rejected: %s", secret))
@@ -409,7 +591,7 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 		t.Fatalf("Marshal auth data: %v", err)
 	}
 
-	encoded, err := encodeAuthenticationSnapshot(authData)
+	encoded, err := encodeAuthenticationSnapshot(authData, zjuAtrustServer, zjuAtrustServerPort)
 	if err != nil {
 		t.Fatalf("encodeAuthenticationSnapshot: %v", err)
 	}
@@ -417,7 +599,7 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 	if err := json.Unmarshal(encoded, &snapshot); err != nil {
 		t.Fatalf("Unmarshal snapshot: %v", err)
 	}
-	for _, required := range []string{"schemaVersion", "deviceId", "cookies"} {
+	for _, required := range []string{"schemaVersion", "deviceId", "cookies", "server", "port"} {
 		if _, ok := snapshot[required]; !ok {
 			t.Errorf("snapshot omitted %q", required)
 		}
@@ -429,7 +611,7 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 	}
 
 	const currentDeviceID = "11111111111111111111111111111111"
-	decoded, err := decodeAuthenticationSnapshot(encoded, currentDeviceID)
+	decoded, err := decodeAuthenticationSnapshot(encoded, currentDeviceID, zjuAtrustServer, zjuAtrustServerPort)
 	if err != nil {
 		t.Fatalf("decodeAuthenticationSnapshot: %v", err)
 	}
@@ -445,14 +627,124 @@ func TestAuthenticationSnapshotContainsOnlyMinimumState(t *testing.T) {
 func TestAuthenticationSnapshotRejectsInvalidScopeAndVersion(t *testing.T) {
 	tests := []authenticationSnapshot{
 		{SchemaVersion: 2, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 2, Server: "atrust.example.edu", Cookies: []auth.Cookie{{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 2, Server: "atrust.example.edu", Port: 70000, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "value"}}},
+		{SchemaVersion: 2, Server: "https://atrust.example.edu", Port: 8443, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "value"}}},
 		{SchemaVersion: 1, DeviceID: "not-a-device-id", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}}},
 		{SchemaVersion: 1, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "example.com:443", Scheme: "https", Name: "sid", Value: "value"}}},
 		{SchemaVersion: 1, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid.sig", Value: "value"}}},
+		{SchemaVersion: 3, DeviceID: "0123456789abcdef0123456789abcdef", Cookies: []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}}},
 	}
 	for _, snapshot := range tests {
 		if err := validateAuthenticationSnapshot(snapshot); err == nil {
 			t.Errorf("invalid snapshot accepted: %#v", snapshot)
 		}
+	}
+	valid := authenticationSnapshot{
+		SchemaVersion: 2,
+		Server:        "atrust.example.edu",
+		Port:          8443,
+		DeviceID:      "0123456789abcdef0123456789abcdef",
+		Cookies:       []auth.Cookie{{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "value"}},
+	}
+	if err := validateAuthenticationSnapshot(valid); err != nil {
+		t.Errorf("valid custom-server snapshot rejected: %v", err)
+	}
+	legacy := authenticationSnapshot{
+		SchemaVersion: 1,
+		DeviceID:      "0123456789abcdef0123456789abcdef",
+		Cookies:       []auth.Cookie{{Host: "vpn.zju.edu.cn:443", Scheme: "https", Name: "sid", Value: "value"}},
+	}
+	if err := validateAuthenticationSnapshot(legacy); err != nil {
+		t.Errorf("valid legacy snapshot rejected: %v", err)
+	}
+}
+
+func TestSnapshotServerMismatchIsDetectable(t *testing.T) {
+	authData, err := json.Marshal(auth.ClientAuthData{
+		DeviceID: "0123456789abcdef0123456789abcdef",
+		Cookies: []auth.Cookie{
+			{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "session-cookie"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal auth data: %v", err)
+	}
+	encoded, err := encodeAuthenticationSnapshot(authData, "atrust.example.edu", 8443)
+	if err != nil {
+		t.Fatalf("encodeAuthenticationSnapshot: %v", err)
+	}
+
+	if _, err := decodeAuthenticationSnapshot(encoded, "0123456789abcdef0123456789abcdef", "atrust.example.edu", 8443); err != nil {
+		t.Fatalf("same-server decode failed: %v", err)
+	}
+	_, err = decodeAuthenticationSnapshot(encoded, "0123456789abcdef0123456789abcdef", zjuAtrustServer, zjuAtrustServerPort)
+	if !errors.Is(err, errSnapshotServerMismatch) {
+		t.Fatalf("cross-server decode error = %v, want errSnapshotServerMismatch", err)
+	}
+}
+
+func TestLegacySnapshotOnlyMatchesZjuServer(t *testing.T) {
+	// v1 snapshots never carried a server and only ever targeted ZJU.
+	legacy := []byte(`{
+		"schemaVersion":1,
+		"deviceId":"0123456789abcdef0123456789abcdef",
+		"cookies":[{"host":"vpn.zju.edu.cn:443","scheme":"https","name":"sid","value":"session-cookie"}]
+	}`)
+	deviceID := "0123456789abcdef0123456789abcdef"
+	if _, err := decodeAuthenticationSnapshot(legacy, deviceID, zjuAtrustServer, zjuAtrustServerPort); err != nil {
+		t.Fatalf("legacy snapshot rejected for the ZJU server: %v", err)
+	}
+	if _, err := decodeAuthenticationSnapshot(legacy, deviceID, "atrust.example.edu", 8443); !errors.Is(err, errSnapshotServerMismatch) {
+		t.Fatalf("legacy snapshot accepted for another server: %v", err)
+	}
+}
+
+func TestAuthenticationServerValidation(t *testing.T) {
+	valid := []struct {
+		server string
+		port   int
+	}{
+		{zjuAtrustServer, zjuAtrustServerPort},
+		{"atrust.example.edu", 8443},
+		{"10.10.0.1", 8080},
+		{"::1", 443},
+		{"[::1]", 443},
+		{"host-1.example.", 443},
+	}
+	for _, target := range valid {
+		if err := validateAuthenticationServer(target.server, target.port); err != nil {
+			t.Errorf("validateAuthenticationServer(%q, %d) rejected: %v", target.server, target.port, err)
+		}
+	}
+
+	invalid := []struct {
+		server string
+		port   int
+	}{
+		{"", 443},
+		{"https://vpn.example.edu", 443},
+		{"vpn.example.edu/path", 443},
+		{"vpn example", 443},
+		{"under_score.example", 443},
+		{"-leading.example", 443},
+		{"vpn.example.edu", 0},
+		{"vpn.example.edu", 65536},
+		{"vpn.example.edu", -1},
+		{strings.Repeat("a", 254), 443},
+	}
+	for _, target := range invalid {
+		if err := validateAuthenticationServer(target.server, target.port); err == nil {
+			t.Errorf("validateAuthenticationServer(%q, %d) accepted", target.server, target.port)
+		}
+	}
+
+	server, port, err := resolveAuthenticationServer("", 0)
+	if err != nil || server != zjuAtrustServer || port != zjuAtrustServerPort {
+		t.Fatalf("resolveAuthenticationServer default = %q, %d, %v", server, port, err)
+	}
+	if _, _, err := resolveAuthenticationServer("vpn.example.edu", 443); err != nil {
+		t.Fatalf("resolveAuthenticationServer custom = %v", err)
 	}
 }
 
@@ -546,13 +838,58 @@ func TestCoordinatorContinuesStaleRestoredSessionInSameContext(t *testing.T) {
 }
 
 func TestResumeAuthenticationRejectsMalformedSnapshotWithoutNetworking(t *testing.T) {
-	result := ResumeAuthentication([]byte(`{"schemaVersion":1}`), "0123456789abcdef0123456789abcdef", &recordingListener{})
+	result := ResumeAuthentication([]byte(`{"schemaVersion":1}`), "0123456789abcdef0123456789abcdef", "", 0, &recordingListener{})
 	var response authInfoResponse
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
 		t.Fatalf("ResumeAuthentication returned invalid JSON: %v", err)
 	}
 	if response.Code != "invalidSession" {
 		t.Fatalf("ResumeAuthentication code = %q, want invalidSession", response.Code)
+	}
+}
+
+func TestResumeAuthenticationRejectsSnapshotFromDifferentServer(t *testing.T) {
+	authData, err := json.Marshal(auth.ClientAuthData{
+		DeviceID: "0123456789abcdef0123456789abcdef",
+		Cookies: []auth.Cookie{
+			{Host: "atrust.example.edu:8443", Scheme: "https", Name: "sid", Value: "session-cookie"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal auth data: %v", err)
+	}
+	encoded, err := encodeAuthenticationSnapshot(authData, "atrust.example.edu", 8443)
+	if err != nil {
+		t.Fatalf("encodeAuthenticationSnapshot: %v", err)
+	}
+
+	deviceID := "0123456789abcdef0123456789abcdef"
+	mismatch := ResumeAuthentication(encoded, deviceID, zjuAtrustServer, zjuAtrustServerPort, &recordingListener{})
+	var response authInfoResponse
+	if err := json.Unmarshal([]byte(mismatch), &response); err != nil {
+		t.Fatalf("ResumeAuthentication returned invalid JSON: %v", err)
+	}
+	if response.Code != "serverMismatch" {
+		t.Fatalf("ResumeAuthentication code = %q, want serverMismatch", response.Code)
+	}
+
+	defer CancelAuthentication()
+	ClearAuthenticatedResult()
+	t.Cleanup(func() {
+		CancelAuthentication()
+		ClearAuthenticatedResult()
+	})
+	previous := newUpstreamAuthSession
+	t.Cleanup(func() { newUpstreamAuthSession = previous })
+	newUpstreamAuthSession = func(ctx context.Context, server string) upstreamAuthSession {
+		return &fakeAuthSession{}
+	}
+	accepted := ResumeAuthentication(encoded, deviceID, "atrust.example.edu", 8443, &recordingListener{})
+	if err := json.Unmarshal([]byte(accepted), &response); err != nil {
+		t.Fatalf("ResumeAuthentication returned invalid JSON: %v", err)
+	}
+	if response.Type != "sessionRestoreStarted" {
+		t.Fatalf("same-server resume = %s, want sessionRestoreStarted", accepted)
 	}
 }
 
@@ -659,5 +996,99 @@ func TestRealVpnLifecycleCountersContainNoAuthenticationOrPacketFields(t *testin
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("diagnostic event contained forbidden value %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestMatchRealVpnIPResourceMirrorsUpstreamSemantics(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 32, 39, 83), IPMax: net.IPv4(10, 32, 39, 83), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "tcp", PortMin: 443, PortMax: 443, EnableTCPPrefL3: false},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "udp", PortMin: 53, PortMax: 53, EnableTCPPrefL3: false},
+	}
+
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(10, 32, 39, 83), "tcp", 443); !ok {
+		t.Fatal("exact /32 resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "tcp", 443); !ok {
+		t.Fatal("tcp/443 range resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "tcp", 80); ok {
+		t.Fatal("tcp/80 matched a 443-only resource")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(172, 21, 1, 2), "udp", 53); !ok {
+		t.Fatal("udp/53 resource did not match")
+	}
+	if _, ok := matchRealVpnIPResource(resources, net.IPv4(192, 0, 2, 1), "tcp", 443); ok {
+		t.Fatal("unlisted destination matched a resource")
+	}
+}
+
+func TestShouldUseTCPTunnelForMatchesNonPrefL3Resources(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 0, 0, 0), IPMax: net.IPv4(10, 255, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: false},
+	}
+
+	if shouldUseTCPTunnelFor(resources, true, net.IPv4(10, 1, 2, 3), 443) {
+		t.Fatal("prefL3 resource must keep the raw L3 tunnel")
+	}
+	if !shouldUseTCPTunnelFor(resources, true, net.IPv4(172, 21, 1, 2), 8443) {
+		t.Fatal("non-prefL3 resource must use the TCP tunnel")
+	}
+	if shouldUseTCPTunnelFor(resources, false, net.IPv4(172, 21, 1, 2), 8443) {
+		t.Fatal("without TCP tunnel support the flow must stay on the L3 path")
+	}
+	if shouldUseTCPTunnelFor(resources, true, net.IPv4(192, 0, 2, 9), 8443) {
+		t.Fatal("unlisted destinations must not enter the TCP bridge")
+	}
+}
+
+func TestRealVpnTCPTunnelDecisionParsesAndRoutes(t *testing.T) {
+	resources := []client.IPResource{
+		{IPMin: net.IPv4(10, 32, 39, 83), IPMax: net.IPv4(10, 32, 39, 83), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: true},
+		{IPMin: net.IPv4(172, 21, 0, 0), IPMax: net.IPv4(172, 21, 255, 255), Protocol: "all", PortMin: 1, PortMax: 65535, EnableTCPPrefL3: false},
+	}
+
+	buildPacket := func(protocol byte, dest [4]byte, destPort uint16, ihlWords byte) []byte {
+		ihl := int(ihlWords) * 4
+		packet := make([]byte, ihl+20)
+		packet[0] = 0x40 | ihlWords
+		packet[9] = protocol
+		copy(packet[16:20], dest[:])
+		// TCP destination port sits at payload offset 2.
+		packet[ihl+2] = byte(destPort >> 8)
+		packet[ihl+3] = byte(destPort)
+		return packet
+	}
+
+	// TCP SYN to a non-prefL3 resource: the bridge takes it over.
+	packet := buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 5)
+	dest, port, useTunnel := realVpnTCPTunnelDecision(packet, resources, true)
+	if !useTunnel || dest.String() != "172.21.1.2" || port != 8443 {
+		t.Fatalf("decision = %s:%d %v, want 172.21.1.2:8443 true", dest, port, useTunnel)
+	}
+
+	// TCP to a prefL3 resource stays on the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{10, 32, 39, 83}, 443, 5), resources, true); use {
+		t.Fatal("prefL3 TCP must not enter the bridge")
+	}
+
+	// UDP never enters the bridge.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(17, [4]byte{172, 21, 1, 2}, 53, 5), resources, true); use {
+		t.Fatal("UDP must not enter the bridge")
+	}
+
+	// Truncated and malformed packets keep the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(packet[:12], resources, true); use {
+		t.Fatal("truncated packet must not enter the bridge")
+	}
+	// A packet truncated mid-header keeps the L3 path.
+	if _, _, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 15)[:40], resources, true); use {
+		t.Fatal("packet truncated inside its options must not enter the bridge")
+	}
+
+	// Custom IHL (IPv4 options) still locates the TCP port.
+	if dest, port, use := realVpnTCPTunnelDecision(buildPacket(6, [4]byte{172, 21, 1, 2}, 8443, 6), resources, true); !use || port != 8443 || dest.String() != "172.21.1.2" {
+		t.Fatalf("options-bearing packet decision = %s:%d %v", dest, port, use)
 	}
 }

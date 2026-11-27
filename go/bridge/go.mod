@@ -2,7 +2,10 @@ module github.com/Cedar17/zju-connect-android/go/bridge
 
 go 1.25.6
 
-require github.com/mythologyli/zju-connect v1.3.2-0.20261008095431-c19eb4ed34b9
+require (
+	github.com/mythologyli/zju-connect v1.3.2-0.20261008095431-c19eb4ed34b9
+	gvisor.dev/gvisor v0.0.0-20260129214308-cb856800aa1c
+)
 
 require (
 	github.com/boombuler/barcode v1.1.0 // indirect
@@ -36,7 +39,6 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20260129214308-cb856800aa1c // indirect
 	inet.af/netaddr v0.0.0-20230525184311-b8eac61e914a // indirect
 )
 

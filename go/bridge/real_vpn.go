@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +19,14 @@ import (
 	"github.com/mythologyli/zju-connect/client/atrust"
 	"github.com/mythologyli/zju-connect/client/atrust/auth"
 	"github.com/mythologyli/zju-connect/stack/tun"
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	gvisorstack "gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/waiter"
 )
 
 const (
@@ -26,9 +35,8 @@ const (
 	// l3Conn implements io.Reader by copying one complete server packet into
 	// the caller's buffer. A buffer limited to the interface MTU silently
 	// truncates any larger packet because that reader cannot report
-	// io.ErrShortBuffer. Keep the TUN MTU at 1400, but retain a complete IPv4
-	// packet here so a write failure is attributable to Android rather than a
-	// locally corrupted packet.
+	// io.ErrShortBuffer. Retain the complete IPv4 packet so a write failure
+	// is attributable to Android rather than a locally corrupted packet.
 	realVpnInboundBufferSize = 65535
 )
 
@@ -51,6 +59,7 @@ type realVpnPreparedEvent struct {
 	Address             string                      `json:"address,omitempty"`
 	MTU                 int                         `json:"mtu,omitempty"`
 	Routes              []realVpnRoute              `json:"routes,omitempty"`
+	DnsServers          []string                    `json:"dnsServers,omitempty"`
 	Diagnostics         *realVpnDiagnosticsSnapshot `json:"diagnostics,omitempty"`
 }
 
@@ -64,6 +73,10 @@ type realVpnSession struct {
 	stopOnce    sync.Once
 	emitMu      sync.Mutex
 	diagnostics realVpnDiagnostics
+	ipResources []client.IPResource
+	tcpBridge   *realVpnTCPBridge
+	dnsServers  []string
+	mtu         int
 }
 
 type preparedRealVpn struct {
@@ -72,6 +85,8 @@ type preparedRealVpn struct {
 	address             string
 	setupDurationMillis int64
 	routes              []realVpnRoute
+	ipResources         []client.IPResource
+	dnsServers          []string
 }
 
 var realVpnState struct {
@@ -146,9 +161,11 @@ func PrepareRealVpn() string {
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), realVpnPrepareTimeout)
 	defer cancelSetup()
 	setupStartedAt := time.Now()
+	// Reconnect to the endpoint the session was authenticated against; the
+	// experimental custom-server setting may have moved it off the ZJU default.
 	if _, err := vpnClient.SetupContext(setupCtx, atrust.SetupOptions{
-		ServerAddress: zjuAtrustServer,
-		ServerPort:    zjuAtrustServerPort,
+		ServerAddress: result.Server,
+		ServerPort:    result.Port,
 		ClientData:    result.AuthData,
 		ResourceData:  result.ResourceData,
 	}); err != nil {
@@ -197,12 +214,32 @@ func PrepareRealVpn() string {
 		)
 	}
 
+	// The per-resource list drives the TCP transport choice: resources the
+	// server marks as TCP-over-L3 keep the raw tunnel, everything else must
+	// ride the TCP tunnel (see realVpnTCPBridge). Tolerate servers that do
+	// not advertise it.
+	ipResources, _ := vpnClient.IPResources()
+
+	// The server also pushes intranet DNS servers (SDPPolicy ClientOption);
+	// they become the VpnService DNS so intranet domains resolve. Keep only
+	// literal IPs: VpnService.setDnsServer rejects anything else.
+	dnsServers := make([]string, 0, 2)
+	if advertised, err := vpnClient.DNSServers(); err == nil {
+		for _, server := range advertised {
+			if net.ParseIP(strings.TrimSpace(server)) != nil {
+				dnsServers = append(dnsServers, strings.TrimSpace(server))
+			}
+		}
+	}
+
 	prepared := &preparedRealVpn{
 		client:              vpnClient,
 		setupDurationMillis: setupDurationMillis,
 		underlay:            underlay,
 		address:             address.To4().String(),
 		routes:              routes,
+		ipResources:         ipResources,
+		dnsServers:          dnsServers,
 	}
 	stage, durationMillis := owner.snapshot()
 	realVpnState.Lock()
@@ -233,6 +270,7 @@ func realVpnPreparedResponse(prepared *preparedRealVpn, stage string, durationMi
 		Address:             prepared.address,
 		MTU:                 realVpnMTU,
 		Routes:              append([]realVpnRoute(nil), prepared.routes...),
+		DnsServers:          append([]string(nil), prepared.dnsServers...),
 	})
 }
 
@@ -293,7 +331,7 @@ func realVpnPreparationCancelled(stage string, durationMillis int64) string {
 
 // StartRealVpn attaches an Android TUN to the prepared authenticated client.
 // The caller transfers ownership of tunFD to this bridge until StopRealVpn.
-func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener) {
+func StartRealVpn(tunFD int, protector SocketProtector, mtu int, listener BridgeListener) {
 	if tunFD < 0 {
 		emitRealVpnState(listener, "error", "invalidTunFd", "attach.tun", "The VPN file descriptor is invalid", nil)
 		return
@@ -331,11 +369,20 @@ func StartRealVpn(tunFD int, protector SocketProtector, listener BridgeListener)
 		emitRealVpnState(listener, "error", "tunInitializationFailed", "attach.tun", "Unable to open the Android VPN interface", nil)
 		return
 	}
+	// The caller's MTU (from user settings) governs the TUN interface; the
+	// data plane must size its read buffer and TCP-bridge endpoint to match,
+	// otherwise packets at the interface MTU are truncated or refused.
+	if mtu < 576 || mtu > 1500 {
+		mtu = realVpnMTU
+	}
 	session := &realVpnSession{
-		client:   prepared.client,
-		tun:      tunFile,
-		listener: listener,
-		doneCh:   make(chan struct{}),
+		client:      prepared.client,
+		tun:         tunFile,
+		listener:    listener,
+		doneCh:      make(chan struct{}),
+		ipResources: prepared.ipResources,
+		dnsServers:  prepared.dnsServers,
+		mtu:         mtu,
 	}
 
 	realVpnState.Lock()
@@ -410,6 +457,9 @@ func StopRealVpn() {
 func (s *realVpnSession) run() {
 	defer close(s.doneCh)
 	failure := safeRunRealVpnStack(s)
+	if s.tcpBridge != nil {
+		s.tcpBridge.close()
+	}
 	if s.l3Conn != nil {
 		_ = s.l3Conn.Close()
 	}
@@ -455,6 +505,12 @@ func safeRunRealVpnStack(session *realVpnSession) (failure *realVpnFailure) {
 // runRealVpnStack is the Android TUN loop. Resource misses are dropped without
 // ending the Android VPN. Upstream owns internal L3 reconnect; the bridge maps
 // errors returned by the public L3 connection to terminal Android VPN failures.
+//
+// TCP flows for resources the server did not mark TCP-over-L3 cannot ride the
+// raw L3 tunnel (upstream refuses them with ErrResourceNotFound), so they are
+// handed to realVpnTCPBridge, which terminates the flow locally and relays it
+// through the client's TCP tunnel — the same split the desktop TUN stack makes
+// via its TCPListenerEndpoint (stack/tun/tcplistener.go, desktop-only).
 func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	l3Conn, err := session.client.NewL3Conn()
 	if err != nil {
@@ -466,13 +522,19 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 	}
 	session.l3Conn = l3Conn
 
+	var tcpBridge *realVpnTCPBridge
+	if session.client.CanUseTCPTunnel() {
+		tcpBridge = newRealVpnTCPBridge(session.tun, session.client, session.ipResources, session.mtu)
+		session.tcpBridge = tcpBridge
+	}
+
 	failureCh := make(chan *realVpnFailure, 1)
 	var failureOnce sync.Once
 	reportFailure := func(failure *realVpnFailure) {
 		failureOnce.Do(func() { failureCh <- failure })
 	}
 	go func() {
-		buf := make([]byte, realVpnMTU)
+		buf := make([]byte, session.mtu)
 		for {
 			n, readErr := session.tun.Read(buf)
 			if readErr != nil {
@@ -491,6 +553,12 @@ func runRealVpnStack(session *realVpnSession) *realVpnFailure {
 				continue
 			}
 			session.diagnostics.forwardablePackets.Add(1)
+
+			// TCP flows bound for resources without TCP-over-L3 travel the
+			// TCP tunnel; everything else keeps the raw L3 path.
+			if tcpBridge != nil && tcpBridge.tryInject(packet) {
+				continue
+			}
 
 			session.diagnostics.l3WriteAttempts.Add(1)
 			if _, writeErr := l3Conn.Write(packet); writeErr != nil {
@@ -568,6 +636,9 @@ func currentAuthenticatedVpnResult() (authenticatedResult, error) {
 	if !ok || result.SID == "" || len(result.AuthData) == 0 || len(result.ResourceData) == 0 {
 		return authenticatedResult{}, fmt.Errorf("authentication has not completed")
 	}
+	if result.Server == "" || result.Port == 0 {
+		return authenticatedResult{}, fmt.Errorf("authentication result is missing its server endpoint")
+	}
 	return result, nil
 }
 
@@ -584,7 +655,7 @@ func emitRealVpnState(listener BridgeListener, state, code, stage, message strin
 		Message:       message,
 	}
 	if session != nil {
-		event.MTU = realVpnMTU
+		event.MTU = session.mtu
 		snapshot := session.diagnostics.snapshot()
 		event.Diagnostics = &snapshot
 	}
@@ -605,7 +676,7 @@ func emitRealVpnFailure(listener BridgeListener, failure *realVpnFailure, sessio
 		Message:       failure.message,
 	}
 	if session != nil {
-		event.MTU = realVpnMTU
+		event.MTU = session.mtu
 		snapshot := session.diagnostics.snapshot()
 		event.Diagnostics = &snapshot
 	}
@@ -675,4 +746,178 @@ func realVpnErrorWithCause(code, stage, cause, message string) string {
 		Cause:         cause,
 		Message:       message,
 	})
+}
+
+// ---- TCP tunnel bridge ----
+
+const realVpnTCPBridgeNIC = 1
+
+// realVpnTCPBridge terminates TUN TCP flows for resources the server did not
+// mark TCP-over-L3 and relays them through the client's TCP tunnel. It is the
+// Android equivalent of upstream's desktop TCPListenerEndpoint
+// (stack/tun/tcplistener.go), which the Android build of stack/tun omits:
+// without it, every TCP packet for such resources is refused by the raw L3
+// tunnel with ErrResourceNotFound and the VPN looks connected but forwards
+// nothing.
+type realVpnTCPBridge struct {
+	tun         *os.File
+	vpnClient   client.Client
+	stack       *gvisorstack.Stack
+	endpoint    *realVpnTCPTunEndpoint
+	ipResources []client.IPResource
+}
+
+type realVpnTCPTunEndpoint struct {
+	tun        *os.File
+	mtu        uint32
+	dispatcher gvisorstack.NetworkDispatcher
+}
+
+func (e *realVpnTCPTunEndpoint) ParseHeader(*gvisorstack.PacketBuffer) bool { return true }
+
+func (e *realVpnTCPTunEndpoint) MTU() uint32 { return e.mtu }
+
+func (e *realVpnTCPTunEndpoint) SetMTU(uint32) {}
+
+func (e *realVpnTCPTunEndpoint) MaxHeaderLength() uint16 { return 0 }
+
+func (e *realVpnTCPTunEndpoint) LinkAddress() tcpip.LinkAddress { return "" }
+
+func (e *realVpnTCPTunEndpoint) SetLinkAddress(tcpip.LinkAddress) {}
+
+func (e *realVpnTCPTunEndpoint) Capabilities() gvisorstack.LinkEndpointCapabilities {
+	return gvisorstack.CapabilityNone
+}
+
+func (e *realVpnTCPTunEndpoint) Attach(dispatcher gvisorstack.NetworkDispatcher) {
+	e.dispatcher = dispatcher
+}
+
+func (e *realVpnTCPTunEndpoint) IsAttached() bool { return e.dispatcher != nil }
+
+func (e *realVpnTCPTunEndpoint) Wait() {}
+
+func (e *realVpnTCPTunEndpoint) ARPHardwareType() header.ARPHardwareType {
+	return header.ARPHardwareNone
+}
+
+func (e *realVpnTCPTunEndpoint) AddHeader(*gvisorstack.PacketBuffer) {}
+
+func (e *realVpnTCPTunEndpoint) Close() {}
+
+func (e *realVpnTCPTunEndpoint) SetOnCloseAction(func()) {}
+
+// WritePackets delivers gvisor responses (the TCP segments of locally
+// terminated flows) back into the Android VPN interface.
+func (e *realVpnTCPTunEndpoint) WritePackets(list gvisorstack.PacketBufferList) (int, tcpip.Error) {
+	written := 0
+	for _, packetBuffer := range list.AsSlice() {
+		slices := packetBuffer.AsSlices()
+		total := 0
+		for _, slice := range slices {
+			total += len(slice)
+		}
+		packet := make([]byte, total)
+		offset := 0
+		for _, slice := range slices {
+			offset += copy(packet[offset:], slice)
+		}
+		if _, err := e.tun.Write(packet); err != nil {
+			return written, &tcpip.ErrAborted{}
+		}
+		written++
+	}
+	return written, nil
+}
+
+func newRealVpnTCPBridge(
+	tun *os.File,
+	vpnClient client.Client,
+	ipResources []client.IPResource,
+	mtu int,
+) *realVpnTCPBridge {
+	endpoint := &realVpnTCPTunEndpoint{tun: tun, mtu: uint32(mtu)}
+	nicStack := gvisorstack.New(gvisorstack.Options{
+		NetworkProtocols:   []gvisorstack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []gvisorstack.TransportProtocolFactory{tcp.NewProtocol},
+	})
+	if err := nicStack.CreateNIC(realVpnTCPBridgeNIC, endpoint); err != nil {
+		return nil
+	}
+	// The TUN carries flows to arbitrary intranet destinations, so the stack
+	// must accept packets that are not addressed to a local IP.
+	nicStack.SetForwardingDefaultAndAllNICs(ipv4.ProtocolNumber, true)
+	nicStack.SetPromiscuousMode(realVpnTCPBridgeNIC, true)
+	nicStack.SetSpoofing(realVpnTCPBridgeNIC, true)
+	nicStack.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: realVpnTCPBridgeNIC})
+	sack := tcpip.TCPSACKEnabled(true)
+	nicStack.SetTransportProtocolOption(tcp.ProtocolNumber, &sack)
+
+	bridge := &realVpnTCPBridge{
+		tun:         tun,
+		vpnClient:   vpnClient,
+		stack:       nicStack,
+		endpoint:    endpoint,
+		ipResources: ipResources,
+	}
+	forwarder := tcp.NewForwarder(nicStack, 0, 10000, bridge.handleForwarderRequest)
+	nicStack.SetTransportProtocolHandler(tcp.ProtocolNumber, forwarder.HandlePacket)
+	return bridge
+}
+
+// tryInject forwards one outbound TUN packet into the bridge when it is TCP
+// traffic bound for a resource that must use the TCP tunnel. It reports
+// whether it took the packet over.
+func (b *realVpnTCPBridge) tryInject(packet []byte) bool {
+	if b == nil || len(packet) < 20 || packet[0]>>4 != 4 {
+		return false
+	}
+	_, _, useTunnel := realVpnTCPTunnelDecision(packet, b.ipResources, b.vpnClient.CanUseTCPTunnel())
+	if !useTunnel {
+		return false
+	}
+	if b.endpoint.dispatcher == nil {
+		return false
+	}
+	pkt := gvisorstack.NewPacketBuffer(gvisorstack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(packet),
+	})
+	defer pkt.DecRef()
+	b.endpoint.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
+	return true
+}
+
+func (b *realVpnTCPBridge) handleForwarderRequest(request *tcp.ForwarderRequest) {
+	targetIP := request.ID().LocalAddress.String()
+	targetPort := request.ID().LocalPort
+	var w waiter.Queue
+	endpoint, err := request.CreateEndpoint(&w)
+	if err != nil {
+		request.Complete(true)
+		return
+	}
+	request.Complete(false)
+	localConn := gonet.NewTCPConn(&w, endpoint)
+	go b.relay(localConn, targetIP, targetPort)
+}
+
+func (b *realVpnTCPBridge) relay(localConn net.Conn, targetIP string, targetPort uint16) {
+	defer localConn.Close()
+	targetAddr := &net.TCPAddr{IP: net.ParseIP(targetIP), Port: int(targetPort)}
+	remoteConn, err := b.vpnClient.DialTCP(context.Background(), targetAddr)
+	if err != nil {
+		return
+	}
+	defer remoteConn.Close()
+	errCh := make(chan error, 2)
+	go func() { _, err := io.Copy(remoteConn, localConn); errCh <- err }()
+	go func() { _, err := io.Copy(localConn, remoteConn); errCh <- err }()
+	<-errCh
+}
+
+func (b *realVpnTCPBridge) close() {
+	if b == nil || b.stack == nil {
+		return
+	}
+	b.stack.Close()
 }
