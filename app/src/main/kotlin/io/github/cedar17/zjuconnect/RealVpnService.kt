@@ -629,7 +629,7 @@ class RealVpnService : VpnService() {
                     "stage=${config.stage.ifBlank { "none" }} cause=${config.cause.ifBlank { "none" }} " +
                     "durationMs=${SystemClock.elapsedRealtime() - prepareStartedAt} " +
                     "cached=${config.reusedPrepared} setupMs=${config.setupDurationMillis} " +
-                    "routes=${config.routes.size} mtu=${config.mtu}",
+                    "routes=${config.routes.size}",
             )
             if (!acceptsStartProgress()) {
                 goCoreBridge.stopRealVpn()
@@ -697,7 +697,7 @@ class RealVpnService : VpnService() {
             if (!recovering) {
                 setStatus("attaching")
             }
-            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size}")
+            Log.i(REAL_VPN_LOG_TAG, "phase=tun.establish.begin routes=${config.routes.size} mtu=$tunMtu")
             val tunStartedAt = SystemClock.elapsedRealtime()
             val watchdog = scheduleTunEstablishWatchdog()
             val tun = try {

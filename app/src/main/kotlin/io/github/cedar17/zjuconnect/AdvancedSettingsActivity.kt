@@ -255,9 +255,11 @@ private fun AdvancedSettingsScreen(
                 supportingText = {
                     if (parsedMtu == null) {
                         Text(stringResource(R.string.advanced_invalid_mtu))
+                    } else {
+                        Text(stringResource(R.string.advanced_mtu_hint, VpnMtuSettings.DEFAULT_MTU))
                     }
                 },
-                isError = mtuText.isNotEmpty() && parsedMtu == null,
+                isError = parsedMtu == null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
             )

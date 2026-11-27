@@ -208,7 +208,8 @@
     <string name="advanced_invalid_host">请输入有效的主机名或 IP 地址</string>
     <string name="advanced_invalid_port">请输入 1–65535 之间的端口号</string>
     <string name="advanced_mtu_label">VPN MTU</string>
-    <string name="advanced_invalid_mtu">请输入 576–1500 之间的 MTU</string>
+    <string name="advanced_mtu_hint">适用于所有服务器，下次建立 VPN 时生效。默认值为 %1$d。</string>
+    <string name="advanced_invalid_mtu">请输入 576–1500 之间的 MTU，当前继续使用上次保存的值。</string>
     <string name="advanced_current_server">当前服务器：%1$s:%2$d</string>
     <string name="advanced_server_invalid_notice">自定义服务器配置无效，连接前请先修正。</string>
 

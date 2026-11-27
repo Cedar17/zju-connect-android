@@ -35,9 +35,8 @@ const (
 	// l3Conn implements io.Reader by copying one complete server packet into
 	// the caller's buffer. A buffer limited to the interface MTU silently
 	// truncates any larger packet because that reader cannot report
-	// io.ErrShortBuffer. Keep the TUN MTU at 1400, but retain a complete IPv4
-	// packet here so a write failure is attributable to Android rather than a
-	// locally corrupted packet.
+	// io.ErrShortBuffer. Retain the complete IPv4 packet so a write failure
+	// is attributable to Android rather than a locally corrupted packet.
 	realVpnInboundBufferSize = 65535
 )
 
@@ -656,7 +655,7 @@ func emitRealVpnState(listener BridgeListener, state, code, stage, message strin
 		Message:       message,
 	}
 	if session != nil {
-		event.MTU = realVpnMTU
+		event.MTU = session.mtu
 		snapshot := session.diagnostics.snapshot()
 		event.Diagnostics = &snapshot
 	}
@@ -677,7 +676,7 @@ func emitRealVpnFailure(listener BridgeListener, failure *realVpnFailure, sessio
 		Message:       failure.message,
 	}
 	if session != nil {
-		event.MTU = realVpnMTU
+		event.MTU = session.mtu
 		snapshot := session.diagnostics.snapshot()
 		event.Diagnostics = &snapshot
 	}
