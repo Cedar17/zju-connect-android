@@ -99,6 +99,7 @@ internal fun quickSettingsTilePresentation(
 internal enum class ConnectionEntryOwner {
     ACTIVITY,
     TILE_SERVICE,
+    PROXY_SERVICE,
 }
 
 internal object ConnectionEntryArbiter {

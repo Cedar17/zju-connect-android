@@ -55,6 +55,9 @@ class AdvancedSettingsActivity : ComponentActivity() {
         val mtuStore = VpnMtuSettingsStore(applicationContext)
         val stored = settingsStore.read()
         val storedMtu = mtuStore.read()
+        val proxyStore = ProxySettingsStore(applicationContext)
+        val stored = settingsStore.read()
+        val storedProxy = proxyStore.read()
         setContent {
             ZjuConnectTheme {
                 AdvancedSettingsScreen(
@@ -63,12 +66,17 @@ class AdvancedSettingsActivity : ComponentActivity() {
                     initialPortText = stored.port.toString(),
                     defaultTarget = CustomServerTarget.DEFAULT,
                     initialMtuText = storedMtu.mtu.toString(),
+                    initialProxyEnabled = storedProxy.enabled,
+                    initialSocksPortText = storedProxy.socksPort.toString(),
+                    initialHttpPortText = storedProxy.httpPort.toString(),
                     onBack = ::finish,
                     onSettingsChanged = { settings ->
                         settingsStore.write(settings)
                     },
                     onMtuChanged = { mtu ->
                         mtuStore.write(VpnMtuSettings(mtu = mtu))
+                    onProxySettingsChanged = { settings ->
+                        proxyStore.write(settings)
                     },
                 )
             }
@@ -87,11 +95,20 @@ private fun AdvancedSettingsScreen(
     onBack: () -> Unit,
     onSettingsChanged: (CustomServerSettings) -> Unit,
     onMtuChanged: (Int) -> Unit,
+    initialProxyEnabled: Boolean,
+    initialSocksPortText: String,
+    initialHttpPortText: String,
+    onBack: () -> Unit,
+    onSettingsChanged: (CustomServerSettings) -> Unit,
+    onProxySettingsChanged: (ProxySettings) -> Unit,
 ) {
     var enabled by remember { mutableStateOf(initialEnabled) }
     var hostText by remember { mutableStateOf(initialHost) }
     var portText by remember { mutableStateOf(initialPortText) }
     var mtuText by remember { mutableStateOf(initialMtuText) }
+    var proxyEnabled by remember { mutableStateOf(initialProxyEnabled) }
+    var socksPortText by remember { mutableStateOf(initialSocksPortText) }
+    var httpPortText by remember { mutableStateOf(initialHttpPortText) }
 
     // Normalize before persisting so the store only ever holds bare hosts.
     val normalizedHost = normalizeCustomServerHost(hostText) ?: ""
@@ -106,6 +123,14 @@ private fun AdvancedSettingsScreen(
     val effectiveTarget = settings.effectiveTarget()
 
     val parsedMtu = parseVpnMtu(mtuText)
+    val socksPort = parseProxyPort(socksPortText)
+    val httpPort = parseProxyHttpPort(httpPortText) ?: -1
+    val proxySettings = ProxySettings(
+        enabled = proxyEnabled,
+        socksPort = socksPort ?: ProxySettings.DEFAULT_SOCKS_PORT,
+        httpPort = httpPort,
+    )
+    val proxySettingsValid = proxySettings.isValid()
 
     // Persist off the main thread: commit() syncs to disk on every keystroke.
     LaunchedEffect(settings) {
@@ -118,6 +143,9 @@ private fun AdvancedSettingsScreen(
             withContext(Dispatchers.IO) {
                 onMtuChanged(mtu)
             }
+    LaunchedEffect(proxySettings) {
+        withContext(Dispatchers.IO) {
+            onProxySettingsChanged(proxySettings)
         }
     }
 
@@ -263,6 +291,59 @@ private fun AdvancedSettingsScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.advanced_enable_proxy_mode),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = stringResource(R.string.advanced_enable_proxy_mode_summary),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = proxyEnabled,
+                    onCheckedChange = { checked ->
+                        proxyEnabled = checked
+                    },
+                )
+            }
+            if (proxyEnabled) {
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = socksPortText,
+                    onValueChange = { socksPortText = it },
+                    label = { Text(stringResource(R.string.advanced_proxy_socks_port_label)) },
+                    supportingText = {
+                        if (socksPort == null) {
+                            Text(stringResource(R.string.advanced_invalid_proxy_port))
+                        }
+                    },
+                    isError = socksPortText.isNotEmpty() && socksPort == null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = httpPortText,
+                    onValueChange = { httpPortText = it },
+                    label = { Text(stringResource(R.string.advanced_proxy_http_port_label)) },
+                    supportingText = {
+                        if (!proxySettingsValid) {
+                            Text(stringResource(R.string.advanced_invalid_proxy_ports))
+                        }
+                    },
+                    isError = httpPortText.isNotEmpty() && !proxySettingsValid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                )
+            }
         }
     }
 }

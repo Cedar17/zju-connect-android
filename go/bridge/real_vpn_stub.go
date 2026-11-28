@@ -44,6 +44,10 @@ func CancelPreparingRealVpn() {}
 
 func StopRealVpn() {}
 
+// realVpnDataplaneBusy is always false on non-Android builds: the host never
+// runs the TUN data plane, so the proxy plane has nothing to conflict with.
+func realVpnDataplaneBusy() bool { return false }
+
 func realVpnError(code, message string) string {
 	return realVpnErrorAt(code, "prepare", message)
 }
